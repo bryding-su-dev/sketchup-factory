@@ -26,7 +26,7 @@ export interface IntakeConfig {
     bugChannels?: string[];
     /** Channels where trusted people ask Max for work (a message that mentions the bot or replies to it). Default ["dev_chat"]. */
     requestChannels?: string[];
-    /** Discord user ids trusted to ask for work, each mapped to an FF Factory login: { "<discord id>": "<user id>" }. Default none. */
+    /** Discord user ids trusted to ask for work, each mapped to an SketchUp Factory login: { "<discord id>": "<user id>" }. Default none. */
     trusted?: Record<string, string>;
     /** Minutes between polls (>= 2, default 5). */
     pollMinutes?: number;

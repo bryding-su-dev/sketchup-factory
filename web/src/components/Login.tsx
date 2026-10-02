@@ -31,7 +31,7 @@ export function Login() {
           <path d="M8 23V9h13M8 16h9" stroke="var(--accent)" strokeWidth="3.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
           <circle cx="24" cy="22" r="3" fill="var(--accent)" />
         </svg>
-        <h1>FF Factory</h1>
+        <h1>SketchUp Factory</h1>
         <label className="field">
           <span>Username</span>
           <input

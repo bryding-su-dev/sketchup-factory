@@ -70,7 +70,7 @@ export function Sidebar({
           </svg>
         </div>
         <div className="brand-text">
-          <span className="brand-name">FF Factory</span>
+          <span className="brand-name">SketchUp Factory</span>
           {app.system?.hostname && <span className="brand-host">{app.system.hostname}</span>}
         </div>
         <button className="btn btn-ghost btn-icon side-icon" title="Search every conversation" aria-label="Search" onClick={() => go({ view: 'search' })}>
@@ -191,7 +191,7 @@ export function Sidebar({
       <ExternalStrip app={app} route={route} onNavigate={onNavigate} />
       <SystemFooter app={app} />
       {app.app && (
-        <div className="side-foot" data-testid="app-version" title="FF Factory version and git commit">
+        <div className="side-foot" data-testid="app-version" title="SketchUp Factory version and git commit">
           {versionLabel(app.app)}
         </div>
       )}

@@ -1,5 +1,5 @@
 // Max events (docs/max.md): the ffdiscord CLI appends one JSON line per thing an agent did as Max to the file
-// named by FF_MAX_EVENTS, which FF Factory sets for every agent it starts. This module reads that file: the
+// named by FF_MAX_EVENTS, which SketchUp Factory sets for every agent it starts. This module reads that file: the
 // portal tails its own (server/max.ts) and a machine's daemon tails the Mac's and forwards the lines
 // (machine/daemon.ts). No secret is involved: the file holds what was posted where, never the bot token.
 import fs from 'node:fs';

@@ -38,7 +38,7 @@ test('escalation body: strict, every field pattern-checked, and errors name fiel
   assert.equal(err.includes('IGNORE'), false, 'the value is never echoed');
 });
 
-test('escalation triage: FF Factory\'s own rules, never Max\'s word; a design question always needs a human', () => {
+test('escalation triage: SketchUp Factory\'s own rules, never Max\'s word; a design question always needs a human', () => {
   assert.deepEqual([escalationTriage(ESCALATION).class], ['needs-human']);
   assert.match(escalationTriage(ESCALATION).reason, /design decision Max escalated \(Max's call: needs a human\)/);
   const bug = { ...ESCALATION, kind: 'bug' as const, maxClass: 'obvious-bug' as const, title: 'Game crashes when docking', report: 'The game crashes to desktop every time I dock a freighter at the station.' };

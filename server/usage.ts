@@ -106,7 +106,7 @@ export function usageSummary(u: PlanUsage | undefined, now: Date): string {
   if (!u) return 'Claude plan usage: not fetched yet';
   const asOf = `as of ${new Date(u.asOf).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   if (!u.available) {
-    const spend = u.spendWeekUsd !== undefined ? `; FF Factory's own agent spend in the last 7 days: $${u.spendWeekUsd.toFixed(2)} (spend, not the plan limit)` : '';
+    const spend = u.spendWeekUsd !== undefined ? `; SketchUp Factory's own agent spend in the last 7 days: $${u.spendWeekUsd.toFixed(2)} (spend, not the plan limit)` : '';
     return `Claude plan usage: unavailable (${u.why ?? 'unknown'}), ${asOf}${spend}`;
   }
   const fmt = (m: UsageMeter) => `${m.label} ${Math.round(m.percent)}% used${m.resetsAt ? `, ${describeReset(m.resetsAt, now)}` : ''}`;

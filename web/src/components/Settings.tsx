@@ -18,12 +18,12 @@ export function SettingsModal({ app, onClose }: { app?: AppVersion; onClose: () 
 
   const status = !p.supported
     ? p.needsHomeScreen
-      ? 'On iPhone and iPad, add FF Factory to the Home Screen first (Share → Add to Home Screen), open it from there, then turn notifications on here.'
+      ? 'On iPhone and iPad, add SketchUp Factory to the Home Screen first (Share → Add to Home Screen), open it from there, then turn notifications on here.'
       : 'This browser cannot receive push notifications. While this tab is open in the background it can still show them.'
     : p.permission === 'denied'
       ? 'Notifications are blocked for this site. Allow them in the browser’s site settings, then come back.'
       : on
-        ? 'On: this device gets notifications even when FF Factory is closed.'
+        ? 'On: this device gets notifications even when SketchUp Factory is closed.'
         : 'Off on this device.';
 
   return (
@@ -86,8 +86,8 @@ export function SettingsModal({ app, onClose }: { app?: AppVersion; onClose: () 
           <div className="field about" data-testid="about-version">
             <span>About</span>
             <p className="small dim">
-              FF Factory <span className="mono">{versionLabel(app)}</span> ·{' '}
-              <a href="https://github.com/Final-Factory/ff-factory/blob/main/CHANGELOG.md" target="_blank" rel="noreferrer">
+              SketchUp Factory <span className="mono">{versionLabel(app)}</span> ·{' '}
+              <a href="https://github.com/bryding-su-dev/sketchup-factory/blob/sketchup/CHANGELOG.md" target="_blank" rel="noreferrer">
                 changelog
               </a>
             </p>

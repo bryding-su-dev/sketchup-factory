@@ -1,7 +1,7 @@
 {
-  "name": "FF Factory",
-  "short_name": "FF Factory",
-  "description": "The user's control room for Final Factory agents: sandboxes, machines and standing agents.",
+  "name": "SketchUp Factory",
+  "short_name": "SketchUp Factory",
+  "description": "The user's control room for SketchUp Factory agents: sandboxes, machines and standing agents.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

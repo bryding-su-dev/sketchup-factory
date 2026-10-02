@@ -1,4 +1,4 @@
-"""Local text-to-speech worker for FF Factory's voice mode (server/voice.ts starts and stops it).
+"""Local text-to-speech worker for SketchUp Factory's voice mode (server/voice.ts starts and stops it).
 
 Kokoro-82M through onnxruntime, on the GPU (CUDA execution provider) when it loads, else the CPU.
 JSON lines, like worker.py:

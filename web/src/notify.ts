@@ -116,7 +116,7 @@ export async function testNotification(): Promise<string> {
     return r.delivered ? 'Sent. It should appear in a moment (even with this tab in front).' : 'The push service did not take it; try turning notifications off and on.';
   }
   if (state.permission !== 'granted') throw new Error('Turn notifications on first.');
-  await show({ title: 'FF Factory', body: 'Test notification: this tab will tell you while it is in the background.', url: '#/', tag: 'test' });
+  await show({ title: 'SketchUp Factory', body: 'Test notification: this tab will tell you while it is in the background.', url: '#/', tag: 'test' });
   return 'Shown.';
 }
 

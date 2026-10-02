@@ -1,7 +1,7 @@
 {
-  "name": "ff-factory",
+  "name": "sketchup-factory",
   "version": "0.1.0",
-  "description": "Manage Final Factory sandboxes (worktree + Unity + Claude Code agents) from a conversational web UI",
+  "description": "SketchUp Factory: Claude Code agents in parallel on the SketchUp repos from a conversational web UI (a fork of FF Factory)",
   "scripts": {
     "start": "node server/index.ts",
     "dev": "node --watch server/index.ts",

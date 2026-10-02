@@ -76,7 +76,7 @@ export function ProviderPanel({ provider: p, tab, onClose }: { provider: Provide
           )}
         </div>
         <p className="sb-head-purpose">
-          CPU-only containers on Lothsahn's build server, reached through the connector it runs. Read-only for now: FF Factory shows what FFBox reports and cannot send it work.
+          CPU-only containers on Lothsahn's build server, reached through the connector it runs. Read-only for now: SketchUp Factory shows what FFBox reports and cannot send it work.
         </p>
         <div className="sb-facts">
           <span className="fact">

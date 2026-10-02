@@ -419,7 +419,7 @@ function PlanMeters({ usage: u, head }: { usage?: PlanUsage; head?: ReactNode })
         </div>
         {u.why && <div className="plan-asof">{u.why}</div>}
         {u.spendWeekUsd !== undefined && (
-          <div className="meter-row" title="What FF Factory's own agents cost over the last 7 days, from their reported cost. This is spend, not the plan's usage limit.">
+          <div className="meter-row" title="What SketchUp Factory's own agents cost over the last 7 days, from their reported cost. This is spend, not the plan's usage limit.">
             <span className="meter-label">Portal spend, 7 days</span>
             <span className="meter-value">{fmtCost(u.spendWeekUsd)}</span>
           </div>

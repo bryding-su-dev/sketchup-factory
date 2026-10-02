@@ -116,8 +116,8 @@ test('[wake_me], [run …], restarts, and anything else', () => {
   assert.equal(parseNotice('[wake_me] Time is up. Your note: (none)').summary, 'Reminder');
   const r = parseNotice('[run r-12] 2026-09-24T10:00:00.000Z — scheduled (every 30 min).\nBudget: this run stops at $1.50.\nRead NOTES.md, do your charter\'s job.\n\nBen says:\nlook at #bugs first');
   assert.deepEqual([r.kind, r.summary, r.body], ['run', 'Run started: scheduled (every 30 min)', 'look at #bugs first']);
-  assert.equal(parseNotice('[app restarted] FF Factory restarted (update; stopped at 06:02).').kind, 'restarted');
-  assert.equal(parseNotice('[app restart pending] FF Factory will restart for an update.').kind, 'restart-pending');
+  assert.equal(parseNotice('[app restarted] SketchUp Factory restarted (update; stopped at 06:02).').kind, 'restarted');
+  assert.equal(parseNotice('[app restart pending] SketchUp Factory will restart for an update.').kind, 'restart-pending');
   assert.equal(parseNotice('[app restart cancelled] The restart did not happen.').kind, 'restart-cancelled');
   assert.equal(parseNotice('The app restarted (update at 9/24/2026). Your process was stopped.').kind, 'resumed');
   const o = parseNotice('[something new] hello');

@@ -1,4 +1,4 @@
-"""Local speech-to-text worker for FF Factory's mic button (server/voice.ts starts and stops it).
+"""Local speech-to-text worker for SketchUp Factory's mic button (server/voice.ts starts and stops it).
 
 One process holds one faster-whisper model. It speaks JSON lines: stdin takes requests, stdout
 gives replies; stderr is a log.

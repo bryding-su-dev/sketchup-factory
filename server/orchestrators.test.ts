@@ -358,7 +358,7 @@ test('turnFrom: a turn is a person’s only when every message it answers is', (
 test('the dispatcher is reminded of undecided requests; a failed worker is news for it; only recent workers make people "at" a place', async (t) => {
   const { store, sessions, o, dispatcher, chat, call, heard } = setup(t);
   await call(chat(LOTH).info, 'request_work', { title: 'Playtest the tutorial', brief: 'x' });
-  o.remindDispatcher('FF Factory restarted');
+  o.remindDispatcher('SketchUp Factory restarted');
   await until('the reminder', () => heard(dispatcher().info.id, '[ledger]').some((e) => e.text.includes('Requests waiting for you: w1 [new] "Playtest the tutorial" (Lothsahn, normal)')));
   const w = sessions.create({ kind: 'worker', title: 'Playtest', sandboxId: 'alpha', permissionMode: 'bypassPermissions', options: () => ({ model: 'opus' }), requestedBy: LOTH });
   o.linkWorker('w1', w.info, 'started');

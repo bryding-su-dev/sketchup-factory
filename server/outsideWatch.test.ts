@@ -70,7 +70,7 @@ test('outside watch: the machine answers but the portal does not (booted, nobody
   await minute(3);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].title, 'BEAST up, portal down');
-  assert.match(sent[0].body, /answers ping but the FF Factory portal has not answered since .*automatic logon is off/);
+  assert.match(sent[0].body, /answers ping but the SketchUp Factory portal has not answered since .*automatic logon is off/);
   await minute(10);
   assert.deepEqual(woken, [], 'it is on: no Wake-on-LAN');
   assert.equal(sent.length, 1, 'one alert per state');

@@ -139,7 +139,7 @@ export function macPermissionProblem(stderr: string, nodePath: string): string |
 export function accessibilityStep(nodePath: string, entry?: 'on' | 'off' | 'missing'): string {
   const where = 'On the Mac, open System Settings > Privacy & Security > Accessibility';
   const why = "macOS has not given the daemon Accessibility access, which reading and pressing Unity's dialogs needs.";
-  const which = `(It is the node binary the FF Factory daemon runs under, ${nodePath}; macOS checks that exact path, so after a node upgrade it has to be added again.)`;
+  const which = `(It is the node binary the SketchUp Factory daemon runs under, ${nodePath}; macOS checks that exact path, so after a node upgrade it has to be added again.)`;
   if (entry === 'off') return `${why} ${where}: "node" is listed but its switch is OFF; turn it ON (adding it again does not switch it on). ${which}`;
   if (entry === 'missing') return `${why} ${where}, click +, press Cmd-Shift-G, enter ${nodePath}, add it and turn it on. ${which}`;
   return `${why} ${where}. If "node" is listed, turn its switch ON (an entry that is there but off is still denied). If it is not, click +, press Cmd-Shift-G, enter ${nodePath}, add it and turn it on. ${which}`;

@@ -296,7 +296,7 @@ export class ProviderManager {
     if (!link) return;
     // Switched off while connected (set_app_config, or config.json edited and reloaded).
     if (!this.enabled) {
-      link.ws.close(CLOSE.disabled, 'switched off in FF Factory');
+      link.ws.close(CLOSE.disabled, 'switched off in SketchUp Factory');
       this.detach('switched off');
       return;
     }
@@ -310,7 +310,7 @@ export class ProviderManager {
   configChanged() {
     const link = this.link;
     if (link && !this.enabled) {
-      link.ws.close(CLOSE.disabled, 'switched off in FF Factory');
+      link.ws.close(CLOSE.disabled, 'switched off in SketchUp Factory');
       this.detach('switched off');
       return;
     }
@@ -426,12 +426,12 @@ export class ProviderManager {
         return this.hook(() => this.onResult?.(msg));
       case 'request': {
         const r = this.onRequest?.(msg);
-        if (!r) return this.send(link, { type: 'error', code: 'not_enabled', message: 'FF Factory does not take requests from FFBox now (intake.ffbox)', ref: msg.ref });
+        if (!r) return this.send(link, { type: 'error', code: 'not_enabled', message: 'SketchUp Factory does not take requests from FFBox now (intake.ffbox)', ref: msg.ref });
         return this.send(link, { type: 'filed', ref: msg.ref, status: r.status, ...(r.workId ? { workId: r.workId } : {}), ...(r.repeat ? { repeat: true } : {}), ...(r.why ? { why: r.why } : {}) });
       }
       case 'board_check': {
         const a = this.onBoardCheck?.(msg);
-        if (!a) return this.send(link, { type: 'error', code: 'not_enabled', message: 'the ledger check is off in FF Factory (intake.ffbox.boardCheck)', ref: msg.ref });
+        if (!a) return this.send(link, { type: 'error', code: 'not_enabled', message: 'the ledger check is off in SketchUp Factory (intake.ffbox.boardCheck)', ref: msg.ref });
         return this.send(link, { type: 'board', ref: msg.ref, ...a });
       }
     }

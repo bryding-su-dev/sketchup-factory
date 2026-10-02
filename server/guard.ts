@@ -474,19 +474,19 @@ export function checkShell(cmd: string, ctx?: ShellContext): string | undefined 
   // target and the kill across a pipe.
   const all = cmd.toLowerCase().split(/[\s|;&]+/);
   const killer = all.some((w) => ['taskkill', 'taskkill.exe', 'stop-process', 'kill', 'pkill', 'killall', 'spps'].includes(w));
-  // The FF Factory daemon's LaunchAgent and scheduled task, for every agent: on a machine, and in the sandboxes of the
+  // The SketchUp Factory daemon's LaunchAgent and scheduled task, for every agent: on a machine, and in the sandboxes of the
   // portal's own host, whose daemon runs beside the portal (docs/beast-machine.md).
   const lc = cmd.toLowerCase();
-  if (/launchctl\s+(bootout|unload|remove|kill|disable)\b[^;&|]*com\.fffactory/.test(lc)) return "Unloading the FF Factory daemon's LaunchAgent is blocked.";
-  if (/schtasks(\.exe)?\s+[^;&|]*\/(end|delete|change)\b[^;&|]*fffactory|schtasks(\.exe)?\s+[^;&|]*fffactory[^;&|]*\/(end|delete|change)\b/.test(lc)) return "Ending, changing or deleting the FF Factory daemon's scheduled task is blocked.";
-  if (/(stop|disable|unregister|set)-scheduledtask\b[^;&]*fffactory|fffactory[^;&]*\|\s*(stop|disable|unregister|set)-scheduledtask\b/.test(lc)) return "Ending, changing or deleting the FF Factory daemon's scheduled task is blocked.";
+  if (/launchctl\s+(bootout|unload|remove|kill|disable)\b[^;&|]*com\.fffactory/.test(lc)) return "Unloading the SketchUp Factory daemon's LaunchAgent is blocked.";
+  if (/schtasks(\.exe)?\s+[^;&|]*\/(end|delete|change)\b[^;&|]*fffactory|schtasks(\.exe)?\s+[^;&|]*fffactory[^;&|]*\/(end|delete|change)\b/.test(lc)) return "Ending, changing or deleting the SketchUp Factory daemon's scheduled task is blocked.";
+  if (/(stop|disable|unregister|set)-scheduledtask\b[^;&]*fffactory|fffactory[^;&]*\|\s*(stop|disable|unregister|set)-scheduledtask\b/.test(lc)) return "Ending, changing or deleting the SketchUp Factory daemon's scheduled task is blocked.";
   if (ctx?.ownMachine) {
     // A machine (one of the user's Macs or Windows PCs, docs/machines.md): its agents manage Unity like the user's
-    // own sessions there do, killing and relaunching editors, Hub and crash handlers freely. Only the FF Factory
+    // own sessions there do, killing and relaunching editors, Hub and crash handlers freely. Only the SketchUp Factory
     // daemon (node, the .ff-factory folder) and Claude itself are off limits, as is unloading the daemon's
     // LaunchAgent (Mac) or ending, disabling or deleting its scheduled task (Windows).
     if (killer && all.some((w) => /^(node|claude)(\.exe)?$|claude|ff-?factory|daemon\.ts|com\.fffactory|run-daemon/.test(w.replace(/^["']|["']$/g, '')))) {
-      return "Killing node or claude processes is blocked on a machine: that would take down the FF Factory daemon or this agent. Unity, Unity Hub and crash handlers are fine to kill.";
+      return "Killing node or claude processes is blocked on a machine: that would take down the SketchUp Factory daemon or this agent. Unity, Unity Hub and crash handlers are fine to kill.";
     }
     return undefined;
   }

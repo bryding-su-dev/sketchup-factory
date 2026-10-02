@@ -1,4 +1,8 @@
-# FF Factory
+# SketchUp Factory
+
+A fork of [FF Factory](https://github.com/Final-Factory/ff-factory) that runs on a Mac against the SketchUp repos: see
+[Another project, and a macOS host](#another-project-and-a-macos-host). The rest of this file is the upstream guide
+with the app's name changed.
 
 [![CI](https://github.com/Final-Factory/ff-factory/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Final-Factory/ff-factory/actions/workflows/ci.yml)
 
@@ -40,7 +44,7 @@ requests and start or stop Unity.
 | standing agent | a long-lived agent with a charter and a schedule (interval, cron or manual), apart from the sandboxes: its own folder under `<sandboxRoot>/_agents` with a `NOTES.md`, one conversation resumed every run, a fresh process per run that stops when the turn ends (so it only holds an agent slot while running), and hard per-run and per-day budgets. Read-only by default; tool groups add a read-only shell, GitHub comments, or delegation requests that the user approves. See [docs/standing-agents.md](docs/standing-agents.md) |
 | machine | one of the user's Macs or Windows PCs. A daemon there (`machine/daemon.ts`: a LaunchAgent on a Mac, a scheduled task at logon on Windows, in the user's session) connects out to `/machine` with a per-machine token and runs agents in the user's main clone with the same session code, streaming everything back. Set up and updated over ssh from this host by `add_machine` / the Add button; no sandboxes, own agent limit, extra guard rules for the user's uncommitted work. See [docs/machines.md](docs/machines.md). This host itself can be one too (`add_machine local`), whose daemon then owns the host's sandboxes: [docs/beast-machine.md](docs/beast-machine.md) |
 | provider | FFBox, Lothsahn's CPU-only build server, which runs agents in its own hardened containers ([docs/ffbox.md](docs/ffbox.md): what it is, how it works, and how workers change it). Its connector dials out to `/provider` with a token whose SHA-256 is in `config.json`, and reports its container classes (network, model, tier, free slots), its conversations and the crash/desync reports its intake files. Phase 1 is read-only: a card in the sidebar, a page, the orchestrator's `ffbox_activity` tool, nothing that sends it work. Off unless `providers.ffbox.enabled`. See [docs/ffbox-integration.md](docs/ffbox-integration.md) and, for the connector's author, [docs/ffbox-connector-contract.md](docs/ffbox-connector-contract.md) |
-| Max | the Discord bot agents post as, read-only. Each `ffdiscord` post, reply, thread or close by an agent FF Factory started is appended to the file in its `FF_MAX_EVENTS` (a Mac's daemon forwards its own), so the Max page lists them with channel, link, first line and session; it also checks the bot token (read from the ffbox config where it already is, never copied) and, optionally, shows the newest messages in a few channels with unread counts. An "External" strip in the sidebar shows Max and FFBox at a glance; the orchestrator has `max_activity`. See [docs/max.md](docs/max.md) |
+| Max | the Discord bot agents post as, read-only. Each `ffdiscord` post, reply, thread or close by an agent SketchUp Factory started is appended to the file in its `FF_MAX_EVENTS` (a Mac's daemon forwards its own), so the Max page lists them with channel, link, first line and session; it also checks the bot token (read from the ffbox config where it already is, never copied) and, optionally, shows the newest messages in a few channels with unread counts. An "External" strip in the sidebar shows Max and FFBox at a glance; the orchestrator has `max_activity`. See [docs/max.md](docs/max.md) |
 | intake | Discord and FFBox into the work ledger, off by default: new #bug-reports threads, trusted people's requests to Max in #dev-chat (by Discord author id), FFBox's fix branches and requests. Each carries its source and a fixed-code triage: an obvious bug may be worked without a person (when auto-approve is on); anything else needs a human, and nothing is worked until Ben or Lothsahn approves it. Deduplicated against open and finished work, capped per day, players' text fenced off as untrusted; workers end with a marker, reply in and close the thread, and a release follow-up says "live in 0.50.0.X". The Dispatcher page's Intake tab, `list_work` and the heartbeat show it. See [docs/intake.md](docs/intake.md) |
 | guard | a `PreToolUse` hook on every worker, active even in `bypassPermissions`: no push or PR to the game repo's master/main (other repos' master/main are allowed; an undeterminable target counts as the game repo), no force push, no `gh repo delete`, and `gh repo rename/create/edit/archive` or security-setting changes only on repos other than the game repo (an undeterminable one counts as the game repo), no writes to or shell commands naming a `protectedPaths` entry (the live co-op checkout), and Unity MCP calls only after pinning this sandbox's own editor. Each worker's Unity MCP server sees only its sandbox's editor (docs/unity-lifecycle.md) |
 | voice | a mic in every message box, and a hands-free voice mode for the car. Speech is transcribed on this machine by Whisper (faster-whisper `large-v3-turbo` on the GPU) primed with FF words and the current sandbox and agent names; an end-of-speech detector with an adaptive noise floor finishes each utterance. Dictation puts the text in the box for review; voice mode sends it, reads the reply aloud with local Kokoro TTS and listens again (barge-in, "stop" to end). Models load on demand and unload when idle; audio is not kept. Browser speech engines are the fallback. See [docs/voice.md](docs/voice.md) |
@@ -102,7 +106,7 @@ The bell in the sidebar turns on notifications for that device (Web Push, VAPID 
 `data/vapid.json`, subscriptions in `data/push-subscriptions.json`): an agent waiting for a
 permission, a finished turn, an error, a standing-agent run that failed or hit its budget, a
 delegation request, each with its own toggle, plus a test button. On iPhone, Web Push only works for
-a Home Screen app: open the Funnel URL in Safari, Share → Add to Home Screen, open FF Factory from
+a Home Screen app: open the Funnel URL in Safari, Share → Add to Home Screen, open SketchUp Factory from
 there, then turn notifications on. Without a subscription, an open tab in the background still shows
 them.
 
@@ -197,7 +201,7 @@ reads only the scopes and expiry times from the file. It never reads, logs or se
 values. The agents keep their own token.
 
 If that login is missing, lacks `user:profile`, or has expired (refresh token included), the
-sidebar shows "unavailable" with the reason, plus FF Factory's own agent spend over 7 days,
+sidebar shows "unavailable" with the reason, plus SketchUp Factory's own agent spend over 7 days,
 labelled as spend. The fix is always the same: on this machine, run `claude` in a terminal and type
 `/login` with the claude.ai account.
 
@@ -267,7 +271,7 @@ Tests (unit and Playwright end to end), releases and the CI checks are described
 
 ## Security model
 
-FF Factory gives AI agents a shell on your machine. Treat access to it like SSH access.
+SketchUp Factory gives AI agents a shell on your machine. Treat access to it like SSH access.
 
 - **Who can drive it:** the web login (scrypt-hashed passwords, server-side sessions, rate-limited,
   CSRF- and origin-checked; see [Access and security](#access-and-security)) and API keys for `/mcp`

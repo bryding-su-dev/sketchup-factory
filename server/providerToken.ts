@@ -18,7 +18,7 @@ if (arg === '--revoke') {
   console.log(token);
   console.error(
     `\nThat is FFBox's connector token, shown once; config.json keeps only its SHA-256. Give it to the connector's\n` +
-      `owner out of band (it goes in FFBox's secrets file). Restart FF Factory, or set it live with set_app_config.\n` +
+      `owner out of band (it goes in FFBox's secrets file). Restart SketchUp Factory, or set it live with set_app_config.\n` +
       `providers.ffbox.enabled is ${cfg.providers?.ffbox?.enabled === true ? 'true' : 'false: the connector is refused until it is true'}.`,
   );
 } else {

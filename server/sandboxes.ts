@@ -514,7 +514,7 @@ export class SandboxManager {
     const s = this.require(idOrName);
     if (s.status !== 'ready') throw new Error(`sandbox ${s.id} is ${s.status}, not ready`);
     if (this.elevatedWhy) {
-      const msg = `not started: FF Factory is running with administrator rights, and an editor started from it would stop on Unity's "running as administrator" dialog. ${this.elevatedWhy}`;
+      const msg = `not started: SketchUp Factory is running with administrator rights, and an editor started from it would stop on Unity's "running as administrator" dialog. ${this.elevatedWhy}`;
       if (!isActive(s.unity.state)) this.update(s, { unity: { ...s.unity, state: 'stopped', detail: msg, blocked: undefined } });
       throw new Error(msg);
     }

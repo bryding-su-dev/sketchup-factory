@@ -166,8 +166,8 @@ export function versionLine(before: string | undefined, after: string | undefine
 export function restartSummary(f: ResumeFile, outcomes: ResumeOutcome[], update: UpdateResult | undefined, now: AppNow, notes: string[] = []): string {
   const head = now.head;
   const parts: string[] = f.cause
-    ? [`[app restarted] FF Factory restarted WITHOUT a clean stop: ${f.cause}.${f.update ? ` The update that was pending then (${f.reason}) was retried.` : ''}`]
-    : [`[app restarted] FF Factory restarted (${f.reason}; stopped at ${new Date(f.at).toLocaleTimeString()}).`];
+    ? [`[app restarted] SketchUp Factory restarted WITHOUT a clean stop: ${f.cause}.${f.update ? ` The update that was pending then (${f.reason}) was retried.` : ''}`]
+    : [`[app restarted] SketchUp Factory restarted (${f.reason}; stopped at ${new Date(f.at).toLocaleTimeString()}).`];
   const version = versionLine(f.appVersion, now.version);
   if (version) parts.push(version);
   if (f.update) {
@@ -282,7 +282,7 @@ export interface DrainDeps {
 
 export function drainMessage(req: RestartRequest, deadline: Date): string {
   return (
-    `${DRAIN_TAG} FF Factory will restart for ${req.reason}${req.update ? ' (an update)' : ''}, at the latest ${deadline.toLocaleTimeString()}. ` +
+    `${DRAIN_TAG} SketchUp Factory will restart for ${req.reason}${req.update ? ' (an update)' : ''}, at the latest ${deadline.toLocaleTimeString()}. ` +
     'Reach a safe point now: commit your work on your sandbox branch (a WIP commit is fine) and push it, then end your turn with a one-line status. ' +
     'Do not start anything long. You will be resumed automatically after the restart, with your history, worktree and Unity editor intact.'
   );
@@ -480,6 +480,6 @@ export function describeUncleanStop(o: { lastAliveAt?: number; bootAt: number; h
   if (o.lastAliveAt !== undefined && o.bootAt > o.lastAliveAt) {
     return `${o.host} went down unexpectedly (lost power, was hard-reset or crashed) after ${t(o.lastAliveAt)}, and booted again at ${t(o.bootAt)}`;
   }
-  if (o.lastAliveAt !== undefined) return `the FF Factory server stopped without a clean stop (a crash or a forced kill) after ${t(o.lastAliveAt)}; ${o.host} itself kept running`;
-  return 'the FF Factory server stopped without a clean stop (a crash, a forced kill or a power cut)';
+  if (o.lastAliveAt !== undefined) return `the SketchUp Factory server stopped without a clean stop (a crash or a forced kill) after ${t(o.lastAliveAt)}; ${o.host} itself kept running`;
+  return 'the SketchUp Factory server stopped without a clean stop (a crash, a forced kill or a power cut)';
 }

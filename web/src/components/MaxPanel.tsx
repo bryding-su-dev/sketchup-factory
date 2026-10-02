@@ -1,4 +1,4 @@
-// Max's page (docs/max.md): the Discord bot FF Factory's agents post as. Read-only. The header says whether the
+// Max's page (docs/max.md): the Discord bot SketchUp Factory's agents post as. Read-only. The header says whether the
 // bot token works and shows the last error; the tabs list what agents did as Max (reported by their ffdiscord
 // calls) and, when it is on, the newest messages in a few channels with unread counts. Discord text is players'
 // and is shown as plain text only (React escapes it; no Markdown, no embeds, no images).
@@ -97,7 +97,7 @@ export function MaxPanel({ app, max: m, tab, onClose }: { app: AppState; max: Ma
             <span>Check now</span>
           </button>
         </div>
-        <p className="sb-head-purpose">The Discord bot our agents post as. Read-only: FF Factory shows what agents did as Max and whether the bot works; it never posts.</p>
+        <p className="sb-head-purpose">The Discord bot our agents post as. Read-only: SketchUp Factory shows what agents did as Max and whether the bot works; it never posts.</p>
         <div className="sb-facts">
           <span className="fact" data-testid="max-health">
             <Icon name="pulse" size={13} />
@@ -160,7 +160,7 @@ function Activity({ list, max: m, sessions }: { list?: MaxEvent[]; max: MaxSumma
         <Icon name="chat" size={28} />
         <p>Nothing recorded yet.</p>
         <p className="small mx-explain">
-          Agents FF Factory starts report each post, reply, thread and close they make with <span className="mono">ffdiscord</span> by appending a line to the file in their{' '}
+          Agents SketchUp Factory starts report each post, reply, thread and close they make with <span className="mono">ffdiscord</span> by appending a line to the file in their{' '}
           <span className="mono">FF_MAX_EVENTS</span> variable (on this host <span className="mono">{m.eventsFile}</span>; on a Mac, the daemon forwards its own). It needs the ff-discord plugin version that writes it.
         </p>
       </div>

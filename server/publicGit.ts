@@ -92,7 +92,7 @@ export function publicIdentityEnv(identity: { name: string; email: string }, rep
   if (!repos.length) return {};
   const q = (s: string) => `"${s.replace(/["\\]/g, '')}"`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `# Written by FF Factory: the identity agents commit with in public repos.\n[user]\n\tname = ${q(identity.name)}\n\temail = ${q(identity.email)}\n`);
+  fs.writeFileSync(file, `# Written by SketchUp Factory: the identity agents commit with in public repos.\n[user]\n\tname = ${q(identity.name)}\n\temail = ${q(identity.email)}\n`);
   const start = Number(baseEnv.GIT_CONFIG_COUNT ?? 0) || 0;
   const env: Record<string, string> = {};
   let n = start;

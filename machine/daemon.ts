@@ -1,4 +1,4 @@
-// The FF Factory machine daemon (docs/machines.md). Runs on a Mac as a LaunchAgent, or on a Windows PC from a
+// The SketchUp Factory machine daemon (docs/machines.md). Runs on a Mac as a LaunchAgent, or on a Windows PC from a
 // Task Scheduler task in the user's logged-on session, keeps a WebSocket open to the portal, and runs the
 // portal's agents for this machine locally with the same AgentSession code the portal uses, streaming
 // everything they record back.
@@ -856,7 +856,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   process.env.FF_APP_DIR = appDirOfConfig(cfg);
   const d = new Daemon(cfg);
   d.start();
-  log(`FF Factory daemon for machine ${cfg.id}, repo ${cfg.repoPath}, portal ${cfg.portalUrl}`);
+  log(`SketchUp Factory daemon for machine ${cfg.id}, repo ${cfg.repoPath}, portal ${cfg.portalUrl}`);
   const quit = () => {
     log('shutting down: stopping agent processes');
     d.shutdown();

@@ -339,7 +339,7 @@ if ($r.Code -ne 0) { throw "npm ci failed ($($r.Code)): $($r.Out)" }
  */
 export function supervisorScript(node: string, flag: boolean): string {
   const flags = [...(flag ? ['--experimental-strip-types'] : []), '--disable-warning=ExperimentalWarning'].join(' ');
-  return `# FF Factory machine daemon supervisor (docs/machines.md), started at logon by the ${TASK_NAME} task.
+  return `# SketchUp Factory machine daemon supervisor (docs/machines.md), started at logon by the ${TASK_NAME} task.
 # Written by the portal's deploy into the daemon's folder (its own folder here); a redeploy replaces it.
 $ErrorActionPreference = 'Continue'
 $F = $PSScriptRoot
@@ -389,7 +389,7 @@ export function taskXml(sid: string, home: string, appDir?: string): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>FF Factory machine daemon: runs the portal's agents on this PC (docs/machines.md). Installed and updated by the portal over ssh.</Description>
+    <Description>SketchUp Factory machine daemon: runs the portal's agents on this PC (docs/machines.md). Installed and updated by the portal over ssh.</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>

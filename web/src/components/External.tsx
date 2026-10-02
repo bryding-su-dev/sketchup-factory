@@ -1,4 +1,4 @@
-// The sidebar's "External" strip: the two things outside this portal that FF Factory reads, on one quiet line
+// The sidebar's "External" strip: the two things outside this portal that SketchUp Factory reads, on one quiet line
 // above the meters. Max (the Discord bot: token ok or not, when it last posted) and FFBox (on or off, free slots).
 // Each opens its page; FFBox's opens even while it is off, to say what it needs.
 import type { AppState, Provider } from '../../../shared/types';

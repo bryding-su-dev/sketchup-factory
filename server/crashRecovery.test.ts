@@ -195,6 +195,6 @@ test('the real server comes back by itself from a zeroed state.json and users.js
     after.sessions.some((s) => s.title === 'kept across the crash'),
     after.sessions.map((s) => s.title).join(', '),
   );
-  t.diagnostic(log.split('\n').filter((l) => /DATA|restored|unclean|FF Factory/.test(l)).join('\n'));
+  t.diagnostic(log.split('\n').filter((l) => /DATA|restored|unclean|SketchUp Factory/.test(l)).join('\n'));
   assert.ok(fs.readdirSync(data).some((n) => n.startsWith('state.json.damaged-')), 'the zeroed file is kept');
 });

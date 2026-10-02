@@ -62,7 +62,7 @@ export const MAX_DICTATION_SECONDS = 300;
 
 /** Words Whisper should spell our way, most important first (a long prompt is cut from the end). */
 export const CORE_VOCABULARY = [
-  'Final Factory, FF Factory, orchestrator, sandbox, worktree, standing agent',
+  'Final Factory, SketchUp Factory, orchestrator, sandbox, worktree, standing agent',
   'Claude Code, Fable, Opus, Sonnet, Haiku, MCP, subagent, handoff, Tailscale Funnel, GitHub, PR, develop, rebase',
   'Unity, DOTS, ECS, Burst, ISystem, lockstep, determinism, desync, heartbeat, fixed-point, ParrelSync',
   'mass driver, conveyor, assembler, fleet, tech tree, playtest, Discord',
@@ -251,7 +251,7 @@ export function chooseEngine(
   const whisper = can.record && (pref === 'whisper' || (pref === 'auto' && whisperUp));
   if (whisper) return { engine: 'whisper' };
   if (pref !== 'whisper' && can.browser) return { engine: 'browser' };
-  if (!can.secure) return { error: 'Voice input needs a secure page: open FF Factory at its https:// address.' };
+  if (!can.secure) return { error: 'Voice input needs a secure page: open SketchUp Factory at its https:// address.' };
   if (pref === 'whisper' && !can.record) return { error: 'This browser cannot record audio here.' };
   if (pref === 'browser') return { error: 'This browser has no speech recognition. Choose local Whisper in Settings.' };
   return { error: `Local Whisper is ${status?.state ?? 'unavailable'}${status?.detail ? ` (${status.detail})` : ''}, and this browser has no speech recognition of its own.` };

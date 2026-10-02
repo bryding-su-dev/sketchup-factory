@@ -458,7 +458,7 @@ export class IntakeManager {
   /**
    * Max's escalation from FFBox (POST /api/intake/ffbox; docs/intake.md, "Escalations from Max"). The ledger is checked
    * and the request filed in one step: open work for the thread takes it as a log line (in_flight), finished work says
-   * which release carries it (done), otherwise it is filed with FF Factory's own triage. A resend of the same ref gets
+   * which release carries it (done), otherwise it is filed with SketchUp Factory's own triage. A resend of the same ref gets
    * the same answer. `off` while intake.ffbox.escalations (or intake.ffbox) is off.
    */
   onEscalation(e: Escalation): EscalationAnswer {

@@ -144,7 +144,7 @@ test('wake_me: pending wakes survive a restart; one that came due while the serv
   after.now = () => now;
   assert.equal(after.restore(), 3);
   t.mock.timers.tick(0);
-  assert.deepEqual(sent, [{ id: 'w1', text: '[wake_me] Time is up (10 min late: FF Factory was restarting). Your note: check the build' }]);
+  assert.deepEqual(sent, [{ id: 'w1', text: '[wake_me] Time is up (10 min late: SketchUp Factory was restarting). Your note: check the build' }]);
   assert.equal(after.pending('w2')?.note, 'check CI');
   t.mock.timers.tick(10 * 60_000);
   assert.equal(sent.at(-1)?.id, 'orch');

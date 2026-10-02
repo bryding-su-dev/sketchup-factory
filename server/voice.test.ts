@@ -30,7 +30,7 @@ test('voice prompt: the fixed FF words come first, then names from the state', (
     specs: ['068-mass-driver', '074-three-peer-full-playthrough', 'README.md', '101-new-thing'],
     agentNames: ['Voice input builder', 'Discord triage'],
   });
-  assert.ok(p.startsWith('Final Factory, FF Factory, orchestrator'), p);
+  assert.ok(p.startsWith('Final Factory, SketchUp Factory, orchestrator'), p);
   assert.ok(p.endsWith('.'));
   for (const w of ['shader-blackhole', 'tutorial-bugs', 'mini', 'spec 101', 'Voice input builder', 'lockstep']) assert.ok(p.includes(w), `${w} missing: ${p}`);
   // M5 is already in the fixed list (as "M5"): no duplicate "m5".

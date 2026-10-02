@@ -184,7 +184,7 @@ test('max: an event is attributed to its session, linked, deduplicated, and a fa
   m.ingestLine(line({ at: '2026-09-28T10:07:00Z', session: 'gone' }), 'host');
   assert.equal(m.activity()[0].agent, 'unknown session');
   m.ingestLine(line({ at: '2026-09-28T10:08:00Z' }), 'host');
-  assert.equal(m.activity()[0].agent, 'outside FF Factory');
+  assert.equal(m.activity()[0].agent, 'outside SketchUp Factory');
 
   // Kept across a restart.
   m.flush();

@@ -177,8 +177,8 @@ export function parseNotice(text: string): Notice {
     if (p) return { kind: 'person-message', summary: `${p[1]}: ${clip(oneLine(p[3]), 150)}`, attention: true, body: p[3].trim(), fromName: p[1], fromUserId: p[2] };
     return { kind: 'person-message', summary: clip(oneLine(rest), 160), attention: true, body: rest.trim() };
   }
-  if (tag === 'app restarted') return { kind: 'restarted', summary: 'FF Factory restarted', attention: false, body: rest.trim() };
-  if (tag === 'app restart pending') return { kind: 'restart-pending', summary: 'FF Factory is about to restart', attention: false, body: rest.trim() };
+  if (tag === 'app restarted') return { kind: 'restarted', summary: 'SketchUp Factory restarted', attention: false, body: rest.trim() };
+  if (tag === 'app restart pending') return { kind: 'restart-pending', summary: 'SketchUp Factory is about to restart', attention: false, body: rest.trim() };
   if (tag === 'app restart cancelled') return { kind: 'restart-cancelled', summary: 'The restart was called off', attention: false, body: rest.trim() };
   if (/^The app restarted \(/.test(text)) return { kind: 'resumed', summary: 'The app restarted; this session was resumed', attention: false, body: text.trim() };
 

@@ -132,7 +132,7 @@ test('the intake over the socket: request and board_check are answered by the ho
   await c.hello();
   // No hooks (the intake is off): said plainly, the connection stays up.
   c.send({ type: 'request', ref: 'r1', kind: 'review-branch', title: 'Review ffbox/x', brief: 'please', opener: 'system', branch: 'ffbox/x' });
-  assert.deepEqual(await c.next('error'), { type: 'error', code: 'not_enabled', message: 'FF Factory does not take requests from FFBox now (intake.ffbox)', ref: 'r1' });
+  assert.deepEqual(await c.next('error'), { type: 'error', code: 'not_enabled', message: 'SketchUp Factory does not take requests from FFBox now (intake.ffbox)', ref: 'r1' });
   c.send({ type: 'board_check', ref: 'q1', keys: ['desync:0.50.0:power'] });
   assert.equal((await c.next('error')).code, 'not_enabled');
 

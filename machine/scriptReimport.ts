@@ -10,7 +10,7 @@ import path from 'node:path';
 /** The folder the script lives in, relative to the project; it deletes itself once done. */
 export const REIMPORT_FOLDER = 'Assets/__FFFactoryReimport';
 
-export const REIMPORT_SCRIPT = `// Written by FF Factory after it copied a warm Library into this sandbox (machine/scriptReimport.ts).
+export const REIMPORT_SCRIPT = `// Written by SketchUp Factory after it copied a warm Library into this sandbox (machine/scriptReimport.ts).
 // A Library copied from another project path keeps stale script-to-class mappings, so at the first editor
 // start every script under Assets is reimported once; then this folder deletes itself. Never commit it.
 #if UNITY_EDITOR
@@ -40,7 +40,7 @@ namespace FFFactory
                     var p = f.Replace('\\\\', '/');
                     if (!p.StartsWith(Folder)) paths.Add(p);
                 }
-            UnityEngine.Debug.Log("[FF Factory] This sandbox's Library was copied from another project: reimporting its " + paths.Count + " scripts once.");
+            UnityEngine.Debug.Log("[SketchUp Factory] This sandbox's Library was copied from another project: reimporting its " + paths.Count + " scripts once.");
             AssetDatabase.StartAssetEditing();
             try
             {
@@ -52,7 +52,7 @@ namespace FFFactory
             }
             AssetDatabase.DeleteAsset(Folder);
             AssetDatabase.Refresh();
-            UnityEngine.Debug.Log("[FF Factory] Script reimport done.");
+            UnityEngine.Debug.Log("[SketchUp Factory] Script reimport done.");
         }
     }
 }
@@ -79,6 +79,6 @@ export function armScriptReimport(project: string, gitCommonDir: string) {
   }
   if (!text.split(/\r?\n/).includes(REIMPORT_EXCLUDE)) {
     fs.mkdirSync(path.dirname(exclude), { recursive: true });
-    fs.appendFileSync(exclude, `${text && !text.endsWith('\n') ? '\n' : ''}# FF Factory: a sandbox's one-time script reimport after a Library copy (machine/scriptReimport.ts)\n${REIMPORT_EXCLUDE}\n`);
+    fs.appendFileSync(exclude, `${text && !text.endsWith('\n') ? '\n' : ''}# SketchUp Factory: a sandbox's one-time script reimport after a Library copy (machine/scriptReimport.ts)\n${REIMPORT_EXCLUDE}\n`);
   }
 }

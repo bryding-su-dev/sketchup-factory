@@ -580,7 +580,7 @@ test('machine: agents cut off mid-turn by a forced redeploy or a daemon restart 
   await until('resumed', () => users().length === 2, 8000).catch((e) => {
     throw new Error(`${e.message}; cutOff=${JSON.stringify([...(mm as unknown as { cutOff: Map<string, unknown> }).cutOff])} outdated=${mm.outdated('mx')} users=${JSON.stringify(users())} status=${s.info.status} reports=${reports.join(' | ')}`);
   });
-  assert.match(users()[1], /^\[machine mx\] The FF Factory daemon on this machine was redeployed \(add_machine with force\) at .* while you were mid-turn/);
+  assert.match(users()[1], /^\[machine mx\] The SketchUp Factory daemon on this machine was redeployed \(add_machine with force\) at .* while you were mid-turn/);
   await until('the resumed turn ran', () => s.info.status === 'idle');
   assert.ok(reports.some((r) => /mx is back after its daemon was redeployed \(add_machine with force\); resumed 1 agent\(s\)/.test(r)), reports.join('\n'));
 

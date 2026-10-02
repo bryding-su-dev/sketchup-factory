@@ -1,4 +1,4 @@
-// FF Factory service worker: Web Push notifications (server/notify.ts). No offline caching: the app
+// SketchUp Factory service worker: Web Push notifications (server/notify.ts). No offline caching: the app
 // is live data over a WebSocket, and a stale cached shell would only confuse.
 
 self.addEventListener('install', () => self.skipWaiting());
@@ -9,14 +9,14 @@ self.addEventListener('push', (event) => {
   try {
     n = event.data ? event.data.json() : {};
   } catch {
-    n = { title: 'FF Factory', body: event.data ? event.data.text() : '' };
+    n = { title: 'SketchUp Factory', body: event.data ? event.data.text() : '' };
   }
   event.waitUntil(
     (async () => {
       // Someone is looking at the app right now: the page itself shows what changed.
       const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       if (wins.some((w) => w.focused && w.visibilityState === 'visible') && n.tag !== 'test') return;
-      await self.registration.showNotification(n.title || 'FF Factory', {
+      await self.registration.showNotification(n.title || 'SketchUp Factory', {
         body: n.body || '',
         tag: n.tag,
         renotify: !!n.tag,

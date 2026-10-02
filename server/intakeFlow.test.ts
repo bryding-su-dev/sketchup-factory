@@ -575,7 +575,7 @@ test('escalations from Max: off by default; checked against the ledger and filed
   assert.deepEqual(intake.onEscalation({ ...ESCALATION, ref: 'conv-501-turn-1', conversation: '501', threadId: '1554888928090263999', url: 'https://discord.com/channels/530867164866150410/1554888928090263999' }), { status: 'done', workId: person.id, version: '0.50.0.51' });
 });
 
-test('escalations from Max: an obvious bug by FF Factory\'s rules may be auto-approved; caps skip', async (t) => {
+test('escalations from Max: an obvious bug by SketchUp Factory\'s rules may be auto-approved; caps skip', async (t) => {
   const { intake, work } = setup(t, { ffbox: { enabled: true, escalations: true, dailyCap: 2, autoApprove: { enabled: true, maxPerDay: 5 } } });
   const bug = (n: number, text = 'The game crashes to desktop every time I dock a freighter at the station.', title = `Crash when docking ${n}`) => ({
     ...ESCALATION,

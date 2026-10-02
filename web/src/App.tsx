@@ -50,7 +50,7 @@ function Shell({ app }: { app: AppState }) {
   const waiting = useAttention(app).length;
 
   useEffect(() => {
-    document.title = waiting ? `(${waiting}) FF Factory` : 'FF Factory';
+    document.title = waiting ? `(${waiting}) SketchUp Factory` : 'SketchUp Factory';
   }, [waiting]);
 
   useEffect(() => {
@@ -148,12 +148,12 @@ function HostBanner({ host, app }: { host?: HostStatus; app: AppState }) {
     bars.push({
       key: 'elevated',
       kind: 'error',
-      lead: 'FF Factory is running with administrator rights.',
+      lead: 'SketchUp Factory is running with administrator rights.',
       rest: `It will not start Unity editors (they would stop on Unity's administrator dialog), and every agent shell has admin rights. Run scripts\\restart.cmd to bring it back non-elevated.${host.elevatedWhy ? ` (${host.elevatedWhy})` : ''}`,
     });
   }
   if (drive) {
-    bars.push({ key: 'drive', kind: 'error', lead: 'The sandbox drive is offline', rest: `(${h.sandboxRoot}${h.detail ? `: ${h.detail}` : ''}). FF Factory is reattaching it by itself; the editors and agents that were working there come back afterwards.` });
+    bars.push({ key: 'drive', kind: 'error', lead: 'The sandbox drive is offline', rest: `(${h.sandboxRoot}${h.detail ? `: ${h.detail}` : ''}). SketchUp Factory is reattaching it by itself; the editors and agents that were working there come back afterwards.` });
   }
   if (disk && !drive) {
     bars.push({

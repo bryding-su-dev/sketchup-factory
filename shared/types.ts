@@ -96,7 +96,7 @@ export type SessionKind = 'orchestrator' | 'worker' | 'standing';
 export type OrchestratorRole = 'dispatcher' | 'personal';
 
 /**
- * A person FF Factory knows: a login (data/users.json). `userId` is the login name, which never changes; it is
+ * A person SketchUp Factory knows: a login (data/users.json). `userId` is the login name, which never changes; it is
  * what FFBox maps to the account it bills (docs/ffbox-connector-contract.md, `requestedBy`).
  */
 export interface Requester {
@@ -423,7 +423,7 @@ export interface ProviderClass {
   name: string;
   network: 'fenced' | 'open';
   gpu: boolean;
-  /** The model FF Factory's own work (operator-requested or automatic) runs on, e.g. "claude-opus-5-5". */
+  /** The model SketchUp Factory's own work (operator-requested or automatic) runs on, e.g. "claude-opus-5-5". */
   model: string;
   /** full: any well-briefed task. simple: small, well-scoped work only. */
   tier: 'full' | 'simple';
@@ -560,7 +560,7 @@ export interface IntakeGroups {
 
 export type MaxAction = 'post' | 'reply' | 'ask' | 'edit' | 'thread_create' | 'close' | 'rename';
 
-/** One thing an FF Factory agent did as Max, reported by the ffdiscord CLI through the events file. Text is ours but still shown as plain text. */
+/** One thing an SketchUp Factory agent did as Max, reported by the ffdiscord CLI through the events file. Text is ours but still shown as plain text. */
 export interface MaxEvent {
   id: string;
   at: string;
@@ -580,7 +580,7 @@ export interface MaxEvent {
   sessionId?: string;
   /** The session's title when the event arrived. */
   session?: string;
-  /** "worker", "standing: <name>", "orchestrator", or "outside FF Factory". */
+  /** "worker", "standing: <name>", "orchestrator", or "outside SketchUp Factory". */
   agent?: string;
   /** "host" or a machine id. */
   where: string;
@@ -862,7 +862,7 @@ export interface PlanUsage {
   error?: string;
   /** Where the numbers came from when not the usage endpoint, e.g. "rate-limit headers" (weekly and session only). */
   source?: string;
-  /** Only when unavailable: FF Factory's own agent spend over the last 7 days (spend, not the plan limit). */
+  /** Only when unavailable: SketchUp Factory's own agent spend over the last 7 days (spend, not the plan limit). */
   spendWeekUsd?: number;
 }
 
@@ -1125,7 +1125,7 @@ export interface IntakeSummary {
     requestChannels: string[];
     /** Channels FFBox owns, which the intake never files from (docs/intake.md). */
     ffboxOwned?: string[];
-    /** The FF Factory logins trusted Discord ids map to (never the ids themselves). */
+    /** The SketchUp Factory logins trusted Discord ids map to (never the ids themselves). */
     trustedPeople: string[];
     dailyCap: number;
     perReporterPerDay: number;

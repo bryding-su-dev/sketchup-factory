@@ -10,6 +10,10 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 
 ## [Unreleased]
 
+### Changed
+- The app is called SketchUp Factory in the UI, the manifest, notifications and agents' prompts. Internal names
+  (the `FFSB` cookie, `FFSB_CONFIG`, `ffsb.*` localStorage keys, the `ffsb-*` helper tasks) are unchanged.
+
 ### Added
 - `project` config: the project's name, description, how finished work lands (`push` to the integration branch, or
   `pull-request` into it), whether the Discord/FFBox/Max rules apply (`community`) and two Markdown brief files appended to the workers' and orchestrators' prompts, so another

@@ -200,7 +200,7 @@ export class Notifier {
   /** A test notification to one device (or all of this user's). Resolves to how many were delivered. */
   async test(user: string, endpoint?: string) {
     const targets = this.subs.filter((s) => s.user === user && (!endpoint || s.endpoint === endpoint));
-    const results = await Promise.all(targets.map((s) => this.push(s, { kind: 'turnEnd', title: 'FF Factory', body: 'Test notification: this device will hear from the factory.', url: '#/', tag: 'test' })));
+    const results = await Promise.all(targets.map((s) => this.push(s, { kind: 'turnEnd', title: 'SketchUp Factory', body: 'Test notification: this device will hear from the factory.', url: '#/', tag: 'test' })));
     return results.filter(Boolean).length;
   }
 

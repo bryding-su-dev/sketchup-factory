@@ -67,7 +67,7 @@ test('resume list: the orchestrator and standing agents are never on it', () => 
 });
 
 test('resume list: the drain request itself is not work to resume', () => {
-  const drain = { text: `${DRAIN_TAG} FF Factory will restart…`, from: 'system' as const };
+  const drain = { text: `${DRAIN_TAG} SketchUp Factory will restart…`, from: 'system' as const };
   // Wrapped up and went idle: resumed only because it was drained, with no stale messages.
   const [e] = collectResume([snap({ id: 'a', status: 'idle', unanswered: [drain] })], new Set(['a']));
   assert.deepEqual([e.why, e.unanswered], ['drained', []]);

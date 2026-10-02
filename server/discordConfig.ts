@@ -1,7 +1,7 @@
 // Where Max's bot token and channel ids already live on this host: the "discord" section of the ffbox config
 // (~/.config/ffbox/config.json), read the way the ffdiscord CLI reads it. The token is best the NAME of a
 // secrets.env variable (`"app_token": "DISCORD_TOKEN"`), looked up in the environment and then in secrets.env next
-// to the config. FF Factory copies it nowhere: it reads the file when it needs the token, keeps it in this
+// to the config. SketchUp Factory copies it nowhere: it reads the file when it needs the token, keeps it in this
 // process only, and never sends it to a page, an agent or a log (docs/max.md).
 import fs from 'node:fs';
 import os from 'node:os';

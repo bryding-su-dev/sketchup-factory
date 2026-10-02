@@ -109,7 +109,7 @@ export class Waker {
     this.timers.delete(sessionId);
     if (!t || !this.sessions.sessions.has(sessionId)) return void this.save();
     const late = Math.round((this.now() - t.at) / 60_000);
-    const when = late >= 2 ? ` (${late} min late: FF Factory was restarting)` : '';
+    const when = late >= 2 ? ` (${late} min late: SketchUp Factory was restarting)` : '';
     try {
       this.sessions.send(sessionId, `[wake_me] Time is up${when}. Your note: ${t.note || '(none)'}`, 'system');
     } catch (e) {

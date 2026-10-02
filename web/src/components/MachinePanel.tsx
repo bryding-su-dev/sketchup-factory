@@ -223,7 +223,7 @@ export function MachinePanel({ app, machine: m, sessionId, onClose }: { app: App
           body={
             <>
               <p>Unloads its daemon over ssh and removes it and its agents from here.</p>
-              <p className="dim">Nothing in its Final Factory clone is touched; the daemon's files stay in {m.appDir ?? '~/.ff-factory'}.</p>
+              <p className="dim">Nothing in its main clone is touched; the daemon's files stay in {m.appDir ?? '~/.ff-factory'}.</p>
             </>
           }
           onConfirm={async () => {
@@ -347,7 +347,7 @@ export function AddMachineModal({ onClose }: { onClose: () => void }) {
         }}
       >
         <p className="dim small">
-          Installs the FF Factory daemon on a Mac or Windows PC over ssh from this host (a LaunchAgent on a Mac, a scheduled task at logon on Windows) that runs agents
+          Installs the SketchUp Factory daemon on a Mac or Windows PC over ssh from this host (a LaunchAgent on a Mac, a scheduled task at logon on Windows) that runs agents
           there and connects back. The OS is found over ssh. Needs ssh key access, Node 22.6+ and git there; see docs/machines.md for a Windows PC's setup.
         </p>
         <div className="field-row">
@@ -366,7 +366,7 @@ export function AddMachineModal({ onClose }: { onClose: () => void }) {
         </label>
         <div className="field-row">
           <label className="field">
-            <span>Final Factory clone</span>
+            <span>Main clone</span>
             <input className="input mono" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="found automatically" />
           </label>
           <label className="field">

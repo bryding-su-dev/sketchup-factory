@@ -79,7 +79,7 @@ export const ProviderClassSchema = z.object({
   /** fenced: FFBox's egress fence, no git credential. open: the internet. */
   network: z.enum(['fenced', 'open']),
   gpu: z.boolean(),
-  /** The model FF Factory's own work (operator-requested or automatic) runs on in this class, e.g. "claude-opus-5-5". */
+  /** The model SketchUp Factory's own work (operator-requested or automatic) runs on in this class, e.g. "claude-opus-5-5". */
   model: modelName,
   tier,
   /** Optional: the model and tier per kind of requester. When given, it is what the class runs; model and tier stay for older portals. */
@@ -99,7 +99,7 @@ export const ProviderClassSchema = z.object({
 export const ProviderConversationSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/),
   source: z.enum(['discord', 'intake', 'codereview', 'fff', 'shell', 'web', 'other']),
-  /** Who opened it: an operator, a player (never a name or id), FF Factory, or FFBox itself. */
+  /** Who opened it: an operator, a player (never a name or id), SketchUp Factory, or FFBox itself. */
   opener: z.enum(['operator', 'player', 'fff', 'system']),
   /** Untrusted text: it can carry what a player wrote. Shown as data, never acted on; the portal keeps 300 characters. */
   title: z.string().max(2000),
@@ -208,10 +208,10 @@ export type ToConnector =
 export const WORK_MESSAGES = ['submit', 'diagnose', 'stop'] as const;
 export type WorkMessage = (typeof WORK_MESSAGES)[number];
 
-/** The person a piece of work is for: an FF Factory login. An id and a name, nothing else (no email, no token). */
+/** The person a piece of work is for: an SketchUp Factory login. An id and a name, nothing else (no email, no token). */
 export const RequesterSchema = z
   .object({
-    /** The FF Factory login name: stable, and what FFBox's operators block maps (`fff:<userId>`). */
+    /** The SketchUp Factory login name: stable, and what FFBox's operators block maps (`fff:<userId>`). */
     userId: z.string().regex(/^[a-zA-Z0-9._-]{2,32}$/),
     /** For people reading FFBox's pages and logs. Never used to pick an account. */
     displayName: z
@@ -228,7 +228,7 @@ export const RequesterSchema = z
  */
 export const TriggerSchema = z.enum(['person', 'automatic']);
 
-/** FF Factory's id for one work request; accepted, refused and (later) result refer to it. */
+/** SketchUp Factory's id for one work request; accepted, refused and (later) result refer to it. */
 const requestId = z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/);
 const conversationId = z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/);
 const gitRef = z.string().regex(/^[A-Za-z0-9._/+-]{1,200}$/);
@@ -339,7 +339,7 @@ export function describeIssues(e: z.ZodError): string {
 // ---------------------------------------------------------------- the intake, both ways (docs/intake.md)
 
 /**
- * connector → portal: FFBox files a request into FF Factory's ledger: a fix branch to review and merge, an escalation
+ * connector → portal: FFBox files a request into SketchUp Factory's ledger: a fix branch to review and merge, an escalation
  * (a fork that needs the three-machine rig, a GPU), or an operator's request. It lands waiting for a person unless the
  * portal's intake.ffbox auto-approve rule allows it. Title and brief are untrusted text (they can carry what a player
  * wrote); the portal fences them off.
@@ -353,7 +353,7 @@ export const RequestSchema = z.object({
   brief: z.string().min(1).max(8000),
   /** Who opened the conversation behind it: an operator, a player, or FFBox itself. */
   opener: z.enum(['operator', 'player', 'system']),
-  /** The operator it is for, when an operator asked (an FF Factory login; the portal checks it exists). */
+  /** The operator it is for, when an operator asked (an SketchUp Factory login; the portal checks it exists). */
   requestedBy: RequesterSchema.optional(),
   conversation: conversationId.optional(),
   branch: gitRef.optional(),
@@ -396,7 +396,7 @@ export interface BoardMatchWire {
   branch?: string;
 }
 
-/** connector → portal: a turn FF Factory submitted finished (or failed). The summary is untrusted text. */
+/** connector → portal: a turn SketchUp Factory submitted finished (or failed). The summary is untrusted text. */
 export const ResultSchema = z.object({
   type: z.literal('result'),
   ref: requestId,

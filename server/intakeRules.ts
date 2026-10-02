@@ -30,7 +30,7 @@ export interface IntakeSettings {
     requestChannels: string[];
     /** Channels FFBox owns: never polled, whatever bugChannels says (FFBOX_OWNED_CHANNELS). */
     ffboxOwned: string[];
-    /** Discord user id -> FF Factory user id. */
+    /** Discord user id -> SketchUp Factory user id. */
     trusted: Record<string, string>;
     pollMinutes: number;
     dailyCap: number;

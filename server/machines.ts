@@ -336,7 +336,7 @@ export class MachineManager {
       try {
         this.sessions.send(
           sid,
-          `[machine ${machineId}] The FF Factory daemon on this machine ${c.why} at ${when} while you were mid-turn, which stopped your turn. Your folder is as you left it. Check git status for half-written edits, re-pin your Unity instance if you use one (mcpforunity://instances, then set_active_instance; the editor may have restarted), and continue where you left off.`,
+          `[machine ${machineId}] The SketchUp Factory daemon on this machine ${c.why} at ${when} while you were mid-turn, which stopped your turn. Your folder is as you left it. Check git status for half-written edits, re-pin your Unity instance if you use one (mcpforunity://instances, then set_active_instance; the editor may have restarted), and continue where you left off.`,
           'system',
         );
         resumed.push(sid);

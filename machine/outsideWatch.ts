@@ -82,7 +82,7 @@ export class OutsideWatch {
     this.last = { at: now, state };
     if (state === 'up') {
       if (this.alerted && this.since !== undefined) {
-        await this.send(`${c.name} back`, `${c.name} and the FF Factory portal answer again (down since ${hhmm(this.since)}, ${mins(now - this.since)}).`, 'default');
+        await this.send(`${c.name} back`, `${c.name} and the SketchUp Factory portal answer again (down since ${hhmm(this.since)}, ${mins(now - this.since)}).`, 'default');
       }
       this.misses = 0;
       this.since = this.noPingSince = this.alerted = undefined;
@@ -101,7 +101,7 @@ export class OutsideWatch {
       } else {
         await this.send(
           `${c.name} up, portal down`,
-          `${c.name} answers ping but the FF Factory portal has not answered since ${hhmm(this.since)}${first ? '' : ' (the machine is back on the network)'}. Booted with nobody logged in (automatic logon is off), or the app did not start.`,
+          `${c.name} answers ping but the SketchUp Factory portal has not answered since ${hhmm(this.since)}${first ? '' : ' (the machine is back on the network)'}. Booted with nobody logged in (automatic logon is off), or the app did not start.`,
           'high',
         );
       }

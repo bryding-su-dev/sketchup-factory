@@ -23,7 +23,7 @@ test('unclean stop: a machine that booted after the last heartbeat went down; ot
   const down = describeUncleanStop({ lastAliveAt: T('2026-09-24T23:13:10Z'), bootAt: T('2026-09-24T23:23:06Z'), host: 'BEAST' });
   assert.match(down, /^BEAST went down unexpectedly \(lost power, was hard-reset or crashed\) after .+, and booted again at .+$/);
   const crash = describeUncleanStop({ lastAliveAt: T('2026-09-24T23:13:10Z'), bootAt: T('2026-09-20T08:00:00Z'), host: 'BEAST' });
-  assert.match(crash, /^the FF Factory server stopped without a clean stop \(a crash or a forced kill\) after .+; BEAST itself kept running$/);
+  assert.match(crash, /^the SketchUp Factory server stopped without a clean stop \(a crash or a forced kill\) after .+; BEAST itself kept running$/);
   assert.match(describeUncleanStop({ bootAt: 0, host: 'x' }), /without a clean stop/);
 });
 
@@ -57,7 +57,7 @@ test('unclean stop: agents are told what happened, and whether their editor is c
   assert.match(resumeMessage(e({ sandboxId: 'sb2' }), f), /your Unity editor was not running/);
   assert.doesNotMatch(resumeMessage(e({ machineId: 'm5' }), f), /Unity editor/);
   const sum = restartSummary(f, [{ id: 'w1', title: 't', sandboxId: 'sb1', ok: true }], undefined, { head: 'abc', version: '0.1.0' });
-  assert.match(sum, /^\[app restarted\] FF Factory restarted WITHOUT a clean stop: BEAST went down unexpectedly/);
+  assert.match(sum, /^\[app restarted\] SketchUp Factory restarted WITHOUT a clean stop: BEAST went down unexpectedly/);
   assert.match(sum, /Unity editors that were up: sb1 \(started again before their agents resumed\)/);
   assert.match(sum, /Resumed automatically: "t" \(w1 in sb1\)/);
   const upd = restartSummary({ ...f, update: true, reason: 'update (request_app_update)' }, [], { ok: true, at: '', headBefore: 'aaaaaaaaaa', headAfter: 'bbbbbbbbbb' }, { head: 'bbb', version: '0.1.0' });

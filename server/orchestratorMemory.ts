@@ -39,7 +39,7 @@ export function memoryDirFor(cfg: Pick<Config, 'orchestrator' | 'dataDir'>, info
  */
 const SECRET_PATTERNS: [string, RegExp][] = [
   ['an Anthropic key or token', /sk-ant-[a-z0-9]{2,8}-[A-Za-z0-9_-]{20,}/],
-  ['an FF Factory connector token', /ffpv1_[A-Za-z0-9_-]{20,}/],
+  ['an SketchUp Factory connector token', /ffpv1_[A-Za-z0-9_-]{20,}/],
   ['a GitHub token', /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})/],
   ['an AWS access key', /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/],
   ['a Google API key', /\bAIza[0-9A-Za-z_-]{35}\b/],

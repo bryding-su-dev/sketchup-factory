@@ -59,7 +59,7 @@ if (elevation === 'exit') {
 const host: HostStatus = { elevated: elevation.elevated, elevatedWhy: elevation.why, editor: editorConfigured(cfg) };
 if (host.elevated) {
   console.error(
-    `\n!!!!!!!! FF Factory is running WITH ADMINISTRATOR RIGHTS. It will not start Unity editors (they would stop on Unity's administrator dialog), ` +
+    `\n!!!!!!!! SketchUp Factory is running WITH ADMINISTRATOR RIGHTS. It will not start Unity editors (they would stop on Unity's administrator dialog), ` +
       `and every agent shell inherits admin rights. ${host.elevatedWhy ?? ''} Fix: run scripts/restart.ps1 (from any shell).\n`,
   );
 }
@@ -1256,7 +1256,7 @@ process.on('uncaughtException', (e) => console.error('UNCAUGHT (kept running):',
 process.on('unhandledRejection', (e) => console.error('UNHANDLED REJECTION (kept running):', e));
 
 server.listen(cfg.port, cfg.host, () => {
-  console.log(`FF Factory ${formatVersion(appVersion())} on http://${cfg.host}:${cfg.port} — sandboxes in ${cfg.sandboxRoot}, base clone ${cfg.repo.basePath}`);
+  console.log(`SketchUp Factory ${formatVersion(appVersion())} on http://${cfg.host}:${cfg.port} — sandboxes in ${cfg.sandboxRoot}, base clone ${cfg.repo.basePath}`);
 });
 
 /** This app's git HEAD, to tell the orchestrator what an update or restart changed. */

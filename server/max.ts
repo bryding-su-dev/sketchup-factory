@@ -1,8 +1,8 @@
-// Max, the Discord bot our agents post as (docs/max.md). Read-only here: FF Factory shows what its agents did as
+// Max, the Discord bot our agents post as (docs/max.md). Read-only here: SketchUp Factory shows what its agents did as
 // Max, whether the bot token works, and (optionally) what is new in a few channels; it never posts.
 //
 // - Activity: the ffdiscord CLI appends one JSON line per post, reply, edit, thread and close (or failure) to the
-//   file FF_MAX_EVENTS names, which every agent FF Factory starts has in its environment. The host's file is
+//   file FF_MAX_EVENTS names, which every agent SketchUp Factory starts has in its environment. The host's file is
 //   tailed here; each Mac's daemon tails its own and forwards the lines (server/maxEvents.ts).
 // - Health: GET /users/@me with the bot token, every 15 minutes. The token stays where it already is (the ffbox
 //   config's secrets.env, server/discordConfig.ts); it is read into this process only and never leaves it.
@@ -272,7 +272,7 @@ export class MaxManager {
   }
 
   private agentOf(s: SessionInfo | undefined, id: string | null | undefined): string {
-    if (!s) return id ? 'unknown session' : 'outside FF Factory';
+    if (!s) return id ? 'unknown session' : 'outside SketchUp Factory';
     if (s.kind === 'orchestrator') return 'orchestrator';
     if (s.kind === 'standing') return `standing: ${(s.standingId && this.deps.standingName?.(s.standingId)) || s.standingId || s.title}`;
     return s.machineId ? `worker on ${s.machineId}` : s.sandboxId ? `worker in ${s.sandboxId}` : 'worker';

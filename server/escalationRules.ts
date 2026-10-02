@@ -46,7 +46,7 @@ export function parseEscalation(raw: unknown): { escalation: Escalation } | { er
 const KIND_WORDS: Record<Escalation['kind'], string> = { bug: 'Discord bug', design: 'Design question', escalation: 'Escalation' };
 
 /**
- * FF Factory's own triage (w39), never Max's word for it: a bug is classified by the same fixed rules as any Discord
+ * SketchUp Factory's own triage (w39), never Max's word for it: a bug is classified by the same fixed rules as any Discord
  * report, over the player's words and Max's title; a design question or escalation always needs a human.
  */
 export function escalationTriage(e: Escalation): WorkTriage {
