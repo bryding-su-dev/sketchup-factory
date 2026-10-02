@@ -124,6 +124,35 @@ decides every write, and a hook's refusal holds in every permission mode:
   chat). Orchestrators read text agents wrote (`[worker update]`, relayed Discord and FFBox reports); a harness turn
   must not be able to plant an instruction that every later conversation loads.
 
+### Memory in a private repository
+
+The memory holds one person's preferences, in their words, so it does not belong in a public repository; and a folder
+in the app's data on one machine is not versioned. So when the memory root is itself a git repository, the app commits
+what changed there and pushes it (`server/memoryGit.ts`, on every backup pass: at startup and every 10 minutes).
+
+- **Private only.** It pushes only to an `origin` GitHub reports as private (`gh api repos/<owner>/<name>`, with the
+  machine's own `gh` login). To a public remote, to one that is not on GitHub, or when GitHub cannot be asked, it
+  commits here and does not push, and the log says why once. What waited goes out on a later pass.
+- **Never into another repository.** The root must be the top of its own repository. The default root is a folder of
+  the app's checkout, and the app's repository never gets memory commits.
+- **No secrets.** The write guard already refuses them; a Markdown file that holds one anyway is left out of the commit
+  and named in the log. Only `.md` files are committed.
+- **Whose commits.** The repository's own `user.name` and `user.email` when it has them, else the app's public identity
+  (`publicGitIdentity`), never this machine's global identity.
+- It never pulls, merges or force-pushes. One machine owns a memory root; a push that is refused stays local and says so.
+
+To switch it on (the owner does this once; nothing in config changes):
+
+```sh
+cd <data>/orchestrator-memory          # or wherever orchestrator.memoryRoot points
+git init -b main
+git remote add origin https://github.com/<owner>/<a private repository>.git
+```
+
+The next backup pass makes the first commit and pushes it. The crash backup beside it (`<root>.backup`) keeps working
+and leaves `.git` out. General rules about how to work do not belong in this repository either: they go to the harness
+repositories by pull request, where workers and forks can read them.
+
 The folder sits in `data/`, which workers' guard already protects (`server/guard.ts`), so no worker can write an
 orchestrator's memory either. Workers and standing agents are unchanged. Reading stays as before: an orchestrator can
 read any file, other orchestrators' memory included.

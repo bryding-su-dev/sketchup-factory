@@ -56,6 +56,13 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
   resent `ref`). Triage stays FF Factory's (a design question always needs a human; a bug by the fixed rules); Max's
   diagnosis and the player's report are fenced as untrusted; workers never post in the thread and put `Discord: <url>`
   in the PR. Off unless `intake.ffbox.escalations`.
+- **Orchestrator memory in a private repository** (w208;
+  [docs/orchestrators.md](docs/orchestrators.md#memory-in-a-private-repository)). When the memory root is a git
+  repository of its own, each backup pass (startup and every 10 minutes) commits the Markdown files that changed and
+  pushes them, only to an `origin` GitHub reports as private. A public remote, one that is not on GitHub or one whose
+  visibility cannot be confirmed gets no push; a file holding what looks like a secret is left out of the commit; the
+  app's own repository never gets memory commits. Switched on by running `git init` and `git remote add origin` in the
+  memory root: no config key. The crash backup now leaves `.git` out.
 
 ### Changed
 

@@ -325,7 +325,9 @@ export interface Config {
     notifyOnWorkerEvents: boolean;
     /**
      * Where each orchestrator's own memory folder is made (docs/orchestrators.md, "Memory"): <memoryRoot>/dispatcher
-     * and <memoryRoot>/person-<user id>. Default <dataDir>/orchestrator-memory, which workers cannot write.
+     * and <memoryRoot>/person-<user id>. Default <dataDir>/orchestrator-memory, which workers cannot write. When the
+     * root is a git repository of its own, the app commits what changes there and pushes it, to a private remote only
+     * (server/memoryGit.ts).
      */
     memoryRoot?: string;
   };

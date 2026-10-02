@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, ROOT } from './config.ts';
+import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, publicIdentityOf, ROOT } from './config.ts';
 import { Store, bus } from './store.ts';
 import { SandboxManager } from './sandboxes.ts';
 import { SessionManager, snapshotOf } from './sessions.ts';
@@ -31,6 +31,7 @@ import { keepMessageImages } from './inlineImages.ts';
 import { HostHealthMonitor } from './hostHealth.ts';
 import { dataRecoveries, describeRecovery } from './durable.ts';
 import { backupMemory, healMemory, memoryRootOf } from './orchestratorMemory.ts';
+import { describeMemoryGit, versionMemory } from './memoryGit.ts';
 import { accountSetupLines, hostAccount, hostRole, scrubTranscripts, usesHostClaudeEnv } from './secrets.ts';
 import { collectNetwork, loadOutsideWatchState, outsideWatchConfig, saveOutsideWatchState, watcherOf } from './outsideWatch.ts';
 import { runHelper } from './privileged.ts';
@@ -74,10 +75,28 @@ const store = new Store(cfg.dataDir);
 // The orchestrators' memory (Claude Code writes it, so it cannot be written crash-safe): a file a crash damaged gets its
 // newest good backup back, and a backup is taken every 10 minutes when something changed (server/orchestratorMemory.ts).
 const memoryRoot = memoryRootOf(cfg);
+// When the memory root is a git repository of its own, each backup pass also commits what changed and pushes it, to a
+// private remote only (server/memoryGit.ts; docs/orchestrators.md, "Memory in a private repository").
+let lastMemoryGit = '';
+const versionMemoryNow = () => {
+  const pub = publicIdentityOf(cfg);
+  const identity = pub.name && pub.email ? { name: pub.name, email: pub.email } : { name: 'FF Factory', email: 'ff-factory@users.noreply.github.com' };
+  void versionMemory(memoryRoot, { identity })
+    .then((r) => {
+      const line = describeMemoryGit(r);
+      // A push that keeps failing says so once, not every ten minutes.
+      if (line && (r.state === 'pushed' || line !== lastMemoryGit)) console[r.state === 'pushed' ? 'log' : 'warn'](line);
+      lastMemoryGit = line ?? '';
+    })
+    .catch((e) => console.warn(`orchestrator memory versioning failed: ${(e as Error).message}`));
+};
 const guardMemory = (what: 'heal' | 'backup') => {
   try {
     if (what === 'heal') healMemory(memoryRoot);
-    else backupMemory(memoryRoot);
+    else {
+      backupMemory(memoryRoot);
+      versionMemoryNow();
+    }
   } catch (e) {
     console.warn(`orchestrator memory ${what} failed: ${(e as Error).message}`);
   }
