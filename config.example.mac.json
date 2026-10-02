@@ -1,0 +1,66 @@
+{
+  "port": 8790,
+  "host": "127.0.0.1",
+  "ownerName": "",
+  "dataDir": "./data",
+  "sandboxRoot": "/Users/you/factory-sandboxes",
+  "repo": {
+    "url": "git@github.com:your-org/your-repo.git",
+    "basePath": "/Users/you/factory-sandboxes/_base",
+    "referenceRepo": "/Users/you/work/your-repo",
+    "seedFiles": [
+      ".env",
+      ".env.local"
+    ]
+  },
+  "defaultBase": "origin/develop",
+  "project": {
+    "name": "SketchUp",
+    "description": "the SketchUp Assistant frontend: a Vue 3 + TypeScript chat interface for AI agents inside SketchUp",
+    "integration": "pull-request",
+    "community": false,
+    "workerBriefFile": "project/sketchup/worker-brief.md",
+    "orchestratorBriefFile": "project/sketchup/orchestrator-brief.md"
+  },
+  "protectedPaths": [
+    "/Users/you/work/your-repo"
+  ],
+  "limits": {
+    "maxUnity": 0,
+    "maxSessions": 4,
+    "maxSandboxes": 4,
+    "minFreeGB": 40,
+    "minFreeRamGB": 4
+  },
+  "hostDiskPaths": [
+    "/"
+  ],
+  "hostGuard": {
+    "warnFreeGB": 60,
+    "criticalFreeGB": 30
+  },
+  "models": [
+    "opus",
+    "sonnet",
+    "haiku",
+    "fable"
+  ],
+  "defaultModel": "opus",
+  "orchestrator": {
+    "model": "opus",
+    "effort": "medium",
+    "notifyOnWorkerEvents": true
+  },
+  "worker": {
+    "permissionMode": "bypassPermissions",
+    "effort": "high"
+  },
+  "claudeAccounts": {
+    "orchestrator": "login",
+    "workers": "login",
+    "standing": "login"
+  },
+  "voice": {
+    "enabled": false
+  }
+}

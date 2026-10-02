@@ -15,7 +15,9 @@ if (!fs.existsSync(path.join(base, '.git'))) {
   // Copy objects from an existing local clone instead of downloading them. --dissociate makes the
   // base independent afterwards, so a gc in the (protected) reference repo can never corrupt it.
   if (cfg.repo.referenceRepo && fs.existsSync(path.join(cfg.repo.referenceRepo, '.git'))) {
-    args.push('--reference', cfg.repo.referenceRepo, '--dissociate');
+    // git refuses a shallow clone as a reference ("reference repository ... is shallow"): clone from origin then.
+    if (fs.existsSync(path.join(cfg.repo.referenceRepo, '.git', 'shallow'))) console.log(`${cfg.repo.referenceRepo} is a shallow clone, so its objects cannot be borrowed; cloning from origin`);
+    else args.push('--reference', cfg.repo.referenceRepo, '--dissociate');
   }
   args.push(cfg.repo.url, base);
   console.log(`git ${args.join(' ')}`);
@@ -41,5 +43,5 @@ if (cfg.librarySeed && !fs.existsSync(cfg.librarySeed)) {
   console.warn(`WARNING: librarySeed ${cfg.librarySeed} does not exist; new sandboxes will import Unity from cold (30-60 min).`);
 }
 const unity = cfg.unity.editorPath.includes('{version}') ? path.dirname(path.dirname(cfg.unity.editorPath.split('{version}')[0])) : cfg.unity.editorPath;
-if (!fs.existsSync(unity)) console.warn(`WARNING: Unity editor path ${unity} not found.`);
+if (unity && !fs.existsSync(unity)) console.warn(`WARNING: Unity editor path ${unity} not found.`);
 console.log('setup done.');

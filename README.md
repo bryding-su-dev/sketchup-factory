@@ -227,6 +227,28 @@ git gets an `includeIf "hasconfig:remote.*.url:..."` through `GIT_CONFIG_COUNT` 
 every public repo of their owners, the game repo's owner and the gh account (git 2.36+; nobody's gitconfig
 changes). Without a configured `name`/`email` that identity is the gh account's login and noreply address.
 
+## Another project, and a macOS host
+
+The code knows the project only through `config.json`'s `project` section (name, description, how work lands:
+`push` straight to the integration branch or `pull-request` into it) and two Markdown brief files appended to the
+workers' and the orchestrators' prompts: [project/README.md](project/README.md). `project/final-factory/` is the
+default; `project/sketchup/` runs the SketchUp Assistant frontend. `repo.seedFiles` copies the gitignored local
+files a checkout needs (`.env`, certificates) from `repo.referenceRepo` into every new sandbox.
+
+The per-sandbox editor is optional: leave `unity` out (or `unity.editorPath` empty) and sandboxes are plain git
+worktrees, the editor controls disappear from the sandbox panel and from the workers' tools, and the briefs say
+nothing about Unity. `project.community: false` takes the Discord, FFBox and Max text out of the briefs too.
+
+A Mac can be the host for such a setup (no editors, no Dev Drive): `config.example.mac.json` is a starting point,
+`scripts/mac/install-autostart.sh` registers the server as a LaunchAgent (starts at login, restarts when it exits),
+`scripts/mac/restart.sh` and `scripts/mac/uninstall-autostart.sh` do what their names say. The remote-machine and
+"host as a machine" features stay Windows-host-only.
+
+**Turn the automatic clean-up off on a developer's own computer** (`"hostGuard": { "cleanup": { "enabled": false } }`),
+or skip rules by id (`"skipRules": ["xcode-derived", "homebrew-cache"]`). The default rules were written for a
+dedicated build box: on macOS they remove Xcode DerivedData older than three days, Homebrew downloads older than
+two weeks and similar caches, at startup and every hour, whatever the free space.
+
 ## Development
 
 ```bash

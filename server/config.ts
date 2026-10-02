@@ -84,9 +84,47 @@ export interface IntakeConfig {
   lookbackDays?: number;
 }
 
+/**
+ * The project this portal works on (config.json "project"). The defaults describe Final Factory, which this app was
+ * built for; another project sets its own name and description, and points the brief files at Markdown of its own
+ * (see project/README.md) so none of its conventions live in this code.
+ */
+export interface ProjectConfig {
+  /** How agents' prompts name the project ("Final Factory", "SketchUp"). */
+  name: string;
+  /** One clause after the name in the orchestrators' briefs: "a Unity 6 DOTS space automation game ...". */
+  description: string;
+  /**
+   * How workers land finished work on the integration branch (defaultBase's branch): "push" rebases and pushes to it
+   * directly (Final Factory's way); "pull-request" opens a PR into it and never pushes to it (repos whose integration
+   * branch is protected by review rules).
+   */
+  integration: 'push' | 'pull-request';
+  /**
+   * Whether the Discord, FFBox and Max rules belong in the briefs (default true: Final Factory's community tooling).
+   * false for a project without them: agents never hear of them, whatever the intake and provider switches say.
+   */
+  community: boolean;
+  /** Markdown appended to every sandbox worker's brief, relative to this app's folder (or absolute). Optional. */
+  workerBriefFile?: string;
+  /** Markdown appended to both orchestrators' world brief (what there is, where to look). Optional. */
+  orchestratorBriefFile?: string;
+}
+
+export const PROJECT_DEFAULTS: ProjectConfig = {
+  name: 'Final Factory',
+  description: 'a Unity 6 DOTS space automation game with deterministic lockstep multiplayer',
+  integration: 'push',
+  community: true,
+  workerBriefFile: 'project/final-factory/worker-brief.md',
+  orchestratorBriefFile: 'project/final-factory/orchestrator-brief.md',
+};
+
 export interface Config {
   port: number;
   host: string;
+  /** The project the agents work on: its name, how work lands, and its own brief text. */
+  project: ProjectConfig;
   /**
    * Trust X-Forwarded-For/-Proto from a reverse proxy on this machine (Tailscale serve/funnel,
    * Cloudflare tunnel) for rate limiting and Secure cookies. Only loopback peers are believed.
@@ -201,6 +239,11 @@ export interface Config {
     basePath: string;
     /** Optional existing local clone whose object store the base borrows (git --reference). */
     referenceRepo?: string;
+    /**
+     * Files copied from referenceRepo into every new sandbox, relative to the repo root (e.g. ".env", "key.pem"):
+     * the gitignored local files a checkout needs to run. A missing source is skipped and noted.
+     */
+    seedFiles?: string[];
   };
   /** Base ref for new sandbox branches. */
   defaultBase: string;
@@ -225,8 +268,12 @@ export interface Config {
   hostDiskPaths: string[];
   /** The disk guard and the sandbox drive's self-recovery (server/hostHealth.ts, docs/self-recovery.md). */
   hostGuard: HostGuardConfig;
+  /**
+   * The per-sandbox editor (Unity). Optional: without it, or with an empty editorPath, sandboxes are plain worktrees,
+   * the editor controls are hidden and start requests are refused with a clear message.
+   */
   unity: {
-    /** Editor path; `{version}` is replaced with the sandbox's ProjectSettings/ProjectVersion.txt. */
+    /** Editor path; `{version}` is replaced with the sandbox's ProjectSettings/ProjectVersion.txt. "" = no editor. */
     editorPath: string;
     extraArgs: string[];
     /** The startup watchdog (docs/unity-dialogs.md). */
@@ -361,6 +408,7 @@ export const DEFAULT_USAGE_POLL_MINUTES = 15;
 
 const DEFAULTS: Omit<Config, 'sandboxRoot' | 'standingRoot' | 'repo' | 'unity' | 'voice' | 'hostGuard'> = {
   port: 8790,
+  project: PROJECT_DEFAULTS,
   usagePollMinutes: DEFAULT_USAGE_POLL_MINUTES,
   trustProxy: true,
   host: '0.0.0.0',
@@ -380,6 +428,14 @@ const DEFAULTS: Omit<Config, 'sandboxRoot' | 'standingRoot' | 'repo' | 'unity' |
 const UNITY_WATCHDOG_DEFAULTS: Config['unity']['watchdog'] = { stallMinutes: 15, autoDismiss: true, startingPollSeconds: 10, runningPollSeconds: 60 };
 
 export interface CleanupPolicy {
+  /**
+   * The automatic clean-up at all (default true). false: no scheduled, startup or low-space pass runs and host_recovery
+   * "cleanup" removes nothing. Turn it off on a developer's own workstation: the rules remove caches such as Xcode
+   * DerivedData and Homebrew downloads that are cheap on a build box and expensive to rebuild on a laptop.
+   */
+  enabled: boolean;
+  /** Rule ids (server/cleanup.ts cleanupRules: "xcode-derived", "homebrew-cache", ...) that never run here. */
+  skipRules: string[];
   /** A clean-up pass this often (minutes; 0: only when free space is below softFreeGB). */
   everyMinutes: number;
   /** Below this much free space: a pass every 15 minutes, including the rules that empty whole caches. 0: warnFreeGB + 40. */
@@ -411,6 +467,8 @@ export interface CleanupPolicy {
 }
 
 export const DEFAULT_CLEANUP: CleanupPolicy = {
+  enabled: true,
+  skipRules: [],
   everyMinutes: 60,
   softFreeGB: 0,
   // Headless-browser profiles from screenshot scripts, and the fast suite's own scratch folders.
@@ -500,9 +558,11 @@ export function loadConfig(): Config {
     ...DEFAULTS,
     ...raw,
     limits: { ...DEFAULTS.limits, ...raw.limits },
+    project: { ...PROJECT_DEFAULTS, ...raw.project },
     orchestrator: { ...DEFAULTS.orchestrator, ...raw.orchestrator },
     worker: { ...DEFAULTS.worker, ...raw.worker },
     unity: {
+      editorPath: '',
       extraArgs: [],
       idleStopMinutes: 120,
       ...raw.unity,
@@ -513,10 +573,14 @@ export function loadConfig(): Config {
     hostGuard: { ...HOST_GUARD_DEFAULTS, ...raw.hostGuard, cleanup: { ...DEFAULT_CLEANUP, ...raw.hostGuard?.cleanup } },
     voice: { ...VOICE_DEFAULTS, toolsDir: '', ...raw.voice },
   };
-  for (const key of ['sandboxRoot', 'repo', 'unity'] as const) {
+  for (const key of ['sandboxRoot', 'repo'] as const) {
     if (!cfg[key]) throw new Error(`config.json is missing "${key}"`);
   }
   checkAccountConfig(cfg);
+  if (cfg.project.integration !== 'push' && cfg.project.integration !== 'pull-request') throw new Error('config project.integration is "push" or "pull-request"');
+  for (const key of ['workerBriefFile', 'orchestratorBriefFile'] as const) {
+    if (cfg.project[key]) cfg.project[key] = path.resolve(ROOT, cfg.project[key]!);
+  }
   cfg.dataDir = path.resolve(ROOT, cfg.dataDir);
   cfg.sandboxRoot = path.resolve(cfg.sandboxRoot);
   cfg.standingRoot = path.resolve(raw.standingRoot ?? path.join(cfg.sandboxRoot, '_agents'));
@@ -584,4 +648,27 @@ export function publicIdentityLine(cfg: Pick<Config, 'publicGitIdentity'>): stri
   if (!pub.repos.length) return '';
   const who = pub.name && pub.email ? `\`${pub.name} <${pub.email}>\`` : 'your GitHub noreply address (\`<id>+<login>@users.noreply.github.com\`)';
   return `Commits you push to ${pub.repos.map((r) => `\`${r}\``).join(', ')}, or to any other public GitHub repo, are public: commit there as ${who} (git config user.name / user.email in that clone; in clones of public repos your git already defaults to it). The harness refuses pushes to public repos whose commits carry any other email.\n`;
+}
+
+/** Whether this host has a per-sandbox editor configured (config unity.editorPath). */
+export const editorConfigured = (cfg: Partial<Pick<Config, 'unity'>>) => !!cfg.unity?.editorPath;
+
+/** Whether the Discord, FFBox and Max parts of the briefs apply (config project.community, default true). */
+export const communityConfigured = (cfg: Partial<Pick<Config, 'project'>>) => (cfg.project ?? PROJECT_DEFAULTS).community !== false;
+
+/** The text of a project brief file ("" when none is configured or it cannot be read; the problem is logged once). */
+const briefWarned = new Set<string>();
+export function projectBrief(cfg: Partial<Pick<Config, 'project'>>, which: 'workerBriefFile' | 'orchestratorBriefFile'): string {
+  const rel = (cfg.project ?? PROJECT_DEFAULTS)[which];
+  const file = rel && path.resolve(ROOT, rel);
+  if (!file) return '';
+  try {
+    return fs.readFileSync(file, 'utf8').trim();
+  } catch (e) {
+    if (!briefWarned.has(file)) {
+      briefWarned.add(file);
+      console.warn(`project.${which}: cannot read ${file}: ${(e as Error).message}`);
+    }
+    return '';
+  }
 }

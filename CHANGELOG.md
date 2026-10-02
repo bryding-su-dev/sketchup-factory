@@ -10,6 +10,24 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 
 ## [Unreleased]
 
+### Added
+- `project` config: the project's name, description, how finished work lands (`push` to the integration branch, or
+  `pull-request` into it), whether the Discord/FFBox/Max rules apply (`community`) and two Markdown brief files appended to the workers' and orchestrators' prompts, so another
+  project (here: the SketchUp Assistant frontend, `project/sketchup/`) needs no code change. Final Factory's own text
+  moved to `project/final-factory/` and stays the default.
+- `repo.seedFiles`: gitignored local files copied from `repo.referenceRepo` into every new sandbox.
+- A host without a per-sandbox editor (`unity` left out or `unity.editorPath` empty): sandboxes are plain worktrees,
+  the editor controls and the workers' editor tools are gone, and start requests get a clear refusal.
+- `hostGuard.cleanup.enabled` and `hostGuard.cleanup.skipRules`: turn the automatic clean-up off, or skip rules by id.
+- macOS host scripts: `scripts/mac/install-autostart.sh` (LaunchAgent), `restart.sh`, `uninstall-autostart.sh`, and
+  `config.example.mac.json`.
+
+### Fixed
+- `node server/user.ts` before the server's first run created `data/` nowhere and crashed on `users.json.tmp`.
+- `npm run setup` with a shallow `repo.referenceRepo` failed (git refuses a shallow reference); it now clones from
+  origin and says why.
+- `npm run setup` warned about an editor path "" when none is configured.
+
 ### Fixed
 
 - **A hard crash no longer takes the portal down** ([docs/self-recovery.md](docs/self-recovery.md#6-crash-safe-data-files)).

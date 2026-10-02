@@ -159,6 +159,12 @@ const D = 24;
  * do not exist are fine: they are skipped. Ages are from the last change anywhere inside an entry.
  */
 export function cleanupRules(env: CleanupEnv, policy: CleanupPolicy): CleanupRule[] {
+  if (policy.enabled === false) return [];
+  const skip = new Set(policy.skipRules ?? []);
+  return allCleanupRules(env, policy).filter((r) => !skip.has(r.id));
+}
+
+function allCleanupRules(env: CleanupEnv, policy: CleanupPolicy): CleanupRule[] {
   const j = (...a: string[]) => P(a[0]).join(...a);
   const temps = [...new Set([env.tmp, env.agentTemp].filter((x): x is string => !!x))];
   const rules: CleanupRule[] = [];

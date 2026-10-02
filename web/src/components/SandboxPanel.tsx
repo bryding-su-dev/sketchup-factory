@@ -39,6 +39,8 @@ export function SandboxPanel({
   const blocked = u === 'blocked' ? sandbox.unity.blocked : undefined;
   const dismissed = (sandbox.unity.dismissed ?? []).slice(-3).reverse();
   const ready = sandbox.status === 'ready';
+  // A host without a per-sandbox editor (config unity.editorPath empty): no editor state, buttons or log.
+  const editor = useStore((s) => s.app?.host?.editor !== false);
 
   const toggleUnity = async () => {
     setUnityBusy(true);
@@ -64,7 +66,7 @@ export function SandboxPanel({
     if (owner && owner.id !== selected?.id) pick(owner.id);
   }, [focusRequest]);
 
-  const facts = [u !== 'blocked' && ready ? unityLabel[u] : '', sandbox.git?.branch ?? ''].filter(Boolean);
+  const facts = [editor && u !== 'blocked' && ready ? unityLabel[u] : '', sandbox.git?.branch ?? ''].filter(Boolean);
 
   return (
     <section className="sb-panel">
@@ -136,7 +138,8 @@ export function SandboxPanel({
             </span>
           </div>
         </DetailsSection>
-        <DetailsSection title="Unity">
+        <DetailsSection title={editor ? 'Unity' : 'Sandbox'}>
+          {editor && (
           <div className="unity-bar">
             <Chip tone={unityTone(u)} title={sandbox.unity.detail}>
               {unityLabel[u]}
@@ -153,10 +156,13 @@ export function SandboxPanel({
               <Icon name={unityOn ? 'power' : 'play'} size={14} /> {unityOn ? 'Stop Unity' : 'Start Unity'}
             </button>
           </div>
+          )}
           <div className="details-buttons">
-            <button className="btn btn-ghost btn-sm" onClick={() => setLogOpen(true)}>
-              <Icon name="log" size={14} /> Log
-            </button>
+            {editor && (
+              <button className="btn btn-ghost btn-sm" onClick={() => setLogOpen(true)}>
+                <Icon name="log" size={14} /> Log
+              </button>
+            )}
             <button className="btn btn-ghost btn-sm" onClick={() => setShotsOpen(true)} title="Screenshots, videos and other images agents left here">
               <Icon name="image" size={14} /> Screenshots
             </button>
@@ -212,7 +218,7 @@ export function SandboxPanel({
               <button className="btn btn-primary" onClick={() => setNewAgent(true)}>
                 <Icon name="plus" size={14} /> New agent
               </button>
-              {u === 'stopped' && (
+              {editor && u === 'stopped' && (
                 <button className="btn btn-outline" disabled={unityBusy} onClick={toggleUnity}>
                   <Icon name="play" size={14} /> Start Unity
                 </button>

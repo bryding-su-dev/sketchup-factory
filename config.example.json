@@ -9,9 +9,18 @@
   "repo": {
     "url": "https://github.com/your-org/your-unity-game.git",
     "basePath": "C:/ffsb/_base",
-    "referenceRepo": "C:/path/to/your/existing/clone"
+    "referenceRepo": "C:/path/to/your/existing/clone",
+    "seedFiles": []
   },
   "defaultBase": "origin/develop",
+  "project": {
+    "name": "Final Factory",
+    "description": "a Unity 6 DOTS space automation game with deterministic lockstep multiplayer",
+    "integration": "push",
+    "community": true,
+    "workerBriefFile": "project/final-factory/worker-brief.md",
+    "orchestratorBriefFile": "project/final-factory/orchestrator-brief.md"
+  },
   "librarySeed": "C:/path/to/your/existing/clone/Library",
   "librarySeedGB": 70,
   "unity": {

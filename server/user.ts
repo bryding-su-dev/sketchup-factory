@@ -3,6 +3,7 @@
 //   node server/user.ts <username> --name "Display Name" --role member --keep-password
 // Prompts for the password (or reads FFSB_PASSWORD); --keep-password changes only the name or role. The first
 // login is the owner, later ones members, unless --role says otherwise. Run it on the host; it writes data/users.json.
+import fs from 'node:fs';
 import readline from 'node:readline';
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.ts';
@@ -20,6 +21,8 @@ if (!username || (values.role !== undefined && values.role !== 'owner' && values
 }
 const profile = { displayName: values.name, role: values.role as UserRole | undefined };
 const cfg = loadConfig();
+// The README creates the first login before the server has ever run, so the data folder may not exist yet.
+fs.mkdirSync(cfg.dataDir, { recursive: true });
 const auth = new Auth(cfg.dataDir, { trustProxy: false });
 if (values['keep-password']) {
   auth.setProfile(username, profile);

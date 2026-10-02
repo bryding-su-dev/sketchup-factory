@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HOST_ROLES, loadConfig, machineCleanupSettings, ROOT } from './config.ts';
+import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, ROOT } from './config.ts';
 import { Store, bus } from './store.ts';
 import { SandboxManager } from './sandboxes.ts';
 import { SessionManager, snapshotOf } from './sessions.ts';
@@ -56,7 +56,7 @@ if (elevation === 'exit') {
   console.log(`Running elevated: handed off to the Limited ${TASK_NAME} task (scripts/restart.ps1 relaunches the app non-elevated). Exiting.`);
   process.exit(0);
 }
-const host: HostStatus = { elevated: elevation.elevated, elevatedWhy: elevation.why };
+const host: HostStatus = { elevated: elevation.elevated, elevatedWhy: elevation.why, editor: editorConfigured(cfg) };
 if (host.elevated) {
   console.error(
     `\n!!!!!!!! FF Factory is running WITH ADMINISTRATOR RIGHTS. It will not start Unity editors (they would stop on Unity's administrator dialog), ` +

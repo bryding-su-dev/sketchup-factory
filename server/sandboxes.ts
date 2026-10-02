@@ -353,6 +353,9 @@ export class SandboxManager {
       step(`checking out ${s.branch}`);
       await must('git', ['-C', s.path, 'reset', '--hard', '--quiet'], { timeoutMs: 60 * 60_000, signal });
 
+      const skipped = seedLocalFiles(this.cfg.repo, s.path);
+      if (skipped.length) console.warn(`sandbox ${s.id}: seed files not found in ${this.cfg.repo.referenceRepo}: ${skipped.join(', ')}`);
+
       const seed = this.cfg.librarySeed;
       if (seedLibrary && seed && fs.existsSync(seed) && !fs.existsSync(path.join(s.path, 'Library'))) {
         step('checking disk space for the Library copy');
@@ -474,6 +477,7 @@ export class SandboxManager {
   startGate?: () => string | undefined;
 
   private editorPath(s: Sandbox) {
+    if (!this.cfg.unity.editorPath) throw new Error('no editor is configured on this host (config unity.editorPath is empty): sandboxes here are plain worktrees');
     let version = '';
     const pv = path.join(s.path, 'ProjectSettings', 'ProjectVersion.txt');
     if (fs.existsSync(pv)) version = /m_EditorVersion:\s*(\S+)/.exec(fs.readFileSync(pv, 'utf8'))?.[1] ?? '';
@@ -1031,4 +1035,28 @@ function gitBranchProblem(branch: string): string | undefined {
 
 function tail(text: string) {
   return text.trim().split('\n').slice(-3).join(' | ');
+}
+
+/**
+ * Copy config repo.seedFiles (the gitignored local files a checkout needs: .env, certificates) from the reference
+ * clone into a new sandbox. Returns the ones the reference clone does not have. Existing files in the sandbox are
+ * left alone; a path that escapes either folder is refused.
+ */
+export function seedLocalFiles(repo: { referenceRepo?: string; seedFiles?: string[] }, sandboxPath: string): string[] {
+  const skipped: string[] = [];
+  if (!repo.seedFiles?.length || !repo.referenceRepo) return repo.seedFiles ?? [];
+  for (const rel of repo.seedFiles) {
+    const src = path.resolve(repo.referenceRepo, rel);
+    const dst = path.resolve(sandboxPath, rel);
+    const inside = (root: string, p: string) => !path.relative(root, p).startsWith('..') && !path.isAbsolute(path.relative(root, p));
+    if (!inside(repo.referenceRepo, src) || !inside(sandboxPath, dst)) throw new Error(`repo.seedFiles entry "${rel}" leaves its folder`);
+    if (!fs.existsSync(src)) {
+      skipped.push(rel);
+      continue;
+    }
+    if (fs.existsSync(dst)) continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(src, dst);
+  }
+  return skipped;
 }

@@ -754,6 +754,8 @@ export interface DelegationRequest {
 export interface HostStatus {
   /** The server runs with administrator rights, so it refuses to start Unity editors. */
   elevated: boolean;
+  /** This host has a per-sandbox editor configured (config unity.editorPath). False hides the editor controls. Absent from older servers: treated as true. */
+  editor?: boolean;
   /** Why it is still elevated and what fixes it. */
   elevatedWhy?: string;
   /** A restart is waiting for busy agents to finish (scripts/restart.ps1 or request_app_update). */

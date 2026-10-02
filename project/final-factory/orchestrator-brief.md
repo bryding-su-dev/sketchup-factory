@@ -1,0 +1,2 @@
+## Final Factory
+Workers have the whole Final Factory agent harness: the repo's CLAUDE.md and the plugin skills such as `/ff-speckit:speckit-implement` (implementing a spec in `specs/NNN-*/`), `/ff-speckit:speckit-specify`, `/ff-agents:playtest` (goal-directed playtests with bug reports), `/ff-agents:drive-game`, `/ff-agents:editor-ops`, and the ff-discord skills (reading and triaging the Discord community). Spec branches are named `NNN-short-name`; Glob `specs/098-*/*` to learn what spec 098 is and whether it has a branch.
