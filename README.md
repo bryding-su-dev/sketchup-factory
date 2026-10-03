@@ -268,7 +268,8 @@ enough to exercise everything except Unity.
 
 Tests (unit and Playwright end to end), releases and the CI checks are described in
 [CONTRIBUTING.md](CONTRIBUTING.md). The running version shows in the sidebar footer and at
-`GET /api/health`; changes are listed in [CHANGELOG.md](CHANGELOG.md).
+`GET /api/health` (with `web`, the web UI build it serves: a page open across a deploy reloads itself into it,
+[server/webStatic.ts](server/webStatic.ts)); changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Security model
 

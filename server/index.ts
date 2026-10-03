@@ -36,7 +36,8 @@ import { describeMemoryGit, versionMemory } from './memoryGit.ts';
 import { accountSetupLines, hostAccount, hostRole, scrubTranscripts, usesHostClaudeEnv } from './secrets.ts';
 import { collectNetwork, loadOutsideWatchState, outsideWatchConfig, saveOutsideWatchState, watcherOf } from './outsideWatch.ts';
 import { runHelper } from './privileged.ts';
-import { acceptsGzip, endMaybeGzip, gzippedFile } from './compress.ts';
+import { endMaybeGzip } from './compress.ts';
+import { serveStatic, webBuild } from './webStatic.ts';
 import { appendCleanupLog, biggestConsumers, cleanupRules, hostCleanupEnv, neverDelete, planCleanup, runCleanup, sessionTempDir, staleUnityLibraries } from './cleanup.ts';
 import { pruneEditorLogs, slugify } from './sandboxes.ts';
 import { reapBrowsers } from './reaper.ts';
@@ -47,6 +48,11 @@ import { appVersion, formatVersion } from './version.ts';
 import { VoiceService } from './voice.ts';
 import { MAX_DICTATION_SECONDS, MAX_TTS_CHARS, buildVoicePrompt, wavSeconds, type SpeakRequest, type TranscribeRequest, type VocabularySource } from '../shared/voice.ts';
 import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
+
+const WEB = path.join(ROOT, 'web', 'dist');
+
+/** The server's version plus the web UI build it serves now (server/webStatic.ts): an open page reloads when that changes. */
+const appNow = () => ({ ...appVersion(), web: webBuild(WEB) });
 
 const cfg = loadConfig();
 fs.mkdirSync(cfg.dataDir, { recursive: true });
@@ -430,7 +436,7 @@ function appState(user: string | undefined): AppState {
   const me = u ?? { ...identity.owner(), role: 'owner' as const };
   const mine = agents.orchestrators.personalFor(me);
   return {
-    app: appVersion(),
+    app: appNow(),
     sandboxes: sandboxes.list(),
     sessions: [...store.sessions.values()],
     standingAgents: agents.standing.list(),
@@ -1050,46 +1056,6 @@ route('POST', '/api/voice/tts', async (req) => {
   }
 });
 
-// ------------------------------------------------------------------ static web app
-
-const WEB = path.join(ROOT, 'web', 'dist');
-const TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.json': 'application/json',
-  '.woff2': 'font/woff2',
-  '.webmanifest': 'application/manifest+json',
-};
-
-async function serveStatic(req: http.IncomingMessage, url: URL, res: http.ServerResponse) {
-  let file = path.normalize(path.join(WEB, decodeURIComponent(url.pathname)));
-  if (!file.startsWith(WEB)) return send(res, 403, { error: 'forbidden' });
-  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(WEB, 'index.html');
-  if (!fs.existsSync(file)) {
-    res.writeHead(200, { 'content-type': 'text/plain' });
-    return res.end('Web UI not built. Run: npm run build');
-  }
-  const immutable = file.includes(`${path.sep}assets${path.sep}`);
-  const headers = {
-    'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream',
-    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-  };
-  // The bundle and styles gzipped (made once per build, server/compress.ts).
-  const gz = acceptsGzip(req.headers['accept-encoding']) ? await gzippedFile(file, fs.statSync(file)) : undefined;
-  if (gz) {
-    res.writeHead(200, { ...headers, 'content-encoding': 'gzip', vary: 'Accept-Encoding', 'content-length': gz.length });
-    return res.end(gz);
-  }
-  res.writeHead(200, headers);
-  fs.createReadStream(file)
-    .on('error', () => res.destroy())
-    .pipe(res);
-}
-
 // ------------------------------------------------------------------ server
 
 /** Parse a request path without ever throwing (a raw "//" or "//x:99999" request line makes WHATWG URL throw). */
@@ -1156,7 +1122,7 @@ const server = http.createServer(async (req, res) => {
     }
     // Liveness and version, for scripts, monitors and the E2E harness. No login needed: the
     // version of an open-source app is public anyway.
-    if (url.pathname === '/api/health' && req.method === 'GET') return send(res, 200, { ok: true, ...appVersion() });
+    if (url.pathname === '/api/health' && req.method === 'GET') return send(res, 200, { ok: true, ...appNow() });
     if (url.pathname === '/api/login' && req.method === 'POST') {
       const { username, password } = await readJson<{ username?: string; password?: string }>(req);
       if (typeof username !== 'string' || typeof password !== 'string') return send(res, 400, { error: 'username and password required' });
@@ -1181,7 +1147,7 @@ const server = http.createServer(async (req, res) => {
       }
       return send(res, 404, { error: 'no such endpoint' });
     }
-    await serveStatic(req, url, res);
+    await serveStatic(WEB, req, url, res);
   } catch (e) {
     const status = e instanceof HttpError || e instanceof AttachmentError ? e.status : /^no (sandbox|session|standing agent|delegation|machine)/.test((e as Error).message) ? 404 : 400;
     // An upload that must resume elsewhere says where (docs/attachments.md).

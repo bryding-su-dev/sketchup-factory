@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { AppState, ServerEvent, SessionInfo, TranscriptEvent } from '../../shared/types';
 import { api, connectSocket, setUnauthorizedHandler, UnauthorizedError, type WsStatus } from './api';
+import { noteServedBuild } from './freshness';
 import { initNotifications, onNotice } from './notify';
 
 export type AuthState = 'unknown' | 'needed' | 'ok';
@@ -203,6 +204,7 @@ function applyEvent(ev: ServerEvent) {
   switch (ev.type) {
     case 'state':
       set({ app: ev.state });
+      noteServedBuild(ev.state.app?.web);
       return;
     case 'system':
       set((s) => (s.app ? { app: { ...s.app, system: ev.system } } : {}));

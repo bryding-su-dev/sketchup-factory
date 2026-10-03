@@ -1200,6 +1200,8 @@ export interface IntakeSummary {
 export interface AppVersion {
   version: string;
   sha?: string;
+  /** The web UI build the server serves now (server/webStatic.ts); a page that loaded another reloads. Absent from older servers. */
+  web?: string;
 }
 
 export interface AppState {

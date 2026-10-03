@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SessionInfo } from '../../../shared/types';
 import { api } from '../api';
+import { holdReload } from '../freshness';
 import type { ImageInput } from '../../../shared/types';
 import { attempt, toast, useStore } from '../store';
 import { clearPending, removePending, startUpload, usePendingFiles } from '../upload';
@@ -95,6 +96,13 @@ export const Composer = memo(function Composer({
       }
     }
   };
+
+  // Pictures pasted into a message live only in this page: a new version's reload waits for them to be sent or removed.
+  useEffect(() => {
+    const hold = `composer-images:${session.id}`;
+    holdReload(hold, images.length > 0);
+    return () => holdReload(hold, false);
+  }, [session.id, images.length]);
 
   // The draft is saved a moment after typing stops (not on every key), and at once when the chat closes or the page goes.
   const draft = useRef(text);

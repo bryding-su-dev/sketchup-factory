@@ -19,6 +19,7 @@ import { OverviewBoard } from './components/Fleet';
 import { Toasts } from './components/Toasts';
 import { Lightbox } from './components/Images';
 import { SearchView } from './components/SearchView';
+import { reloadNow, useNewVersion } from './freshness';
 import { setDrawer, useStore } from './store';
 import { sessionRoute } from './attention';
 import { displayName, fmtBytes, fmtClock, href, navigate, useMediaQuery, useRoute, type Route } from './util';
@@ -75,6 +76,7 @@ function Shell({ app }: { app: AppState }) {
         {/* Global notices sit above the page in the layout flow: they push it down, never cover its header. */}
         <div className="gbars">
           <ConnectionBanner />
+          <NewVersionBanner />
           <HostBanner host={app.host} app={app} />
         </div>
         <main className={`main main-${content.layout}`}>{content.node ?? <OrchestratorView session={orch} />}</main>
@@ -94,7 +96,7 @@ function Shell({ app }: { app: AppState }) {
  * covers it). The text is cut to one line; hover shows it all (title), a click or tap unfolds it. `onDismiss`
  * adds a close button.
  */
-function Bar({ kind, text, children, onDismiss, busy }: { kind: 'warn' | 'error'; text: string; children: ReactNode; onDismiss?: () => void; busy?: boolean }) {
+function Bar({ kind, text, children, onDismiss, busy, action }: { kind: 'warn' | 'error'; text: string; children: ReactNode; onDismiss?: () => void; busy?: boolean; action?: { label: string; onClick: () => void } }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={`gbar gbar-${kind}${open ? ' open' : ''}`} role="status">
@@ -102,6 +104,11 @@ function Bar({ kind, text, children, onDismiss, busy }: { kind: 'warn' | 'error'
       <button type="button" className="gbar-text" title={text} aria-expanded={open} onClick={() => setOpen(!open)}>
         {children}
       </button>
+      {action && (
+        <button type="button" className="btn btn-sm gbar-x" onClick={action.onClick}>
+          {action.label}
+        </button>
+      )}
       {onDismiss && (
         <button type="button" className="btn btn-ghost btn-sm gbar-x" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
           <Icon name="x" size={12} />
@@ -127,6 +134,16 @@ function ConnectionBanner() {
   return (
     <Bar kind="warn" busy text="Connection lost. Reconnecting…">
       <b>Connection lost.</b> Reconnecting…
+    </Bar>
+  );
+}
+
+/** The server serves a newer web UI than this page runs, and reloading by itself now would lose something (web/src/freshness.ts). */
+function NewVersionBanner() {
+  if (!useNewVersion()) return null;
+  return (
+    <Bar kind="warn" text="A new version of FF Factory is ready. Reload to use it: a typed message is kept, pictures and files not yet sent are not." action={{ label: 'Reload', onClick: reloadNow }}>
+      <b>A new version of FF Factory is ready.</b> Reload to use it: a typed message is kept, pictures and files not yet sent are not.
     </Bar>
   );
 }

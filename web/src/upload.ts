@@ -133,6 +133,11 @@ const subscribe = (l: () => void) => {
   return () => listeners.delete(l);
 };
 
+/** Whether any chat has files attached and not sent (a reload would drop them). */
+export function hasPendingFiles(): boolean {
+  return pendingBySession.size > 0;
+}
+
 /** A chat's files, as a React hook. */
 export function usePendingFiles(sessionId: string): PendingFile[] {
   return useSyncExternalStore(subscribe, () => pendingBySession.get(sessionId) ?? NONE);
