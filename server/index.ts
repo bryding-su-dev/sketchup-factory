@@ -28,6 +28,7 @@ import { handleMcp } from './mcp.ts';
 import { IMAGE_TYPES, SOCKET_PING_MS, type ImageInput, type NotifyPrefs, type SendMessageRequest } from '../shared/types.ts';
 import { listImages, MEDIA_TYPE, openVideo, parseRange, readImage, VIDEO_FILE } from './images.ts';
 import { keepMessageImages } from './inlineImages.ts';
+import { AttachmentError, AttachmentStore, downloadDisposition, machineAttachment, publicRef } from './attachments.ts';
 import { HostHealthMonitor } from './hostHealth.ts';
 import { dataRecoveries, describeRecovery } from './durable.ts';
 import { backupMemory, healMemory, memoryRootOf } from './orchestratorMemory.ts';
@@ -112,6 +113,19 @@ setTimeout(() => {
 const sandboxes = new SandboxManager(cfg, store);
 const sessions = new SessionManager(cfg, store);
 const machines = new MachineManager(cfg, store, sessions);
+// Files people attach to messages (docs/attachments.md): stored by SHA-256, never opened; old ones go by retention.
+const attachments = new AttachmentStore(cfg.dataDir, () => cfg.attachments);
+machines.attachments = attachments;
+const pruneAttachments = () => {
+  try {
+    const r = attachments.prune();
+    if (r.records || r.blobs || r.partials) console.log(`attachments: retention removed ${r.records} record(s), ${r.blobs} stored file(s), ${r.partials} unfinished upload(s)`);
+  } catch (e) {
+    console.warn(`attachments: retention failed: ${(e as Error).message}`);
+  }
+};
+setTimeout(pruneAttachments, 60_000).unref();
+setInterval(pruneAttachments, 60 * 60_000).unref();
 // FFBox, through the connector it runs (docs/ffbox-integration.md): read-only reports, off by default.
 const providers = new ProviderManager(cfg);
 // Max, the Discord bot agents post as (docs/max.md): their ffdiscord calls, the token's health, a read-only inbound.
@@ -215,6 +229,7 @@ const auth = new Auth(cfg.dataDir, { trustProxy: cfg.trustProxy });
 // Who is who (docs/identity.md): the logins in data/users.json, and who automatic work is billed to.
 const identity = new Identity(cfg, () => auth.userInfos());
 const agents = new Agents(cfg, store, sandboxes, sessions, machines, identity);
+agents.attachments = attachments;
 if (host.elevated) sandboxes.refuseUnityWhileElevated(host.elevatedWhy ?? 'Run scripts/restart.ps1 to relaunch it non-elevated.');
 
 /** The signed-in person making this request, as work records them (a route only runs for a signed-in user). */
@@ -434,7 +449,7 @@ function appState(user: string | undefined): AppState {
     me,
     work: agents.orchestrators.forPage(),
     intake: intake.summary(),
-    config: { defaultModel: cfg.defaultModel, models: cfg.models, defaultBase: cfg.defaultBase },
+    config: { defaultModel: cfg.defaultModel, models: cfg.models, defaultBase: cfg.defaultBase, attachments: attachments.settings },
     settings: store.settings,
   };
 }
@@ -547,22 +562,25 @@ route('GET', '/api/search', async (_r, _p, url) => {
 
 route('POST', '/api/sessions/([\\w-]+)/message', async (req, [id]) => {
   // Images come base64 in the JSON (the UI shrinks them first), so this body may be large.
-  const { text, images } = await readJson<SendMessageRequest>(req, 40 * 1024 * 1024);
+  const { text, images, attachments: attachmentIds } = await readJson<SendMessageRequest>(req, 40 * 1024 * 1024);
   const imgs = checkImages(images);
+  // Other files were uploaded first (POST /api/attachments): the message names them by id (docs/attachments.md).
+  const files = attachments.resolve(attachmentIds);
   const s = sessions.get(id);
   // A standing agent only works inside a run (budget, no overlap, agent limit): a message starts one.
   if (s.info.kind === 'standing' && s.info.standingId) {
     if (imgs.length) throw new HttpError(400, 'standing agents take text only; describe the image or put it in their folder');
+    if (files.length) throw new HttpError(400, 'standing agents take text only; attach the file in an orchestrator or worker chat');
     return { note: agents.standing.runNow(s.info.standingId, 'message', need(text, 'text'), requesterOf(req)) };
   }
-  if (!imgs.length) need(text, 'text');
+  if (!imgs.length && !files.length) need(text, 'text');
   mayDrive(req, s.info);
   if (s.info.kind === 'orchestrator') {
     // A person wrote to their orchestrator: its own wake_me check-in is moot, and its budgets start again.
     agents.waker.cancel(id);
     agents.orchestrators.personWrote(id);
   }
-  sessions.send(id, String(text ?? '').trim(), 'human', imgs, { requestedBy: requesterOf(req) });
+  await agents.sendWithAttachments(id, String(text ?? '').trim(), 'human', { images: imgs, attachments: files, requestedBy: requesterOf(req) });
   return {};
 });
 
@@ -595,10 +613,13 @@ class StreamReply {
   readonly type: string;
   readonly path: string;
   readonly size: number;
-  constructor(type: string, file: string, size: number) {
+  /** A download (an attachment): saved under this Content-Disposition, never shown. */
+  readonly disposition?: string;
+  constructor(type: string, file: string, size: number, disposition?: string) {
     this.type = type;
     this.path = file;
     this.size = size;
+    this.disposition = disposition;
   }
 }
 
@@ -613,6 +634,33 @@ class FileReply {
     this.data = data;
   }
 }
+
+// ---- attachments (docs/attachments.md): files people attach to messages, uploaded in chunks that resume
+
+route('POST', '/api/attachments', async (req) => {
+  const b = await readJson<{ name?: unknown; size?: unknown }>(req);
+  return attachments.begin({ name: b.name, size: b.size, uploadedBy: auth.user(req) });
+});
+route('GET', '/api/attachments/uploads/([a-f0-9]{32})', async (_r, [uploadId]) => attachments.status(uploadId));
+// A chunk is raw bytes (application/octet-stream with the x-ff-upload header, which the CSRF check lets through).
+route('PUT', '/api/attachments/uploads/([a-f0-9]{32})', async (req, [uploadId], url) => {
+  const length = req.headers['content-length'];
+  const r = await attachments.append(uploadId, Number(url.searchParams.get('offset')), req, undefined, length === undefined ? undefined : Number(length));
+  return { received: r.received, size: r.size, ...(r.attachment ? { attachment: publicRef(r.attachment) } : {}) };
+});
+route('DELETE', '/api/attachments/uploads/([a-f0-9]{32})', async (_r, [uploadId]) => {
+  attachments.cancel(uploadId);
+  return {};
+});
+route('GET', '/api/attachments/(att_[a-z0-9]{12})', async (_r, [id]) => {
+  const [a] = attachments.resolve([id]);
+  return { ...publicRef(a), createdAt: a.createdAt, lastUsedAt: a.lastUsedAt, ...(a.uploadedBy ? { uploadedBy: a.uploadedBy } : {}) };
+});
+// Always a download, as bytes: never shown in the page (an HTML or SVG file must not run here).
+route('GET', '/api/attachments/(att_[a-z0-9]{12})/download', async (_r, [id]) => {
+  const [a] = attachments.resolve([id]);
+  return new StreamReply('application/octet-stream', attachments.pathOf(a), a.size, downloadDisposition(a.name));
+});
 
 route('GET', '/api/uploads/([\\w-]+)/([\\w-]+)', async (_r, [sessionId, imageId]) => {
   const f = store.imagePath(sessionId, imageId);
@@ -1067,10 +1115,24 @@ const server = http.createServer(async (req, res) => {
       return await handleMcp(agents, who.name, keyUser ? asRequester(keyUser) : identity.owner(), req, res, req.method === 'POST' ? await readJson(req) : undefined);
     }
     if (url.pathname.startsWith('/api/') && req.method !== 'GET') {
-      // CSRF: a cross-site form cannot send application/json, and SameSite=Strict keeps the cookie home.
-      if (req.method !== 'DELETE' && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+      // CSRF: a cross-site form cannot send application/json, and SameSite=Strict keeps the cookie home. An attachment
+      // chunk is raw bytes instead, with a custom header that no cross-site form or simple request can carry.
+      const chunk = req.method === 'PUT' && url.pathname.startsWith('/api/attachments/uploads/');
+      if (chunk) {
+        if (req.headers['x-ff-upload'] !== '1' || !String(req.headers['content-type'] ?? '').startsWith('application/octet-stream')) {
+          return send(res, 415, { error: 'an attachment chunk is application/octet-stream with x-ff-upload: 1' });
+        }
+      } else if (req.method !== 'DELETE' && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
         return send(res, 415, { error: 'JSON only' });
       }
+    }
+    // A machine's daemon fetching an attachment it was handed (docs/attachments.md): its own token, no browser session.
+    const machineFile = req.method === 'GET' ? /^\/machine\/attachments\/(att_[a-z0-9]{12})$/.exec(url.pathname) : null;
+    if (machineFile) {
+      const machineId = machines.authenticate(req.headers.authorization);
+      const r = machineAttachment(attachments, machineId && store.machines.has(machineId) ? machineId : undefined, machineFile[1]);
+      if ('error' in r) return send(res, r.status, { error: r.error });
+      return sendStream(req, res, new StreamReply('application/octet-stream', r.file, r.record.size, downloadDisposition(r.record.name)));
     }
     // The nightly e2e lab's report (docs/intake.md, "Nightly e2e regressions"): a key minted --scope nightly, nothing else.
     if (url.pathname === '/api/intake/nightly' && req.method === 'POST') {
@@ -1121,8 +1183,9 @@ const server = http.createServer(async (req, res) => {
     }
     await serveStatic(req, url, res);
   } catch (e) {
-    const status = e instanceof HttpError ? e.status : /^no (sandbox|session|standing agent|delegation|machine)/.test((e as Error).message) ? 404 : 400;
-    send(res, status, { error: (e as Error).message });
+    const status = e instanceof HttpError || e instanceof AttachmentError ? e.status : /^no (sandbox|session|standing agent|delegation|machine)/.test((e as Error).message) ? 404 : 400;
+    // An upload that must resume elsewhere says where (docs/attachments.md).
+    send(res, status, { error: (e as Error).message, ...(e instanceof AttachmentError && e.received !== undefined ? { received: e.received } : {}) });
   }
 });
 
@@ -1172,7 +1235,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 function sendStream(req: http.IncomingMessage, res: http.ServerResponse, f: StreamReply) {
-  const headers = { 'content-type': f.type, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': FILE_CSP };
+  const headers = { 'content-type': f.type, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': FILE_CSP, ...(f.disposition ? { 'content-disposition': f.disposition } : {}) };
   const range = parseRange(req.headers.range, f.size);
   if (range === 'unsatisfiable') {
     res.writeHead(416, { ...headers, 'content-range': `bytes */${f.size}` });

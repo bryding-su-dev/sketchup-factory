@@ -3,7 +3,7 @@
 import type { OutsideWatchConfig } from '../machine/outsideWatch.ts';
 import type { CatalogTool, LaunchSpec } from './launch.ts';
 import type { AccountIdentity } from './usage.ts';
-import type { CleanupSummary, HostStats, ImageFile, ImageInput, Machine, MachineSandbox, PermissionMode, PlanUsage, Requester, SandboxPoolSettings, SessionInfo, TranscriptEvent } from '../shared/types.ts';
+import type { AttachmentRef, CleanupSummary, HostStats, ImageFile, ImageInput, Machine, MachineSandbox, PermissionMode, PlanUsage, Requester, SandboxPoolSettings, SessionInfo, TranscriptEvent } from '../shared/types.ts';
 
 /**
  * Bumped when either side must be redeployed to keep talking. 4: the daemon reports its Mac's load
@@ -17,14 +17,20 @@ import type { CleanupSummary, HostStats, ImageFile, ImageInput, Machine, Machine
  * 6: the portal's own host as a machine (docs/beast-machine.md): the `adopt` and `release` sandbox ops (a worktree
  * that already exists is taken into the pool, or dropped from it, without touching the folder), and the pool
  * settings' `maxAgents`, `librarySeed`, `librarySeedCopy`, `librarySeedGB`, `belowNormal` and `protectedPaths`.
+ * 7: attachments (docs/attachments.md): `attachments` on `send`, which the daemon fetches into the place's Inbox
+ * (GET /machine/attachments/<id> with its token) before the message goes to the agent, and the `fetch_attachment` tool.
+ * A protocol-6 daemon would drop them, so the portal never sends it any.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** The oldest protocol that understands machine sandboxes. */
 export const SANDBOX_PROTOCOL = 5;
 
 /** The oldest protocol that can adopt and release existing worktrees (the host migration, server/hostMigration.ts). */
 export const ADOPT_PROTOCOL = 6;
+
+/** The oldest protocol that fetches attachments (docs/attachments.md). */
+export const ATTACHMENT_PROTOCOL = 7;
 
 /** What the daemon reports of a sandbox; the portal adds purpose and sessionIds (MachineSandbox). */
 export type DaemonSandbox = Omit<MachineSandbox, 'purpose' | 'sessionIds'>;
@@ -35,8 +41,11 @@ export type SignalName = 'turnEnd' | 'permission' | 'result' | 'ended' | 'rateLi
 export type ToDaemon =
   /** First message after connecting: the portal's sessions on this machine and where their transcripts end. */
   | { type: 'welcome'; machineId: string; maxSessions: number; sessions: { id: string; lastSeq: number }[]; sandboxes?: SandboxPoolSettings | null }
-  /** Start the session's process if needed (from `spec`) and send it a message. */
-  | { type: 'send'; info: SessionInfo; lastSeq: number; spec: LaunchSpec; text: string; from: 'human' | 'orchestrator' | 'system'; uuid: string; images?: ImageInput[]; requestedBy?: Requester }
+  /**
+   * Start the session's process if needed (from `spec`) and send it a message. `attachments` (protocol 7): files the
+   * daemon fetches into `<spec.cwd>/Inbox/` first; the message then names where each is, or why it is not.
+   */
+  | { type: 'send'; info: SessionInfo; lastSeq: number; spec: LaunchSpec; text: string; from: 'human' | 'orchestrator' | 'system'; uuid: string; images?: ImageInput[]; requestedBy?: Requester; attachments?: AttachmentRef[] }
   /** Read an image file (under the daemon's roots) or list the recent ones: the Screenshots gallery and inline images. */
   /** sessionId: whose image, so its own temp folder counts too (older daemons ignore it). */
   | { type: 'fs'; id: string; op: 'read'; path: string; sessionId?: string }

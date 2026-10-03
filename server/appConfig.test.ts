@@ -90,6 +90,19 @@ test('app config: limits.maxUnity caps editors at once, live, 1 to 8', (t) => {
   assert.equal(full.limits.maxUnity, 3, 'null: back to the default');
 });
 
+test('app config: attachments.maxMB and attachments.retentionDays, live, bounded (docs/attachments.md)', (t) => {
+  const { file, cfg } = setup(t);
+  const full = { ...cfg } as unknown as Config;
+  setAppConfig(file, full, 'attachments.maxMB', 500);
+  setAppConfig(file, full, 'attachments.retentionDays', '14');
+  assert.deepEqual(full.attachments, { maxMB: 500, retentionDays: 14 }, 'applies at once');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).attachments, { maxMB: 500, retentionDays: 14 });
+  for (const bad of ['0', '4097', '1.5', 'big']) assert.throws(() => setAppConfig(file, full, 'attachments.maxMB', bad), /1 to 4096/, bad);
+  for (const bad of ['0', '3651', 'forever']) assert.throws(() => setAppConfig(file, full, 'attachments.retentionDays', bad), /1 to 3650/, bad);
+  setAppConfig(file, full, 'attachments.maxMB', null);
+  assert.deepEqual(full.attachments, { retentionDays: 14 }, 'null: back to the default (200 MB)');
+});
+
 test('app config: usagePollMinutes, live, 5 to 240 minutes, default 15', (t) => {
   const { file, cfg } = setup(t);
   const full = { ...cfg, usagePollMinutes: 15 } as unknown as Config;

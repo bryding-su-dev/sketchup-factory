@@ -1,3 +1,4 @@
+import type { AttachmentConfig } from './attachments.ts';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -304,6 +305,11 @@ export interface Config {
   };
   /** Folders (relative to a sandbox or a machine's clone; `*` = any one folder) the Screenshots gallery lists. See server/images.ts. */
   screenshotDirs?: string[];
+  /**
+   * Files people attach to chat messages (docs/attachments.md): the largest one in MB (default 200) and how many days
+   * one nobody sent on is kept (default 30). Settable with set_app_config.
+   */
+  attachments?: Partial<AttachmentConfig>;
   /** Paths no sandbox agent may write to or mention in a shell command (e.g. the live co-op checkout). */
   protectedPaths: string[];
   limits: {

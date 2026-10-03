@@ -13,6 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { Store } from './store.ts';
 import { SessionManager, type SessionHandle, type SessionSink } from './sessions.ts';
 import { MachineManager, RemoteSession, localMachineDefaults, poolSettingsOf } from './machines.ts';
+import { PROTOCOL_VERSION } from './machineProtocol.ts';
 import { daemonConfig, type DeployOptions } from './machineDeploy.ts';
 import { LOCAL, installScript, scriptCommand } from './machineDeployWin.ts';
 import { Daemon, type Probes } from '../machine/daemon.ts';
@@ -405,7 +406,7 @@ test('beast machine: migrate_host_sandboxes moves live records to the daemon and
     r.cleanup();
   });
   daemon.start();
-  await until('the daemon online', () => mm.isOnline('beast') && mm.protocolOf('beast') === 6);
+  await until('the daemon online', () => mm.isOnline('beast') && mm.protocolOf('beast') === PROTOCOL_VERSION);
 
   const migrator = new HostMigrator({ cfg, store, sessions, machines: mm, hostSession, stopWaitMs: 2000 });
   // A worker mid-turn holds everything up.

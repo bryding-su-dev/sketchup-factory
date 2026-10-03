@@ -106,6 +106,8 @@ fs.writeFileSync(
       orchestrator: { model: 'opus', effort: 'low', notifyOnWorkerEvents: true },
       worker: { permissionMode: 'bypassPermissions', effort: 'low' },
       voice: { enabled: false, autoInstall: false, tts: false },
+      // A 20 MB cap: e2e/attachments.spec.ts sends a 9 MB file (two chunks) and is refused a 21 MB one.
+      attachments: { maxMB: 20 },
       max: { eventsFile: path.join(base, 'max-events.jsonl'), ffboxConfigDir: path.join(base, 'ffbox'), discordApi: `http://127.0.0.1:${discordPort}/api/v10`, inbound: { pollMinutes: 60 } },
       ...(withIntake ? { intake: { discord: { enabled: true, bugChannels: ['beta_bugs', 'bug_reports'], trusted: { [INTAKE_TRUSTED]: 'tester' }, pollMinutes: 120 }, reviewers: ['tester'] } } : {}),
       // The provider projects also take FFBox's ledger check and its fix branches (docs/intake.md; e2e/provider.spec.ts).

@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 import { query, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Config } from './config.ts';
 import type { Store } from './store.ts';
-import type { EffortLevel, ImageInput, ImageRef, OrchestratorRole, PendingPermission, PermissionMode, Requester, SessionInfo, SessionKind } from '../shared/types.ts';
+import type { DeliveredAttachment, EffortLevel, ImageInput, ImageRef, OrchestratorRole, PendingPermission, PermissionMode, Requester, SessionInfo, SessionKind } from '../shared/types.ts';
+import { attachmentBlock } from '../shared/attachments.ts';
 import { emit } from './store.ts';
 import { accountKeyOf } from './usage.ts';
 import type { SessionSnapshot, Unanswered } from './restart.ts';
@@ -81,8 +82,12 @@ export interface SessionHandle {
    * is not a person. Without any, the last sender. What decides whether a turn is a person's (docs/orchestrators.md).
    */
   readonly turnFrom?: 'human' | 'orchestrator' | 'system';
-  /** `requestedBy`: the person who wrote it, or for whom the orchestrator or the harness sends it (docs/identity.md). */
-  send(text: string, from?: 'human' | 'orchestrator' | 'system', uuid?: string, images?: ImageInput[], requestedBy?: Requester): string;
+  /**
+   * `requestedBy`: the person who wrote it, or for whom the orchestrator or the harness sends it (docs/identity.md).
+   * `attachments` (docs/attachments.md): files that come with it, with where this agent's copy is; on a machine, the
+   * daemon fetches the copies first and fills that in.
+   */
+  send(text: string, from?: 'human' | 'orchestrator' | 'system', uuid?: string, images?: ImageInput[], requestedBy?: Requester, attachments?: DeliveredAttachment[]): string;
   interrupt(): Promise<void>;
   setMode(mode: PermissionMode): Promise<void>;
   /** `onPurpose` false: the server is stopping, not a person or the orchestrator; the restart marks stay. */
@@ -179,7 +184,7 @@ export class AgentSession implements SessionHandle {
   }
 
   /** Queue a user message; returns its uuid, which the answering turn's result lists in `answers`. */
-  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester): string {
+  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester, attachments: DeliveredAttachment[] = []): string {
     // A person's message (or the orchestrator's on a person's behalf) says who this session now works for; the
     // harness's own messages carry the person they are about, but do not change that.
     if (requestedBy && from !== 'system') this.info.lastRequestedBy = requestedBy;
@@ -190,8 +195,10 @@ export class AgentSession implements SessionHandle {
     this.outstanding.set(uuid, { text, from });
     // Images arrive stored already (with an id) or are kept here, so the transcript can show them.
     const refs = images.map((i) => ({ id: i.id ?? this.store.saveImage(this.info.id, i.mediaType, i.data), mediaType: i.mediaType }));
-    this.store.append(this.info.id, { kind: 'user', text, from, uuid, ...(refs.length ? { images: refs } : {}), ...(requestedBy ? { requestedBy } : {}) });
-    this.input!.push(promptText(this.info.kind, text, from, requestedBy), uuid, images);
+    this.store.append(this.info.id, { kind: 'user', text, from, uuid, ...(refs.length ? { images: refs } : {}), ...(attachments.length ? { attachments } : {}), ...(requestedBy ? { requestedBy } : {}) });
+    // The files come after the text, as a block the agent reads as data (shared/attachments.ts).
+    const files = attachmentBlock(attachments, this.info.kind === 'orchestrator' ? 'orchestrator' : 'worker');
+    this.input!.push(promptText(this.info.kind, files ? (text ? `${text}\n\n${files}` : files) : text, from, requestedBy), uuid, images);
     const opens = !this.info.turnOpenSince;
     this.update({ status: 'running', statusDetail: undefined, ...(opens ? { turnOpenSince: new Date().toISOString() } : {}) });
     if (opens) this.store.flush?.();
@@ -579,15 +586,24 @@ export class SessionManager {
    * Send, enforcing the concurrent-agent ceiling and the host guard when this send would start a process.
    * `bypassGate`: the host guard's own messages (resume after recovery, checkpoint requests).
    */
-  send(id: string, text: string, from: 'human' | 'orchestrator' | 'system' = 'human', images?: ImageInput[], opts: { bypassGate?: boolean; requestedBy?: Requester } = {}): string {
+  send(id: string, text: string, from: 'human' | 'orchestrator' | 'system' = 'human', images?: ImageInput[], opts: { bypassGate?: boolean; requestedBy?: Requester; attachments?: DeliveredAttachment[] } = {}): string {
+    const s = this.checkStart(id, opts.bypassGate);
+    return s.send(text, from, undefined, images, opts.requestedBy, opts.attachments);
+  }
+
+  /**
+   * Throws when a message to this session would start a process on this host that the concurrent-agent ceiling or the
+   * host guard refuses now (what send() checks); returns the session. For a caller that copies files before sending.
+   */
+  checkStart(id: string, bypassGate?: boolean): SessionHandle {
     const s = this.get(id);
     const startsHere = !s.live && s.info.kind !== 'orchestrator' && !s.info.machineId;
     if (startsHere && this.liveAgents() >= this.cfg.limits.maxSessions) {
       throw new Error(`already ${this.cfg.limits.maxSessions} agents running (limits.maxSessions); stop one first`);
     }
-    const gate = startsHere && !opts.bypassGate ? this.startGate?.() : undefined;
+    const gate = startsHere && !bypassGate ? this.startGate?.() : undefined;
     if (gate) throw new Error(`not started: ${gate}`);
-    return s.send(text, from, undefined, images, opts.requestedBy);
+    return s;
   }
 
   /** Rename a session: one line, at most 80 characters. Returns the stored title. */

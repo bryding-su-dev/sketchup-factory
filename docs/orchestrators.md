@@ -39,7 +39,9 @@ write to.
 
 ## Requests and the ledger
 
-`request_work {title, brief, priority, constraints, related_ids}` files a request (`w12`). Before the dispatcher sees it,
+`request_work {title, brief, priority, constraints, related_ids, attachments}` files a request (`w12`). `attachments`
+are ids of files the person attached to their message (saves, bug-report zips, logs): the request keeps them, and every
+worker started for it gets a copy in its `Inbox/` ([attachments.md](attachments.md)). Before the dispatcher sees it,
 the server (`server/work.ts`) does three things:
 
 1. **Repeats.** An open request of the same person with the same title (ignoring case and punctuation) is returned

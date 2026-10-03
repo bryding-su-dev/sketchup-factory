@@ -106,6 +106,10 @@ export const CATALOG = {
     branch: z.string().describe('The branch to switch to, e.g. "spec-098-belts".'),
     create_from: z.string().optional().describe('Base for a branch that exists neither here nor on origin. Default origin/develop.'),
   },
+  /** docs/attachments.md. On a machine the daemon answers it itself: the portal gives the record, the daemon fetches the file. */
+  fetch_attachment: {
+    id: z.string().describe('The attachment id, e.g. "att_k2m9x0q7p3a1" (from an [attachments] list).'),
+  },
 } satisfies Record<string, z.ZodRawShape>;
 
 export type CatalogTool = keyof typeof CATALOG;

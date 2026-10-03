@@ -9,7 +9,7 @@ import { DEFAULT_USAGE_POLL_MINUTES, ROOT, type Config } from './config.ts';
 import { emit, type Store } from './store.ts';
 import type { SessionHandle, SessionManager } from './sessions.ts';
 import type { CatalogTool, LaunchSpec, ToolHandler } from './launch.ts';
-import { ADOPT_PROTOCOL, PROTOCOL_VERSION, SANDBOX_PROTOCOL, type DaemonSandbox, type FromDaemon, type ToDaemon } from './machineProtocol.ts';
+import { ADOPT_PROTOCOL, ATTACHMENT_PROTOCOL, PROTOCOL_VERSION, SANDBOX_PROTOCOL, type DaemonSandbox, type FromDaemon, type ToDaemon } from './machineProtocol.ts';
 import type { OutsideWatchConfig } from '../machine/outsideWatch.ts';
 import { branchProblem, normalizePurpose, slugify } from './sandboxes.ts';
 import { winDir } from './machineDeployWin.ts';
@@ -17,7 +17,8 @@ import type { DaemonExtras, DeployOptions, DeployResult, MachineDirs } from './m
 import { openPr } from './gitStatus.ts';
 import { safeImage } from './images.ts';
 import { HOST_LOGIN, machineLogin, type AccountIdentity } from './usage.ts';
-import type { EffortLevel, ImageInput, Machine, MachinePlatform, MachineSandbox, MachineStats, PermissionMode, PlanUsage, Requester, SandboxPoolSettings, SessionInfo } from '../shared/types.ts';
+import type { AttachmentStore } from './attachments.ts';
+import type { DeliveredAttachment, EffortLevel, ImageInput, Machine, MachinePlatform, MachineSandbox, MachineStats, PermissionMode, PlanUsage, Requester, SandboxPoolSettings, SessionInfo } from '../shared/types.ts';
 import { checkStringMap, readJsonDurable, writeJsonDurable } from './durable.ts';
 
 const PING_MS = 20_000;
@@ -158,9 +159,9 @@ export class RemoteSession implements SessionHandle {
     return this.liveFlag;
   }
 
-  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester): string {
+  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester, attachments: DeliveredAttachment[] = []): string {
     if (requestedBy && from !== 'system') this.info.lastRequestedBy = requestedBy;
-    this.link.dispatchSend(this, text, from, uuid, images, requestedBy);
+    this.link.dispatchSend(this, text, from, uuid, images, requestedBy, attachments);
     this.lastFrom = from;
     // A new turn: the stop is over (as AgentSession.send).
     if (this.info.stoppedOnPurpose) {
@@ -216,6 +217,8 @@ export class MachineManager {
   private readonly store: Store;
   private readonly sessions: SessionManager;
   hooks?: MachineHooks;
+  /** The attachment store (docs/attachments.md): what daemons may fetch, granted as files are sent to their agents. */
+  attachments?: AttachmentStore;
   private readonly links = new Map<string, { ws: WebSocket; lastPong: number; since: number }>();
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
   private readonly tokensFile: string;
@@ -783,9 +786,15 @@ export class MachineManager {
   }
 
   /** RemoteSession.send: checked here so the caller gets the error at once. */
-  dispatchSend(s: RemoteSession, text: string, from: 'human' | 'orchestrator' | 'system', uuid: string, images: ImageInput[] = [], requestedBy?: Requester) {
+  dispatchSend(s: RemoteSession, text: string, from: 'human' | 'orchestrator' | 'system', uuid: string, images: ImageInput[] = [], requestedBy?: Requester, attachments: DeliveredAttachment[] = []) {
     const m = this.require(s.info.machineId!);
     if (!this.isOnline(m.id)) throw new Error(`machine ${m.id} is offline (asleep, or its daemon is not running)`);
+    // Files come with it (docs/attachments.md): only a daemon that fetches them gets them, never one that would drop them.
+    const proto = this.hellos.get(m.id)?.protocol ?? 0;
+    if (attachments.length && proto < ATTACHMENT_PROTOCOL) {
+      this.checkOutdated();
+      throw new Error(`${m.id}'s daemon speaks protocol ${proto} and cannot fetch attachments; it is redeployed once no agent runs there. Try again in a few minutes.`);
+    }
     const sbId = s.info.machineSandbox;
     if (sbId && !s.live) {
       const sb = this.requireSandbox(m.id, sbId);
@@ -816,7 +825,10 @@ export class MachineManager {
     if (spec.mcp && catalog) spec.mcp = { ...spec.mcp, tools: spec.mcp.tools.filter((t) => catalog.includes(t.name)) };
     // Stored here first, so the daemon's transcript event can name them without sending them back.
     const withIds = images.map((i) => ({ ...i, id: i.id ?? this.store.saveImage(s.info.id, i.mediaType, i.data) }));
-    this.post(m.id, { type: 'send', info: s.info, lastSeq: this.store.lastSeq(s.info.id), spec, text, from, uuid, images: withIds, ...(requestedBy ? { requestedBy } : {}) });
+    // The daemon fetches each file into the place's Inbox (GET /machine/attachments/<id>), which this lets it do.
+    if (attachments.length) this.attachments?.grant(m.id, attachments.map((a) => a.id));
+    const files = attachments.map(({ path: _p, error: _e, ...ref }) => ref);
+    this.post(m.id, { type: 'send', info: s.info, lastSeq: this.store.lastSeq(s.info.id), spec, text, from, uuid, images: withIds, ...(requestedBy ? { requestedBy } : {}), ...(files.length ? { attachments: files } : {}) });
   }
 
   /** Ask a machine's daemon for its git status now. */

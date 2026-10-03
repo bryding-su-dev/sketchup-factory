@@ -45,6 +45,8 @@ let onUnauthorized: () => void = () => {};
 export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn;
 }
+/** For requests made outside request() (the attachment uploader's XMLHttpRequest). */
+export const notifyUnauthorized = () => onUnauthorized();
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -98,8 +100,12 @@ export const api = {
   events: (sessionId: string, limit = 500) =>
     request<TranscriptEvent[]>('GET', `/api/sessions/${enc(sessionId)}/events?limit=${limit}`),
   /** `note` is set for a standing agent: what the message did (started a run, joined one, waited). */
-  sendMessage: (sessionId: string, text: string, images?: ImageInput[]) =>
-    request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, ...(images?.length ? { images } : {}) }),
+  sendMessage: (sessionId: string, text: string, images?: ImageInput[], attachments?: string[]) =>
+    request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }),
+  // Attachments (docs/attachments.md): an upload starts here; web/src/upload.ts sends the chunks.
+  beginAttachment: (name: string, size: number) => request<{ uploadId: string; name: string; size: number; received: number; chunkBytes: number }>('POST', '/api/attachments', { name, size }),
+  attachmentUpload: (uploadId: string) => request<{ received: number; size: number }>('GET', `/api/attachments/uploads/${enc(uploadId)}`),
+  cancelAttachment: (uploadId: string) => request<unknown>('DELETE', `/api/attachments/uploads/${enc(uploadId)}`),
   push: () => request<{ publicKey: string; subscriptions: { endpoint: string; device: string; prefs: NotifyPrefs }[] }>('GET', '/api/push'),
   pushSubscribe: (subscription: PushSubscriptionJSON, prefs: NotifyPrefs) => request<{ prefs: NotifyPrefs }>('POST', '/api/push/subscribe', { subscription, prefs }),
   pushPrefs: (endpoint: string, prefs: Partial<NotifyPrefs>) => request<{ prefs: NotifyPrefs }>('POST', '/api/push/prefs', { endpoint, prefs }),

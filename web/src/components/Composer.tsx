@@ -2,16 +2,22 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SessionInfo } from '../../../shared/types';
 import { api } from '../api';
 import type { ImageInput } from '../../../shared/types';
-import { attempt, toast, toastError } from '../store';
+import { attempt, toast, useStore } from '../store';
+import { clearPending, removePending, startUpload, usePendingFiles } from '../upload';
 import { enterAction } from '../../../shared/keys';
 import { dropCaret, EDITABLE_MODE, insertPlainText, readText, setCaret, writeText } from '../editable';
-import { isBusy, lsGet, lsSet, shrinkImage, useMediaQuery } from '../util';
+import { fmtBytes, isBusy, lsGet, lsSet, shrinkImage, useMediaQuery } from '../util';
 import { useTextareaDictation } from '../voice/useTextareaDictation';
 import { useVoicePrefs } from '../voice/dictation';
 import { DictationBar, MicButton } from './Mic';
 import { onScreenKeyboard } from '../viewport';
 import { VoiceModeButton, VoiceModeOverlay, useVoiceMode } from './VoiceMode';
 import { Icon } from './ui';
+
+/** Without the app's settings yet: the server's defaults (config attachments). */
+const ATTACH_DEFAULTS = { maxBytes: 200 * 1024 * 1024, retentionDays: 30, maxPerMessage: 10 };
+/** Images go to the agent as images (converted when needed); one the browser cannot read is uploaded as a file. */
+const IMAGE_INPUT = /^image\//;
 
 export const Composer = memo(function Composer({
   session,
@@ -35,6 +41,9 @@ export const Composer = memo(function Composer({
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [images, setImages] = useState<(ImageInput & { key: number })[]>([]);
+  // Files upload outside the composer (web/src/upload.ts), so they go on while this chat is closed.
+  const files = usePendingFiles(session.id);
+  const limits = useStore((s) => s.app?.config.attachments) ?? ATTACH_DEFAULTS;
   const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(0);
   // The message box is contenteditable, not a textarea: see web/src/editable.ts.
@@ -44,11 +53,34 @@ export const Composer = memo(function Composer({
   // Phones and tablets: with their on-screen keyboard (no Shift to hand) Enter inserts a new line and the
   // button sends; with a hardware keyboard (an iPad's) Enter sends, as on a desktop (onScreenKeyboard).
   const touch = useMediaQuery('(pointer: coarse)');
-  // Standing agents take text only (their runs are budgeted text turns); everyone else takes images.
+  // Standing agents take text only (their runs are budgeted text turns); everyone else takes images and files.
   const canAttach = session.kind !== 'standing';
+  const uploading = files.some((f) => !f.ref && !f.error);
+  const failed = files.some((f) => f.error);
 
-  const addFiles = async (files: Iterable<File>) => {
-    const list = [...files].filter((f) => f.type.startsWith('image/'));
+  /** Start uploading `f` unless it breaks a limit (said in a toast); whether it started. */
+  const attachFile = (f: File, pending: number) => {
+    const why = !f.size
+      ? `${f.name} is empty`
+      : f.size > limits.maxBytes
+        ? `${f.name} is ${fmtBytes(f.size)}; the limit is ${fmtBytes(limits.maxBytes)}`
+        : pending >= limits.maxPerMessage
+          ? `At most ${limits.maxPerMessage} files per message`
+          : undefined;
+    if (why) {
+      toast(why, 'error');
+      return false;
+    }
+    startUpload(session.id, f);
+    return true;
+  };
+
+  /** Images go to the agent as images (shrunk first); every other file, or an image the browser cannot read, is uploaded. */
+  const addFiles = async (incoming: Iterable<File>) => {
+    const all = [...incoming];
+    const list = all.filter((f) => IMAGE_INPUT.test(f.type));
+    let pending = files.length;
+    for (const f of all) if (!IMAGE_INPUT.test(f.type) && attachFile(f, pending)) pending++;
     if (!list.length) return;
     if (images.length + list.length > 8) return toast('At most 8 images per message', 'error');
     setReading((n) => n + list.length);
@@ -56,8 +88,8 @@ export const Composer = memo(function Composer({
       try {
         const img = await shrinkImage(f);
         setImages((xs) => [...xs, { ...img, key: Math.random() }]);
-      } catch (e) {
-        toastError(e);
+      } catch {
+        if (attachFile(f, pending)) pending++;
       } finally {
         setReading((n) => n - 1);
       }
@@ -157,20 +189,30 @@ export const Composer = memo(function Composer({
   /** `override`: the text to send instead of the box's (auto-send after dictation, before the state lands). */
   const send = async (override?: string) => {
     const t = (override ?? text).trim();
-    if ((!t && !images.length) || sending || reading) return;
+    if ((!t && !images.length && !files.length) || sending || reading || uploading) return;
+    if (failed) return toast('An attachment did not upload: retry it or remove it', 'error');
     setSending(true);
-    const ok = await attempt(api.sendMessage(session.id, t, images.map(({ mediaType, data }) => ({ mediaType, data }))));
+    const sentFiles = files;
+    const ok = await attempt(
+      api.sendMessage(
+        session.id,
+        t,
+        images.map(({ mediaType, data }) => ({ mediaType, data })),
+        sentFiles.map((f) => f.ref!.id),
+      ),
+    );
     setSending(false);
     if (ok !== undefined) {
       setText('');
       setImages([]);
+      clearPending(session.id, sentFiles);
     }
     if (ok?.note) toast(ok.note);
     ta.current?.focus();
   };
 
   const voiceMode = useVoiceMode(session);
-  const hasContent = !!text.trim() || images.length > 0;
+  const hasContent = !!text.trim() || images.length > 0 || files.length > 0;
   const { bargeIn } = useVoicePrefs();
   const voice = useTextareaDictation({ value: text, setValue: setText, ref: ta, onAutoSend: (t) => void send(t) });
 
@@ -213,6 +255,33 @@ export const Composer = memo(function Composer({
           void addFiles(e.dataTransfer.files);
         }}
       >
+        {files.length > 0 && (
+          <div className="composer-files">
+            {files.map((f) => {
+              const pct = Math.floor((f.sent * 100) / f.file.size);
+              return (
+                <span key={f.key} className={`composer-file${f.error ? ' failed' : f.ref ? ' done' : ''}`} title={f.error ? `${f.file.name}: ${f.error}` : f.file.name}>
+                  <Icon name="file" size={14} />
+                  <span className="composer-file-name">{f.file.name}</span>
+                  <span className="composer-file-size">{f.error ? 'failed' : f.ref ? fmtBytes(f.file.size) : `${pct}%`}</span>
+                  {!f.ref && !f.error && (
+                    <span className="composer-file-bar" role="progressbar" aria-label={`Uploading ${f.file.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+                      <i style={{ width: `${pct}%` }} />
+                    </span>
+                  )}
+                  {f.error && (
+                    <button className="composer-file-btn" onClick={() => startUpload(session.id, f.file, f.key)} title="Upload it again" aria-label={`Retry ${f.file.name}`}>
+                      <Icon name="refresh" size={12} />
+                    </button>
+                  )}
+                  <button className="composer-file-btn" onClick={() => removePending(session.id, f.key)} title="Remove" aria-label={`Remove ${f.file.name}`}>
+                    <Icon name="x" size={12} />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
         {(images.length > 0 || reading > 0) && (
           <div className="composer-images">
             {images.map((img) => (
@@ -254,10 +323,11 @@ export const Composer = memo(function Composer({
             setText(t);
           }}
           onPaste={(e) => {
-            const files = canAttach ? [...e.clipboardData.files].filter((f) => f.type.startsWith('image/')) : [];
-            if (files.length) {
+            // Pasted files (a screenshot, or files copied in Finder or Explorer): images inline, the rest uploaded.
+            const pasted = canAttach ? [...e.clipboardData.files] : [];
+            if (pasted.length) {
               e.preventDefault();
-              void addFiles(files);
+              void addFiles(pasted);
               return;
             }
             // plaintext-only pastes text as text; the fallback would paste a web page's formatting.
@@ -266,7 +336,7 @@ export const Composer = memo(function Composer({
             insertPlainText(e.clipboardData.getData('text/plain'));
           }}
           onDrop={(e) => {
-            // Dropped images are the composer box's (above); in the fallback a dropped text comes in plain.
+            // Dropped files are the composer box's (above); in the fallback a dropped text comes in plain.
             if (EDITABLE_MODE === 'plaintext-only' || e.dataTransfer.files.length) return;
             e.preventDefault();
             e.currentTarget.focus();
@@ -277,7 +347,7 @@ export const Composer = memo(function Composer({
             if (voice.keyDown(e)) return;
             const act = enterAction(
               { key: e.key, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode },
-              { touch: touch && onScreenKeyboard(), canSend: !!text.trim() || images.length > 0 },
+              { touch: touch && onScreenKeyboard(), canSend: !!text.trim() || images.length > 0 || files.length > 0 },
             );
             if (act === 'default') return;
             e.preventDefault();
@@ -289,13 +359,13 @@ export const Composer = memo(function Composer({
         <div className="composer-actions">
           {canAttach && (
             <>
-              <button className="btn btn-ghost btn-icon" onClick={() => picker.current?.click()} title="Attach images (or paste / drop them)" aria-label="Attach images">
+              <button className="btn btn-ghost btn-icon" onClick={() => picker.current?.click()} title={`Attach images or files: saves, bug reports, logs (up to ${fmtBytes(limits.maxBytes)}; or paste / drop them)`} aria-label="Attach files">
                 <Icon name="paperclip" size={16} />
               </button>
+              {/* Any file: images go inline, everything else is uploaded (docs/attachments.md). */}
               <input
                 ref={picker}
                 type="file"
-                accept="image/*"
                 multiple
                 hidden
                 onChange={(e) => {
@@ -318,8 +388,8 @@ export const Composer = memo(function Composer({
             <button
               className="btn btn-primary btn-icon btn-send"
               onClick={() => void send()}
-              disabled={sending || reading > 0}
-              title={touch ? 'Send' : busy ? 'Send (it waits for the current turn)' : 'Send (Enter; Shift+Enter for a new line)'}
+              disabled={sending || reading > 0 || uploading}
+              title={uploading ? 'Waiting for the attachments to upload' : touch ? 'Send' : busy ? 'Send (it waits for the current turn)' : 'Send (Enter; Shift+Enter for a new line)'}
               aria-label="Send"
             >
               {sending ? <span className="spinner spinner-dark" /> : <Icon name="send" size={18} />}

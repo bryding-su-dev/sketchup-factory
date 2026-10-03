@@ -216,6 +216,36 @@ export interface ImageInput {
   id?: string;
 }
 
+/**
+ * A file a person attached to a message (docs/attachments.md): a save, a bug-report zip, a log, a desync report.
+ * Stored once by its SHA-256 in the portal's data folder, never unpacked or run there; served for download only.
+ */
+export interface AttachmentRef {
+  /** "att_" and 12 lowercase letters or digits (shared/attachments.ts ATTACHMENT_ID): what orchestrators pass on. */
+  id: string;
+  /** Its file name as uploaded, made safe (attachmentName). */
+  name: string;
+  size: number;
+  sha256: string;
+  /** What it is from its name alone (never opened): "Final Factory bug report (zip)", "Unity Player.log", ... */
+  kind: string;
+  mediaType: string;
+}
+
+/** An attachment as one agent got it: where its copy is for that agent, or why it is not there. */
+export interface DeliveredAttachment extends AttachmentRef {
+  /** The file the agent reads: its Inbox copy (a worker), or the stored file (an orchestrator). */
+  path?: string;
+  error?: string;
+}
+
+/** The attachment limits the page needs (config attachments). */
+export interface AttachmentSettings {
+  maxBytes: number;
+  retentionDays: number;
+  maxPerMessage: number;
+}
+
 /** Image types Claude accepts. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
@@ -229,7 +259,8 @@ export interface ImageFile {
 /** One persisted transcript entry. Streaming deltas are NOT persisted (see ServerEvent). */
 export type TranscriptEvent =
   /** requestedBy: the person who wrote it (from 'human'), or for whom the orchestrator or the harness sent it. */
-  | { seq: number; t: string; kind: 'user'; text: string; from: 'human' | 'orchestrator' | 'system'; uuid?: string; images?: ImageRef[]; requestedBy?: Requester }
+  /** attachments: the files that came with it (docs/attachments.md), with where this agent's copy is. */
+  | { seq: number; t: string; kind: 'user'; text: string; from: 'human' | 'orchestrator' | 'system'; uuid?: string; images?: ImageRef[]; attachments?: DeliveredAttachment[]; requestedBy?: Requester }
   /** images: the files it shows (shared/imagePaths.ts), kept once copied, so they outlive their folder. */
   | { seq: number; t: string; kind: 'assistant'; text: string; images?: ImageRef[] }
   | { seq: number; t: string; kind: 'thinking'; text: string }
@@ -956,6 +987,8 @@ export interface WorkItem {
   mergedInto?: string;
   /** The workers started, messaged or linked for it. */
   sessionIds: string[];
+  /** Files its person attached (request_work attachments): every worker started for it gets a copy. */
+  attachments?: AttachmentRef[];
   /** What it may repeat, found when it was filed; strongest first. */
   overlaps: WorkOverlap[];
   /** The latest outcome: a worker's last word, or the note it was closed with. */
@@ -1200,7 +1233,7 @@ export interface AppState {
   work?: WorkItem[];
   /** Discord and FFBox intake into the ledger (docs/intake.md); absent from a server older than this field. */
   intake?: IntakeSummary;
-  config: { defaultModel: string; models: string[]; defaultBase: string };
+  config: { defaultModel: string; models: string[]; defaultBase: string; attachments: AttachmentSettings };
   settings: AppSettings;
 }
 
@@ -1269,6 +1302,8 @@ export interface StartSessionRequest {
 export interface SendMessageRequest {
   text: string;
   images?: ImageInput[];
+  /** Ids of files uploaded first (POST /api/attachments, docs/attachments.md). */
+  attachments?: string[];
 }
 
 export interface PermissionDecisionRequest {

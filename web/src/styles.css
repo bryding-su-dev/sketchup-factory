@@ -2463,6 +2463,114 @@ select.input {
   margin: 0 var(--s-2) 2px 0;
 }
 
+/* ---------- attachments (docs/attachments.md): files on their way in the composer, and with sent messages ---------- */
+
+.composer-files,
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.composer-files {
+  padding: 2px 0 6px;
+}
+
+.attach-list {
+  justify-content: flex-end;
+  margin: 2px 0 4px;
+}
+
+.brief .attach-list {
+  justify-content: flex-start;
+  margin: 6px 0 0;
+}
+
+.composer-file,
+.attach-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(100%, 320px);
+  min-height: 32px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+}
+
+.attach-chip {
+  padding-right: 8px;
+  text-decoration: none;
+}
+
+.attach-chip:hover {
+  border-color: var(--accent);
+}
+
+.composer-file.failed,
+.attach-chip.failed {
+  border-color: var(--red);
+}
+
+.composer-file-name,
+.attach-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-file-size,
+.attach-size {
+  flex: none;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-file.failed .composer-file-size,
+.attach-chip.failed .attach-size {
+  color: var(--red);
+}
+
+.composer-file-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--border);
+}
+
+.composer-file-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.composer-file-btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.composer-file-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 /* ---------- permission-mode pill (details) ---------- */
 
 .mode-select select {
@@ -4567,6 +4675,7 @@ select.input {
   }
 
   .composer-images,
+  .composer-files,
   .composer .dictation-bar {
     flex: 0 0 100%;
   }

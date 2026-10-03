@@ -25,6 +25,10 @@ OpenSSH Server: its owner's checklist is in [Setting up a Windows PC](#setting-u
 
 The portal can listen on `127.0.0.1` only. The Macs reach it through its public URL, not a tailnet IP.
 
+Files people attach to messages reach a machine's agents through its daemon, which fetches each one from the portal
+with its machine token into `Inbox/` of the agent's working folder before the message goes on (protocol 7,
+[attachments.md](attachments.md#machines)).
+
 ## Design: a daemon that connects out
 
 Each Mac runs `machine/daemon.ts` as a **LaunchAgent** (`com.fffactory.daemon`, in the user's GUI

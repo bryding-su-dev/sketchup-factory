@@ -48,6 +48,9 @@ export const SETTABLE_KEYS = [
   'machines.useHostClaudeEnv',
   // Who automatic work (scheduled standing runs, intake-triggered FFBox work) is attributed and billed to.
   'systemPayer',
+  // Files people attach to messages (docs/attachments.md): the largest one, and how long one nobody sends on is kept.
+  'attachments.maxMB',
+  'attachments.retentionDays',
   // FFBox's connector (docs/ffbox-integration.md): whether it may connect (default off), and its token,
   // write-only: only its SHA-256 is stored, as providers.ffbox.tokenSha256.
   'providers.ffbox.enabled',
@@ -149,6 +152,16 @@ export function normalizeSetting(key: SettableKey, value: unknown, cfg?: Config)
     case 'usagePollMinutes': {
       const n = Number(value);
       if (!Number.isInteger(n) || n < 5 || n > 240) throw new Error('usagePollMinutes is a whole number of minutes from 5 to 240');
+      return n;
+    }
+    case 'attachments.maxMB': {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1 || n > 4096) throw new Error('attachments.maxMB is a whole number of megabytes from 1 to 4096');
+      return n;
+    }
+    case 'attachments.retentionDays': {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1 || n > 3650) throw new Error('attachments.retentionDays is a whole number of days from 1 to 3650');
       return n;
     }
     case 'limits.maxUnity': {
@@ -263,6 +276,13 @@ export function setAppConfig(file: string, cfg: Config, key: SettableKey, value:
   else if (key === 'limits.maxSandboxes') cfg.limits.maxSandboxes = (v as number | undefined) ?? 4;
   else if (key === 'limits.maxSessions') cfg.limits.maxSessions = (v as number | undefined) ?? 6;
   else if (key === 'publicUrl') cfg.publicUrl = v as string | undefined;
+  else if (key === 'attachments.maxMB' || key === 'attachments.retentionDays') {
+    const field = key === 'attachments.maxMB' ? 'maxMB' : 'retentionDays';
+    const a = { ...cfg.attachments };
+    if (v === undefined) delete a[field];
+    else a[field] = v as number;
+    cfg.attachments = a;
+  }
   else if (key === 'claudeEnv.CLAUDE_CODE_OAUTH_TOKEN') {
     const env = { ...cfg.claudeEnv };
     if (v === undefined) delete env.CLAUDE_CODE_OAUTH_TOKEN;

@@ -19,7 +19,7 @@ export type IconName =
   | 'menu' | 'plus' | 'send' | 'stop' | 'trash' | 'copy' | 'check' | 'x' | 'chevron' | 'back'
   | 'expand' | 'play' | 'power' | 'log' | 'refresh' | 'bell' | 'chat' | 'branch' | 'folder' | 'bot' | 'logout'
   | 'clock' | 'pause' | 'edit' | 'wallet' | 'image' | 'download' | 'paperclip' | 'bellOff' | 'search' | 'mic' | 'wave' | 'more'
-  | 'pulse' | 'alert' | 'inbox' | 'info' | 'tools' | 'arrowDown' | 'bulb' | 'settings' | 'monitor';
+  | 'pulse' | 'alert' | 'inbox' | 'info' | 'tools' | 'arrowDown' | 'bulb' | 'settings' | 'monitor' | 'file';
 
 const PATHS: Record<IconName, ReactNode> = {
   pulse: <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />,
@@ -93,6 +93,12 @@ const PATHS: Record<IconName, ReactNode> = {
   ),
   download: <path d="M12 4v11M7 10l5 5 5-5M5 19h14" />,
   paperclip: <path d="M8 12.5l5.5-5.5a3 3 0 0 1 4.2 4.2l-7 7a5 5 0 0 1-7-7L10 5" />,
+  file: (
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+    </>
+  ),
   edit: <path d="M5 19h4L19 9l-4-4L5 15zM13.5 6.5l4 4" />,
   wallet: <path d="M5 7h13a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zM4 10h15M15.5 14h.01" />,
   logout: <path d="M14 5h4a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-4M10 8l-4 4 4 4M6 12h10" />,
