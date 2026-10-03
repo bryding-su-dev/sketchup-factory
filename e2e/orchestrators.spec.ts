@@ -259,3 +259,38 @@ test('one person messages another: it waits unread in their own chat, opens ther
     await mateCtx.close();
   }
 });
+
+test('the Dispatcher page lists your own requests first within a status and priority, for each login, with a "yours" cue', async ({ authed: page, browser }) => {
+  const mateCtx = await mateContext(browser);
+  try {
+    const tag = uniq('mine');
+    const me = await appState(page.request);
+    const mate = await appState(mateCtx.request);
+    // The teammate's is older, so the ledger alone would list it first.
+    await useTool(mateCtx.request, mate.orchestratorId, 'request_work', { title: `Repaint the conveyor icons ${tag}`, brief: 'Teal.' });
+    const theirs = await workTitled(page.request, `Repaint the conveyor icons ${tag}`);
+    await useTool(page.request, me.orchestratorId, 'request_work', { title: `Speed up loading big saves ${tag}`, brief: 'Minutes now.' });
+    const mine = await workTitled(page.request, `Speed up loading big saves ${tag}`);
+    expect([theirs.status, mine.status, theirs.priority, mine.priority]).toEqual(['new', 'new', 'normal', 'normal']);
+
+    const order = (p: Page) => p.locator('.dispatcher-panel .work-row').evaluateAll((rows) => rows.map((r) => r.getAttribute('data-testid')));
+    const before = (ids: (string | null)[], a: string, b: string) => ids.indexOf(`work-${a}`) < ids.indexOf(`work-${b}`);
+
+    await page.goto('/#/dispatcher');
+    const panel = page.locator('.dispatcher-panel');
+    await expect(panel.getByTestId(`work-${theirs.id}`)).toBeVisible();
+    expect(before(await order(page), mine.id, theirs.id)).toBe(true);
+    await expect(panel.getByTestId(`work-${mine.id}`).getByTestId('work-yours')).toHaveText('· yours');
+    await expect(panel.getByTestId(`work-${theirs.id}`).getByTestId('work-yours')).toHaveCount(0);
+
+    const matePage = await mateCtx.newPage();
+    await matePage.goto('/#/dispatcher');
+    const matePanel = matePage.locator('.dispatcher-panel');
+    await expect(matePanel.getByTestId(`work-${mine.id}`)).toBeVisible();
+    expect(before(await order(matePage), theirs.id, mine.id)).toBe(true);
+    await expect(matePanel.getByTestId(`work-${theirs.id}`).getByTestId('work-yours')).toHaveText('· yours');
+    await expect(matePanel.getByTestId(`work-${mine.id}`).getByTestId('work-yours')).toHaveCount(0);
+  } finally {
+    await mateCtx.close();
+  }
+});
