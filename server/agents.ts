@@ -47,7 +47,7 @@ import { describeTrigger } from './schedule.ts';
 import { describeGit, refreshSandboxGit } from './gitStatus.ts';
 import { displayName } from '../shared/labels.ts';
 import type { StandingAgentInput, StandingTrigger, UnityBlocked } from '../shared/types.ts';
-import { collectResume, orchestratorWasBusy, readUpdateResult, restartSummary, resumeMessage, versionLine, type AppNow, type RestartRequest, type ResumeFile, type ResumeOutcome } from './restart.ts';
+import { collectResume, orchestratorWasBusy, readUpdateResult, restartSummary, resumeMessage, versionLine, waitingOnWakeLine, type AppNow, type RestartRequest, type ResumeFile, type ResumeOutcome } from './restart.ts';
 import { appVersion, formatVersion } from './version.ts';
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
@@ -439,6 +439,8 @@ export class Agents {
     this.orchestrators.remindDispatcher('SketchUp Factory restarted');
     if (!f) {
       const workers = cutOff.filter((i) => i.kind === 'worker');
+      const waiting = waitingOnWakeLine(this.waker.all(), (id) => this.sessions.sessions.get(id)?.info, new Set(workers.map((i) => i.id)), Date.now());
+      if (waiting) notes = [...notes, waiting];
       if (workers.length || notes.length) {
         const list = workers.map((i) => `"${i.title}" (${i.id}${i.sandboxId ? ` in ${i.sandboxId}` : ''})`).join(', ');
         this.notifyDispatcher(
@@ -512,6 +514,8 @@ export class Agents {
       for (const [mid, es] of onMachine) {
         for (const e of es) outcomes.push({ id: e.id, title: e.title, machineId: mid, ok: false, error: `waits for ${mid}'s daemon to be connected and current (redeployed if outdated); resumed after that, and you get a message` });
       }
+      const waiting = waitingOnWakeLine(this.waker.all(), (id) => this.sessions.sessions.get(id)?.info, new Set(f.sessions.map((e) => e.id)), Date.now());
+      if (waiting) extra.push(waiting);
       const summary = restartSummary(f, outcomes, readUpdateResult(this.cfg.dataDir, f.at), now, extra);
       console.log(summary);
       this.notifyDispatcher(summary);

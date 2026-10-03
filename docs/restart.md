@@ -63,7 +63,11 @@ them running instead: no drain message, no stop, and after the restart the ones 
   messages no finished turn had answered, were asked by the drain to pause, or had background tasks
   (a background command, a watcher meant to wake them) that the restart ends. The last are told so,
   to run again or re-arm what still matters.
-- **Idle workers stay idle.**
+- **Idle workers stay idle.** One waiting on a `wake_me` keeps it (below) and is named in the `[app restarted]`
+  report, "Between turns, waiting on their wake_me", with its machine or sandbox and when it fires
+  (`waitingOnWakeLine`). Before w311 the report left such a worker out entirely, so a worker between turns of a long
+  measurement (f6b32781 on lothdesktop/pr-fix, 2026-10-03: turn ended 21:46:53, restart 22:04:30, wake fired on time
+  22:07:36) looked stopped and forgotten.
 - **Workers stopped or interrupted on purpose** (by a person or the orchestrator, since their last
   message) are never resumed, even with messages they had not answered or a drain request.
 
