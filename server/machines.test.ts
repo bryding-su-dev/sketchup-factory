@@ -208,12 +208,10 @@ test('machine: a daemon connects, runs a session, and everything it records land
   assert.equal(sessions.liveAgents(), 0, "a machine's agents do not count toward this host's limit");
   assert.equal(mm.liveCount('mx'), 1);
 
-  // The machine's own limit (1): a second session cannot start while the first is live.
+  // The machine's own limit (1) counts mid-turn agents only (w384): the first is idle, so a second starts at once.
   const s2 = mm.createSession('mx', { kind: 'worker', title: 'w2', permissionMode: 'default' });
-  assert.throws(() => sessions.send(s2.info.id, 'x'), /already 1 agents running in mx's main clone/);
-  s.stop();
-  await until('stopped', () => !s.live);
-  sessions.send(s2.info.id, 'second');
+  assert.equal(mm.placeFull(s2), undefined, 'an idle agent takes no slot');
+  assert.equal(sessions.isQueued(sessions.send(s2.info.id, 'second')), false);
   await until('second turn', () => turnEnds.length === 2);
 });
 

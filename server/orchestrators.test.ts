@@ -12,7 +12,7 @@ import { Identity } from './identity.ts';
 import { PERSONAL_TOOLS, beltFor } from './belts.ts';
 import { FILINGS_PER_MESSAGE, FOLLOW_UPS_PER_MESSAGE, MESSAGES_PER_PERSON, PERSON_MESSAGE_CHARS } from './orchestrators.ts';
 import type { Config } from './config.ts';
-import type { Requester, SessionInfo, TranscriptEvent, UserInfo } from '../shared/types.ts';
+import type { Requester, SessionInfo, TranscriptEvent, UserInfo, WorkItem } from '../shared/types.ts';
 import { fakeQuery } from '../e2e/fakeAgent.ts';
 
 /**
@@ -492,4 +492,51 @@ test('w362: a timer\'s turn carries no one\'s authority: a person-only tool refu
   assert.equal(r.isError, true, 'refused on a timer turn');
   assert.match(r.text, /own words/);
   assert.ok(store.sandboxes.get('alpha'), 'nothing deleted');
+});
+
+// ---------------------------------------------------------------- w384: idle workers
+
+test('w384: the reaper stops idle workers whose request closed, moved on, or that sat an hour, resumably; never a protected one', async (t) => {
+  const { store, sessions, agents } = setup(t);
+  const now = Date.now();
+  const make = async (id: string, over: Partial<SessionInfo> = {}) => {
+    const h = sessions.create({ kind: 'worker', title: id, permissionMode: 'bypassPermissions', options: () => ({ model: 'opus' }) });
+    Object.assign(h.info, over);
+    sessions.send(h.info.id, 'hello');
+    await until(`${id} idle`, () => h.info.status === 'idle');
+    return h;
+  };
+  const request = (id: string, status: WorkItem['status'], sessionIds: string[]) =>
+    store.putWork({ id, title: id, brief: 'x', priority: 'normal', keys: [], requestedBy: BEN, requesters: [BEN], humanAsked: true, status, createdAt: T0, updatedAt: T0, sessionIds, overlaps: [], asks: 0, log: [] });
+  const done = await make('done');
+  request('w1', 'done', [done.info.id]);
+  const handed = await make('handed');
+  const other = await make('other');
+  request('w2', 'active', [handed.info.id, other.info.id]);
+  const quiet = await make('quiet');
+  request('w3', 'active', [quiet.info.id]);
+  quiet.info.lastActivityAt = new Date(now - 61 * 60_000).toISOString();
+  const fresh = await make('fresh');
+  request('w4', 'active', [fresh.info.id]);
+  // Protected: a pending wake_me; a sandbox with uncommitted changes (mp-r2's 4b35b8c1 held uncommitted work).
+  const waking = await make('waking');
+  request('w5', 'done', [waking.info.id]);
+  agents.waker.schedule(waking.info.id, 30, 'check CI');
+  const dirty = await make('dirty', { sandboxId: 'alpha' });
+  request('w6', 'done', [dirty.info.id]);
+  const sb = store.sandboxes.get('alpha')!;
+  store.putSandbox({ ...sb, git: { branch: 'x', dirty: 2, untracked: 0, at: T0 } });
+  // other is the newest worker on w2 and idle a moment: kept.
+  const stopped = agents.reapIdle(now).sort();
+  assert.deepEqual(stopped, [done.info.id, handed.info.id, quiet.info.id].sort());
+  for (const h of [done, handed, quiet]) assert.equal(h.live, false);
+  for (const h of [fresh, other, waking, dirty]) assert.equal(h.live, true, h.info.title);
+  assert.match(agents.keepIdle(waking) ?? '', /wake_me is pending/);
+  assert.match(agents.keepIdle(dirty) ?? '', /2 uncommitted change/);
+  assert.match(store.readTranscript(done.info.id).at(-1)!.kind === 'system' ? (store.readTranscript(done.info.id).at(-1) as { text: string }).text : '', /Stopped by FF Factory while idle: its request is closed \(w1 done\)\. Its history is kept/);
+  // Resumable: a message resumes the stopped one with its history.
+  const sdk = done.info.sdkSessionId;
+  sessions.send(done.info.id, 'one more thing');
+  await until('resumed', () => done.info.status === 'idle' && done.live);
+  assert.equal(done.info.sdkSessionId === sdk || !!done.info.sdkSessionId, true);
 });

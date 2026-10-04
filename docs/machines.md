@@ -98,7 +98,10 @@ before redeploying by hand.
   orchestrator's and this host's workers': [accounts.md](accounts.md).
 - **Limits.** Machine agents run on the Mac, so they do not count toward this host's
   `limits.maxSessions`; each machine has its own limit for its main clone and standing agents (`max_agents`,
-  default 3), and each of its sandboxes its own (`max_agents_per_sandbox`, below).
+  default 3), and each of its sandboxes its own (`max_agents_per_sandbox`, below). Like the host's, they count agents
+  mid-turn only, and a message that finds them full waits in the portal's queue instead of being refused; the daemon's
+  own start check counts the same way, and idle finished workers are stopped by the portal's reaper
+  ([orchestrators.md](orchestrators.md#agent-limits-and-idle-workers), w384).
 - **Awake.** While any agent process is live the daemon holds `caffeinate -i`.
 - **Clean-up.** The daemon cleans its machine's disk by itself (the continuous clean-up,
   [self-recovery.md](self-recovery.md#5-continuous-clean-up)): a pass every hour, every 15 minutes while
@@ -352,7 +355,7 @@ change applies on the next reconnect; omitted on a redeploy: kept):
 |---|---|---|
 | `sandbox_root` | Absolute folder for the sandboxes, e.g. `D:\work\ffsb`; unset: no sandboxes. Moving it is refused while sandboxes exist. | none |
 | `max_sandboxes` | Sandboxes that may exist at once | 3 |
-| `max_agents_per_sandbox` | Agents that may run at once in one sandbox (apart from `max_agents`, the main clone's) | 2 |
+| `max_agents_per_sandbox` | Agents that may be mid-turn at once in one sandbox (apart from `max_agents`, the main clone's); idle ones take no slot, and a message past it is queued | 2 |
 | `max_unity` | Sandbox editors that may run at once (the main clone's editor is not counted) | 2 |
 | `disk_warn_gb` | Below this many GB free on the sandbox volume: no new sandboxes, no new sandbox editors | 50 |
 | `disk_critical_gb` | Below this: idle sandbox editors stop, and agents mid-turn in sandboxes are asked to commit, push and end their turn | 20 |

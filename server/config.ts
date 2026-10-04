@@ -314,7 +314,10 @@ export interface Config {
   protectedPaths: string[];
   limits: {
     maxUnity: number;
+    /** Agents mid-turn at once on this host (w384: idle ones do not count; a message past it is queued). */
     maxSessions: number;
+    /** Idle agent processes kept besides the running ones before the oldest idle one is stopped (default 6). */
+    maxIdleAgents?: number;
     /** Sandboxes that may exist at once (each holds a worktree plus a ~70 GB Library). */
     maxSandboxes: number;
     /** Provisioning refuses to leave less than this many GB free on the sandbox volume. */

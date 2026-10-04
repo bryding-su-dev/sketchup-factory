@@ -11,7 +11,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
-import { AgentSession, type OptionsFactory, type SessionHandle, type SessionSink } from '../server/sessions.ts';
+import { AgentSession, isMidTurn, type OptionsFactory, type SessionHandle, type SessionSink } from '../server/sessions.ts';
 import { bus, type DistributiveOmit } from '../server/store.ts';
 import { CATALOG, buildOptions, type CatalogTool, type LaunchSpec, type ToolHandler } from '../server/launch.ts';
 import { PROTOCOL_VERSION, type FromDaemon, type SignalName, type ToDaemon } from '../server/machineProtocol.ts';
@@ -603,18 +603,26 @@ export class Daemon {
   }
 
   /**
+   * Mid-turn agents in one place (a sandbox, the main clone, or '*' for all sandboxes): what the agent limits count
+   * (w384). Idle agents, their process up or not, take no slot; the portal queues a message until one is free.
+   */
+  private runningIn(sandbox: string | undefined | '*') {
+    return [...this.entries.values()].filter((e) => isMidTurn(e.s.info) && (sandbox === '*' ? !!e.spec?.sandbox : e.spec?.sandbox === sandbox)).length;
+  }
+
+  /**
    * Why a new agent process for `spec` may not start here, or undefined: the main clone takes maxSessions agents, each
    * sandbox maxAgentsPerSandbox, and a sandbox agent needs its sandbox ready at the folder the spec names.
    */
   private startRefusal(spec: LaunchSpec): string | undefined {
-    if (!spec.sandbox) return this.liveIn(undefined) >= this.maxSessions ? `already ${this.maxSessions} agents running in this machine's main clone` : undefined;
+    if (!spec.sandbox) return this.runningIn(undefined) >= this.maxSessions ? `already ${this.maxSessions} agents mid-turn in this machine's main clone` : undefined;
     const sb = this.pool.list().find((s) => s.id === spec.sandbox);
     if (!sb) return `no sandbox "${spec.sandbox}" on this machine`;
     if (sb.status !== 'ready') return `sandbox ${sb.id} is ${sb.status}${sb.statusDetail ? ` (${sb.statusDetail})` : ''}`;
     if (path.resolve(sb.path).toLowerCase() !== path.resolve(spec.cwd).toLowerCase()) return `sandbox ${sb.id} is at ${sb.path}, not ${spec.cwd}`;
     const max = this.poolSettings?.maxAgentsPerSandbox ?? this.cfg.sandboxes?.maxAgentsPerSandbox ?? 2;
-    if (this.liveIn(sb.id) >= max) return `already ${max} agents running in sandbox ${sb.id} (max_agents_per_sandbox)`;
-    const inSandboxes = [...this.entries.values()].filter((e) => e.s.live && e.spec?.sandbox).length;
+    if (this.runningIn(sb.id) >= max) return `already ${max} agents mid-turn in sandbox ${sb.id} (max_agents_per_sandbox)`;
+    const inSandboxes = this.runningIn('*');
     return totalAgentsRefusal(inSandboxes, this.currentPool());
   }
 

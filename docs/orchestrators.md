@@ -214,6 +214,33 @@ A timer is a standing job (`server/timers.ts`):
 
 `/mcp` `ask_orchestrator` and `orchestrator_transcript` talk to the key's person's own orchestrator.
 
+## Agent limits and idle workers
+
+**The limits count agents mid-turn, nothing else** (w384, 2026-10-04: a follow-up to an idle worker was refused with
+"already 6 agents running" while six idle workers held every slot). `limits.maxSessions` (this host), and a machine's
+`max_agents` (main clone), `max_sandbox_agents` (all its sandboxes) and `max_agents_per_sandbox`, count sessions that are
+running, starting or waiting for a permission answer (`isMidTurn`, `server/sessions.ts`). An idle session, its process up
+or not, takes no slot. Orchestrators never count. The Unity editor limits are unchanged.
+
+- **A message never bounces off a full limit.** When every running slot of its place is busy, `SessionManager.send`
+  queues the message (and `start_agent`'s first prompt) in `data/send-queue.json`, which survives a restart, and delivers
+  it, in order, when a turn ends or a process goes (and every 30 s). A message to a session that is mid-turn joins its turn
+  at once, and a later message to a session with one waiting queues behind it. `message_agent` and `start_agent` say
+  "Queued, not refused: …" with the reason. The host guard (disk, RAM, the sandbox drive) still refuses a new process.
+- **Idle processes are capped by stopping, not refusing.** An idle claude process holds memory: measured on BEAST
+  (2026-10-04), 100-300 MB resident and 450-650 MB committed each. Before a new process starts on this host with
+  `limits.maxSessions` + `limits.maxIdleAgents` (default 6) processes up, the oldest idle one that nothing protects is
+  stopped (`SessionManager.makeRoom`).
+- **Idle finished workers are stopped** (`Agents.reapIdle`, every 5 minutes): an idle worker whose requests are all
+  closed, whose requests moved to another worker, or that has been idle for an hour (`IDLE_REAP_MS`). An hour because a
+  follow-up within it reuses the conversation's cached prompt (the hour-long prompt cache); after that a resumed session
+  costs the same, so the process only holds memory.
+- **What keeps an idle worker's process** (`Agents.keepIdle`, for both): mid-turn, unanswered messages or background
+  tasks, a pending permission, a pending `wake_me`, a queued message, or a sandbox (host or machine) with uncommitted
+  tracked changes. Standing agents and orchestrators are never stopped this way.
+- **Stopped is not lost.** The session keeps its history (`sdkSessionId`); `message_agent` resumes it. Its transcript says
+  why it was stopped.
+
 ## Loops, limits and safety
 
 - The dispatcher reaches people only through ledger decisions, one reply per decision.

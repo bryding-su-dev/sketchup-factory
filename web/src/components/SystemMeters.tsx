@@ -102,8 +102,8 @@ export function SystemFooter({ app }: { app: AppState }) {
   const computers = computersOf(app);
   const many = computers.length > 1;
   const unityOn = app.sandboxes.filter((s) => s.unity.state !== 'stopped' && s.unity.state !== 'crashed').length;
-  // Workers and running standing agents on this host share limits.maxSessions; agents on a machine count toward its own limit.
-  const agentsOn = app.sessions.filter((s) => s.kind !== 'orchestrator' && !s.machineId && s.status !== 'stopped' && s.status !== 'error').length;
+  // Agents mid-turn on this host are what limits.maxSessions counts (w384: idle ones take no slot); a machine's count toward its own limit.
+  const agentsOn = app.sessions.filter((s) => s.kind !== 'orchestrator' && !s.machineId && (s.status === 'running' || s.status === 'starting' || s.status === 'waiting_permission')).length;
   const plan = planGlance(app);
   const short = (label: string) => label.replace(/^Weekly\s+/i, '').replace(/^Session \(5 h\)$/i, '5h');
   const Val = ({ pct, children, warn, crit, lvl }: { pct: number; children: ReactNode; warn?: number; crit?: number; lvl?: Lvl }) => <b className={`lvl-${lvl ?? level(pct, warn, crit)}`}>{children}</b>;

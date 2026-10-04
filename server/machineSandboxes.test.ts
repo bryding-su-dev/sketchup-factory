@@ -396,7 +396,15 @@ test('machine sandboxes: create, run agents (per-sandbox limit), drive the edito
   sessions.send(a1.info.id, 'hello');
   await until('a1 live', () => a1.live);
   const a2 = mm.createSession('pc', { kind: 'worker', title: 'a2', permissionMode: 'default', sandbox: 'sb1' });
-  assert.throws(() => sessions.send(a2.info.id, 'x'), /already 1 agents running in sandbox pc\/sb1/);
+  // The limit counts mid-turn agents only (w384): an idle a1 takes no slot; a1 mid-turn makes a2's message wait.
+  await until('a1 idle', () => a1.info.status === 'idle');
+  assert.equal(mm.placeFull(a2), undefined);
+  a1.info.status = 'running';
+  assert.match(mm.placeFull(a2) ?? '', /1 agents mid-turn in sandbox pc\/sb1 \(max_agents_per_sandbox 1\)/);
+  assert.equal(sessions.isQueued(sessions.send(a2.info.id, 'x')), true, 'queued, not refused');
+  a1.info.status = 'idle';
+  sessions.drain();
+  await until('a2 delivered once a1 is idle', () => a2.live && !sessions.queued().length);
   const main = mm.createSession('pc', { kind: 'worker', title: 'main', permissionMode: 'default' });
   sessions.send(main.info.id, 'main clone work');
   await until('main-clone agent live beside it', () => main.live);
@@ -412,9 +420,10 @@ test('machine sandboxes: create, run agents (per-sandbox limit), drive the edito
   assert.equal(r.git(r.main, 'branch', '--show-current'), 'develop', 'the main clone stays where it was');
 
   // Delete: refused while an agent there runs; then gone on both sides.
-  await assert.rejects(mm.deleteSandbox('pc', 'sb1'), /1 agent\(s\) still run in sandbox sb1/);
+  await assert.rejects(mm.deleteSandbox('pc', 'sb1'), /2 agent\(s\) still run in sandbox sb1/);
   a1.stop();
-  await until('a1 stopped', () => !a1.live);
+  a2.stop();
+  await until('a1 and a2 stopped', () => !a1.live && !a2.live);
   assert.match(await mm.deleteSandbox('pc', 'sb1'), /Deleted sandbox sb1/);
   assert.deepEqual(store.machines.get('pc')!.sandboxes, []);
   assert.equal(fs.existsSync(sb.path), false);

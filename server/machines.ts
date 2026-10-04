@@ -7,7 +7,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { WebSocketServer, type WebSocket } from 'ws';
 import { DEFAULT_USAGE_POLL_MINUTES, ROOT, type Config } from './config.ts';
 import { emit, type Store } from './store.ts';
-import type { SessionHandle, SessionManager } from './sessions.ts';
+import { isMidTurn, type SessionHandle, type SessionManager } from './sessions.ts';
 import type { CatalogTool, LaunchSpec, ToolHandler } from './launch.ts';
 import { ADOPT_PROTOCOL, ATTACHMENT_PROTOCOL, PROTOCOL_VERSION, SANDBOX_PROTOCOL, type DaemonSandbox, type FromDaemon, type ToDaemon } from './machineProtocol.ts';
 import type { OutsideWatchConfig } from '../machine/outsideWatch.ts';
@@ -228,6 +228,7 @@ export class MachineManager {
     this.cfg = cfg;
     this.store = store;
     this.sessions = sessions;
+    sessions.placeFull = (s) => this.placeFull(s);
     this.tokensFile = path.join(cfg.dataDir, 'machine-tokens.json');
     // A deploy runs in this process: one still marked at boot was cut short by a restart. Left 'deploying', the
     // offline watch (redeployDue) would never redeploy it; its daemon's hello clears the error if it did start.
@@ -506,6 +507,34 @@ export class MachineManager {
   /** Live agents in one place of a machine: a sandbox, or (sandbox undefined) its main clone and standing agents. */
   liveIn(id: string, sandbox: string | undefined) {
     return [...this.sessions.sessions.values()].filter((s) => s.info.machineId === id && s.info.machineSandbox === sandbox && s.live).length;
+  }
+
+  /**
+   * Mid-turn agents in one place of a machine (sandbox undefined: its main clone), or in all its sandboxes (sandbox
+   * '*'): what max_agents_per_sandbox, max_sandbox_agents and the main clone's max_agents count (w384). Idle agents,
+   * their process up or not, take no slot.
+   */
+  runningIn(id: string, sandbox: string | undefined | '*') {
+    return [...this.sessions.sessions.values()].filter((s) => s.info.machineId === id && (sandbox === '*' ? !!s.info.machineSandbox : s.info.machineSandbox === sandbox) && isMidTurn(s.info)).length;
+  }
+
+  /** Why a message to this machine session must wait for a free running slot, or undefined (SessionManager.placeFull). */
+  placeFull(s: SessionHandle): string | undefined {
+    const m = this.store.machines.get(s.info.machineId ?? '');
+    if (!m) return undefined;
+    const sbId = s.info.machineSandbox;
+    if (sbId) {
+      const pool = poolSettingsOf(m);
+      const max = pool?.maxAgentsPerSandbox ?? 2;
+      const here = this.runningIn(m.id, sbId);
+      if (here >= max) return `${here} agents mid-turn in sandbox ${m.id}/${sbId} (max_agents_per_sandbox ${max})`;
+      const all = this.runningIn(m.id, '*');
+      if (pool?.maxAgents !== undefined && all >= pool.maxAgents) return `${all} agents mid-turn in ${m.id}'s sandboxes (max_sandbox_agents ${pool.maxAgents})`;
+      return undefined;
+    }
+    if (s.info.kind === 'worker' && m.local) return undefined; // refused outright by dispatchSend: no queue for it
+    const main = this.runningIn(m.id, undefined);
+    return main >= m.maxSessions ? `${main} agents mid-turn in ${m.id}'s main clone (max_agents ${m.maxSessions})` : undefined;
   }
 
   /** Re-attach a persisted session on boot. */
@@ -800,14 +829,11 @@ export class MachineManager {
       const sb = this.requireSandbox(m.id, sbId);
       this.requireSandboxDaemon(m.id);
       if (sb.status !== 'ready') throw new Error(`sandbox ${m.id}/${sb.id} is ${sb.status}${sb.statusDetail ? ` (${sb.statusDetail})` : ''}`);
-      const pool = poolSettingsOf(m);
-      const max = pool?.maxAgentsPerSandbox ?? 2;
-      if (this.liveIn(m.id, sb.id) >= max) throw new Error(`already ${max} agents running in sandbox ${m.id}/${sb.id} (max_agents_per_sandbox); stop one first`);
-      const inSandboxes = [...this.sessions.sessions.values()].filter((x) => x.info.machineId === m.id && x.info.machineSandbox && x.live).length;
-      if (pool?.maxAgents !== undefined && inSandboxes >= pool.maxAgents) throw new Error(`already ${inSandboxes} agents running in ${m.id}'s sandboxes (max_sandbox_agents ${pool.maxAgents}); stop one first`);
+      // The agent limits count mid-turn agents only and are waited for, not refused: SessionManager queues a message
+      // until placeFull says a slot is free (w384).
     } else if (!s.live && m.local && s.info.kind === 'worker') {
       throw new Error(`${m.id}'s main clone (${m.repoPath}) is the base its sandboxes are worktrees of: start agents in one of its sandboxes`);
-    } else if (!s.live && this.liveIn(m.id, undefined) >= m.maxSessions) throw new Error(`already ${m.maxSessions} agents running in ${m.id}'s main clone; stop one first`);
+    }
     // The portal's own host: its guard's gate (disk space, the sandbox drive, RAM) holds new agent processes there too.
     const gate = !s.live && m.local && from !== 'system' ? this.localGate?.('agent') : undefined;
     if (gate) throw new Error(`not started: ${gate}`);

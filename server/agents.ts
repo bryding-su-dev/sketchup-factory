@@ -18,7 +18,7 @@ import { openUnity, unityMcpServerFor, type SceneState, type UnityBridge } from 
 import { ARTIFACT_ENV, CATALOG, connectorAllowlist } from './launch.ts';
 import { COMPILE_DONE, COMPILE_FAILED, activityLine, readSince, Waker } from './wake.ts';
 import { TIMER_LIMITS, Timers, scheduleText, type TimerView } from './timers.ts';
-import { AgentSession, snapshotOf, type OptionsFactory, type SessionHandle, type SessionManager } from './sessions.ts';
+import { AgentSession, isMidTurn, snapshotOf, type OptionsFactory, type SessionHandle, type SessionManager } from './sessions.ts';
 import { HostMigrator, hostSandboxFrom } from './hostMigration.ts';
 import { WORK_OPEN, WORK_PRIORITIES, type AttachmentRef, type DeliveredAttachment, type ImageInput, type PermissionMode, type Requester, type Sandbox, type SessionInfo, type TranscriptEvent, type WorkItem, type WorkPriority, type WorkStatus } from '../shared/types.ts';
 import { attachmentForMachine, publicRef, type AttachmentStore } from './attachments.ts';
@@ -166,6 +166,15 @@ const DISK_HYGIENE = `## Disk space
 Disk space is shared and runs out: when it does, new agents and editors wait. Your TMP, TEMP and TMPDIR point to a temp folder of your own, removed a few hours after your session ends. Put scratch there (builds, recordings, screenshot sets, clones for a one-off look), not in your home folder or the working tree. Once you have reported a build, a recording or a batch of screenshots, delete it unless the user must still see it; keep only the proofs your report links. Never delete other agents' or the user's files to make room: tell the user instead.`;
 
 /** Wires the managers into Claude: the orchestrator's tool belt, and each worker's options and brief. */
+/** The idle-worker reaper's look (w384). */
+const REAP_EVERY_MS = 5 * 60_000;
+/**
+ * An idle worker's process is stopped after this long (w384). Measured on BEAST (2026-10-04): an idle claude process holds
+ * 100-300 MB resident and 450-650 MB committed. Kept within the hour, a follow-up reuses its cached prompt (the hour-long
+ * prompt cache); after it, a resumed session pays the same either way, so the process only costs memory.
+ */
+const IDLE_REAP_MS = 60 * 60_000;
+
 export class Agents {
   private readonly cfg: Config;
   private readonly store: Store;
@@ -212,6 +221,10 @@ export class Agents {
     this.machines = machines;
     this.identity = identity;
     this.waker = new Waker(sessions, store, path.join(cfg.dataDir, 'wakes.json'));
+    // IDLE WORKERS (w384): what keeps one from being stopped to make room, and the reaper of finished ones.
+    sessions.keepIdle = (s) => this.keepIdle(s);
+    const reap = setInterval(() => this.reapIdle(), REAP_EVERY_MS);
+    reap.unref?.();
     this.timers = new Timers(
       {
         exists: (id) => this.sessions.sessions.has(id) && this.sessions.get(id).info.kind === 'orchestrator',
@@ -311,6 +324,61 @@ export class Agents {
     sessions.events.on('permission', (s: SessionHandle, p: { toolName: string; input: unknown }) => this.onWorkerPermission(s, p));
     // The watchdog's alarms. Push notifications to the user (when the app has them) belong on this same event.
     sandboxes.events.on('blocked', (sb, b) => this.onUnityBlocked(sb, b));
+  }
+
+  /**
+   * Why an idle agent must keep its process (w384), or undefined: never a standing agent or an orchestrator, a session
+   * mid-turn or with something unanswered, one whose wake_me is pending, one with a queued message, one waiting for a
+   * permission, nor a worker whose sandbox has uncommitted changes (what it was doing there is in its process's context
+   * and its history; nothing it holds in the worktree is lost by a stop, but the person may want it as it is).
+   */
+  keepIdle(s: SessionHandle): string | undefined {
+    const i = s.info;
+    if (i.kind !== 'worker') return `a ${i.kind}`;
+    if (isMidTurn(i)) return 'mid-turn';
+    const snap = snapshotOf(s);
+    if (snap.unanswered.length || snap.turnOpen || (snap.backgroundTasks ?? 0) > 0) return 'it has unanswered messages or background tasks';
+    if (i.pendingPermissions.length) return 'it waits for a permission answer';
+    if (this.waker.pending(i.id)) return 'its wake_me is pending';
+    if (this.sessions.queued().some((q) => q.id === i.id)) return 'a message to it is queued';
+    const git = i.sandboxId ? this.store.sandboxes.get(i.sandboxId)?.git : i.machineId && i.machineSandbox ? this.store.machines.get(i.machineId)?.sandboxes?.find((x) => x.id === i.machineSandbox)?.git : undefined;
+    if (git && git.dirty > 0) return `its sandbox has ${git.dirty} uncommitted change(s)`;
+    return undefined;
+  }
+
+  /** " Queued: …" when a message to this session waits for a free running slot (w384), else "". */
+  private queuedLine(id: string): string {
+    const q = this.sessions.queued().filter((x) => x.id === id);
+    return q.length ? ` Queued, not refused: ${q[0].why}; it is delivered as soon as a slot frees (nothing to resend).` : '';
+  }
+
+  /** Why an idle worker's process should go (w384), or undefined: its requests are closed, handed to another worker, or it has been idle an hour. */
+  reapWhy(s: SessionHandle, now = Date.now()): string | undefined {
+    const i = s.info;
+    if (!s.live || i.kind !== 'worker' || isMidTurn(i)) return undefined;
+    const items = [...this.store.work.values()].filter((w) => w.sessionIds.includes(i.id) && w.status !== 'merged');
+    if (items.length && items.every((w) => !WORK_OPEN.includes(w.status))) return `its request${items.length > 1 ? 's are' : ' is'} closed (${items.map((w) => `${w.id} ${w.status}`).join(', ')})`;
+    if (items.length && items.every((w) => w.sessionIds.at(-1) !== i.id)) return `its request${items.length > 1 ? 's are' : ' is'} with another worker now (${items.map((w) => `${w.id}: ${w.sessionIds.at(-1)}`).join(', ')})`;
+    const idle = now - Date.parse(i.lastActivityAt);
+    if (idle >= IDLE_REAP_MS) return `idle for ${Math.round(idle / 60_000)} min`;
+    return undefined;
+  }
+
+  /**
+   * Stop idle workers whose work is over (reapWhy), unless something keeps them (keepIdle). Stopped on purpose, not lost:
+   * a message (message_agent) resumes the session with its whole history. Returns the ids stopped.
+   */
+  reapIdle(now = Date.now()): string[] {
+    const out: string[] = [];
+    for (const s of [...this.sessions.sessions.values()]) {
+      const why = this.reapWhy(s, now);
+      if (!why || this.keepIdle(s)) continue;
+      this.store.append(s.info.id, { kind: 'system', text: `Stopped by FF Factory while idle: ${why}. Its history is kept: a message resumes it.` });
+      s.stop(true);
+      out.push(s.info.id);
+      console.log(`agents: stopped idle worker ${s.info.id} (${why})`);
+    }
+    return out;
   }
 
   /**
@@ -1688,7 +1756,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
               item = `; recorded in the ledger as ${this.orchestrators.recordStart(s.info, a.prompt, requestedBy, `started over /mcp for ${requestedBy.displayName}: worker ${s.info.id} ${where}`, from === 'human')}`;
             }
             const withFiles = files.length ? ` It gets ${files.length === 1 ? 'the attachment' : `${files.length} attachments`} (${files.map((f) => f.id).join(', ')}) in ${INBOX_DIR}/.` : '';
-            return `Started agent ${s.info.id} "${s.info.title}" ${where}, requested by ${requestedBy.displayName}${item}.${withFiles}${Agents.goneLine(files)}`;
+            return `Started agent ${s.info.id} "${s.info.title}" ${where}, requested by ${requestedBy.displayName}${item}.${withFiles}${Agents.goneLine(files)}${this.queuedLine(s.info.id)}`;
           }),
         ),
         ...this.machineToolSpecs(tool, from),
@@ -1706,7 +1774,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
               const files = this.attachmentsFor(attachments);
               this.orchestrators.followUp(this.sessions.get(ctx.sessionId!).info, w.info);
               await this.sendWithAttachments(session_id, text, from, { requestedBy: ctx.owner, attachments: files });
-              return `Sent, for ${ctx.owner?.displayName}${sent(files.length)}.`;
+              return `Sent, for ${ctx.owner?.displayName}${sent(files.length)}.${this.queuedLine(session_id)}`;
             }
             const requestedBy = actor(for_user, work_id);
             const item = work_id ? this.orchestrators.requireWork(work_id) : undefined;
@@ -1715,7 +1783,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
             const files = this.attachmentsFor(attachments, linked ? undefined : item);
             await this.sendWithAttachments(session_id, item?.source && !linked ? `${text}${workerRules(item)}` : text, from, { requestedBy, attachments: files });
             if (work_id) this.orchestrators.linkWorker(work_id, w.info, `sent to ${this.orchestrators.workerLine(w.info.id)}, already on it`);
-            return `Sent, for ${requestedBy.displayName}${work_id ? ` (${work_id})` : ''}${sent(files.length)}.${Agents.goneLine(files)}`;
+            return `Sent, for ${requestedBy.displayName}${work_id ? ` (${work_id})` : ''}${sent(files.length)}.${Agents.goneLine(files)}${this.queuedLine(session_id)}`;
           }),
         ),
         tool(
@@ -1939,7 +2007,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
         ),
         tool(
           'set_app_config',
-          `Change one cosmetic setting of this app in its config.json (the old file is kept as config.json.prev). It applies at once and survives restarts. Allowed keys only: ${SETTABLE_KEYS.join(', ')}. ownerName: the user's name, which agents' prompts then use (new sessions); voice.vocabulary: extra words the speech-to-text should spell right (a list, or one comma-separated string); voice.ttsVoice: the default Kokoro voice ("af_heart", "bm_george", …); publicGitIdentity.name / .email: the identity agents commit with in public repos such as this app's own (the guard refuses pushes there with other emails; GitHub noreply addresses are always fine); hostGuard.devDriveVhdx: the sandbox Dev Drive's .vhdx path; publicUrl: the portal's base URL that machines and the outside watchdog reach it at (the Tailscale Funnel URL); claudeEnv.CLAUDE_CODE_OAUTH_TOKEN: the Claude account's OAuth token the agents run on (sk-ant-oat01-…, from "claude setup-token"), write-only: it is never shown back, only "set (…last 4)", and redacted from transcripts; userClaudeEnv.CLAUDE_CODE_OAUTH_TOKEN (with user: a user id): that person's own Claude token, which agents working for them run on instead (same rules; only when that person asked for it); claudeAccounts.orchestrator / .workers / .standing: which Claude account this host's orchestrator (you), sandbox workers and standing agents run on: "token" (claudeEnv's token, the default) or "login" (the claude.ai login stored on this host; refused when none is stored or it has expired); a person's own token still wins for their work; machines.useHostClaudeEnv (optionally with machine: a machine id): true (default) runs that Mac's agents (workers and standing agents there) on this host's token, false on the Mac's own login; without machine it sets every machine not named; systemPayer: the user id automatic work (scheduled standing runs, intake-triggered FFBox work) is attributed and billed to (default the owner); providers.ffbox.enabled: true lets FFBox's connector connect (read-only reports: capacity, conversations, intake), false drops it at once (default false); providers.ffbox.token: FFBox's connector token (ffpv1_…), write-only, stored only as its SHA-256; limits.maxUnity: how many Unity editors may run at once on this host (1-8, default 3; applies to the next start, running editors are not stopped); limits.maxSandboxes: how many sandboxes may exist (1-8, default 4); limits.maxSessions: how many agents may run at once on this host (1-12, default 6); both apply at once; attachments.maxMB: the largest file a person may attach to a message (1-4096 MB, default 200); attachments.retentionDays: how many days an attached file nobody sent on is kept (1-3650, default 30) (docs/attachments.md); hostGuard.cleanup.ageRules: JSON list of { "path", "olderThanDays" (>= 3) } whose old entries each clean-up pass removes (never a drive root, the home folder, the sandboxes, this app or a protected path); hostGuard.cleanup.everyMinutes: how often this host's clean-up runs (0 = only below the soft threshold, else 15-1440, default 60); hostGuard.cleanup.softFreeGB: below this much free space it runs every 15 minutes with the cache-emptying rules, and tells you when it cannot get back above (default warnFreeGB + 40 = 120; must be above warnFreeGB); machines.cleanup.everyMinutes / machines.cleanup.softFreeGB (optionally with machine): the same for the machines' daemons (defaults 60 and 80 GB). usagePollMinutes: how often every Claude account's plan usage is polled, here and by the machines' daemons (5-240, default 15; the usage endpoint rate-limits). value null removes the key (back to the default). Only when the user asked for the change.`,
+          `Change one cosmetic setting of this app in its config.json (the old file is kept as config.json.prev). It applies at once and survives restarts. Allowed keys only: ${SETTABLE_KEYS.join(', ')}. ownerName: the user's name, which agents' prompts then use (new sessions); voice.vocabulary: extra words the speech-to-text should spell right (a list, or one comma-separated string); voice.ttsVoice: the default Kokoro voice ("af_heart", "bm_george", …); publicGitIdentity.name / .email: the identity agents commit with in public repos such as this app's own (the guard refuses pushes there with other emails; GitHub noreply addresses are always fine); hostGuard.devDriveVhdx: the sandbox Dev Drive's .vhdx path; publicUrl: the portal's base URL that machines and the outside watchdog reach it at (the Tailscale Funnel URL); claudeEnv.CLAUDE_CODE_OAUTH_TOKEN: the Claude account's OAuth token the agents run on (sk-ant-oat01-…, from "claude setup-token"), write-only: it is never shown back, only "set (…last 4)", and redacted from transcripts; userClaudeEnv.CLAUDE_CODE_OAUTH_TOKEN (with user: a user id): that person's own Claude token, which agents working for them run on instead (same rules; only when that person asked for it); claudeAccounts.orchestrator / .workers / .standing: which Claude account this host's orchestrator (you), sandbox workers and standing agents run on: "token" (claudeEnv's token, the default) or "login" (the claude.ai login stored on this host; refused when none is stored or it has expired); a person's own token still wins for their work; machines.useHostClaudeEnv (optionally with machine: a machine id): true (default) runs that Mac's agents (workers and standing agents there) on this host's token, false on the Mac's own login; without machine it sets every machine not named; systemPayer: the user id automatic work (scheduled standing runs, intake-triggered FFBox work) is attributed and billed to (default the owner); providers.ffbox.enabled: true lets FFBox's connector connect (read-only reports: capacity, conversations, intake), false drops it at once (default false); providers.ffbox.token: FFBox's connector token (ffpv1_…), write-only, stored only as its SHA-256; limits.maxUnity: how many Unity editors may run at once on this host (1-8, default 3; applies to the next start, running editors are not stopped); limits.maxSandboxes: how many sandboxes may exist (1-8, default 4); limits.maxSessions: how many agents may be mid-turn at once on this host (1-12, default 6; idle ones do not count, and a message past it is queued); both apply at once; attachments.maxMB: the largest file a person may attach to a message (1-4096 MB, default 200); attachments.retentionDays: how many days an attached file nobody sent on is kept (1-3650, default 30) (docs/attachments.md); hostGuard.cleanup.ageRules: JSON list of { "path", "olderThanDays" (>= 3) } whose old entries each clean-up pass removes (never a drive root, the home folder, the sandboxes, this app or a protected path); hostGuard.cleanup.everyMinutes: how often this host's clean-up runs (0 = only below the soft threshold, else 15-1440, default 60); hostGuard.cleanup.softFreeGB: below this much free space it runs every 15 minutes with the cache-emptying rules, and tells you when it cannot get back above (default warnFreeGB + 40 = 120; must be above warnFreeGB); machines.cleanup.everyMinutes / machines.cleanup.softFreeGB (optionally with machine): the same for the machines' daemons (defaults 60 and 80 GB). usagePollMinutes: how often every Claude account's plan usage is polled, here and by the machines' daemons (5-240, default 15; the usage endpoint rate-limits). value null removes the key (back to the default). Only when the user asked for the change.`,
           {
             key: z.enum(SETTABLE_KEYS),
             value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.array(z.object({ path: z.string(), olderThanDays: z.number() })), z.null()]),
