@@ -443,3 +443,53 @@ test('message_person: a message to an orchestrator mid-turn waits for that turn,
   assert.equal((await call(chat(LOTH).info, 'message_person', { to: 'ben', text: 'The portal deploy: now or tonight?' })).isError, false);
   await until('both answered', () => store.readTranscript(ben.info.id).some((e) => e.kind === 'assistant' && e.text.includes('The portal deploy: now or tonight?')), 15_000);
 });
+
+// ---------------------------------------------------------------- w362: timers
+
+test('w362: set_timer, list_timers, update_timer, cancel_timer are each orchestrator\'s own; a person writing cancels wake_me, never a timer', async (t) => {
+  const { agents, o, chat, call, dispatcher } = setup(t);
+  const ben = chat(BEN);
+  const set = await call(ben.info, 'set_timer', { title: 'FFBox desync scan', note: 'Check FFBox for new desync PRs and tell Ben.', schedule: { every_minutes: 60 } });
+  assert.equal(set.isError, false, set.text);
+  const id = /Timer (t-[0-9a-f]{8})/.exec(set.text)![1];
+  assert.match(set.text, /every 1 h, next at /);
+  const wake = await call(ben.info, 'wake_me', { minutes: 30, note: 'check the belt fix' });
+  assert.equal(wake.isError, false, wake.text);
+  // Ben writes to his orchestrator (the remote path; the message route does the same: waker.cancel, personWrote, send).
+  await agents.askOrchestrator('How is it going?', 1, 'test', BEN);
+  assert.equal(agents.waker.pending(ben.info.id), undefined, 'wake_me: cancelled by a person writing, as before');
+  const listed = await call(ben.info, 'list_timers', {});
+  assert.match(listed.text, new RegExp(`${id} "FFBox desync scan" \\[active\\] every 1 h, next `), 'the timer is untouched');
+  // Lothsahn's orchestrator neither sees nor touches it.
+  const loth = chat(LOTH);
+  assert.match((await call(loth.info, 'list_timers', {})).text, /^No timers/);
+  const theirs = await call(loth.info, 'cancel_timer', { id });
+  assert.equal(theirs.isError, true);
+  assert.match(theirs.text, /no timer .* of yours/);
+  // Pause, change, cancel: Ben's own.
+  assert.match((await call(ben.info, 'update_timer', { id, enabled: false })).text, /paused/);
+  assert.match((await call(ben.info, 'update_timer', { id, enabled: true, schedule: { daily: '09:30', tz: 'Europe/Berlin' } })).text, /daily at 09:30 \(Europe\/Berlin\), next at /);
+  assert.match((await call(ben.info, 'cancel_timer', { id })).text, /cancelled/);
+  assert.match((await call(ben.info, 'list_timers', {})).text, /\[ended\].*\(cancelled\)/s);
+  // The dispatcher has timers of its own.
+  const ds = await call(dispatcher().info, 'set_timer', { title: 'ledger sweep', note: 'n', schedule: { every_minutes: 30 } });
+  assert.equal(ds.isError, false, ds.text);
+  assert.equal(agents.timers.list(dispatcher().info.id).length, 1);
+  assert.equal(agents.timers.list(o.personalFor(BEN).info.id).length, 1, 'still only Ben\'s own (ended) one');
+});
+
+test('w362: a timer\'s turn carries no one\'s authority: a person-only tool refuses it', async (t) => {
+  const { agents, store, dispatcher, call } = setup(t);
+  const d = dispatcher();
+  agents.timers.create(d.info.id, { title: 'cleanup', note: 'Delete sandbox alpha.', schedule: { every_minutes: 5 } }, 'ben');
+  const real = agents.timers.now;
+  agents.timers.now = () => Date.now() + 6 * 60_000;
+  agents.timers.tick();
+  agents.timers.now = real;
+  const got = store.readTranscript(d.info.id).filter((e) => e.kind === 'user' && e.from === 'system' && e.text.startsWith('[timer '));
+  assert.equal(got.length, 1, 'delivered as the harness\'s message');
+  const r = await call(d.info, 'delete_sandbox', { sandbox: 'alpha' });
+  assert.equal(r.isError, true, 'refused on a timer turn');
+  assert.match(r.text, /own words/);
+  assert.ok(store.sandboxes.get('alpha'), 'nothing deleted');
+});

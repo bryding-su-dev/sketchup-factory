@@ -294,3 +294,32 @@ test('the Dispatcher page lists your own requests first within a status and prio
     await mateCtx.close();
   }
 });
+
+test('w362: your orchestrator sets a timer, your Timers button lists it with pause and cancel, and nobody else sees it', async ({ authed: page, browser }) => {
+  const me = await appState(page.request);
+  const title = `desync scan ${uniq('timer')}`;
+  const answer = await useTool(page.request, me.orchestratorId, 'set_timer', { title, note: 'Check FFBox for new desync PRs.', schedule: { every_minutes: 60 } });
+  expect(answer).toMatch(/^Timer t-[0-9a-f]{8} ".*": every 1 h, next at /);
+  const id = /Timer (t-[0-9a-f]{8})/.exec(answer)![1];
+  await page.reload();
+  await page.locator('.orch [data-testid="timers-button"]').click();
+  const row = page.locator(`[data-testid="timer-${id}"]`);
+  await expect(row).toContainText(title);
+  await expect(row).toContainText('every 1 h');
+  await expect(row).toContainText('Check FFBox for new desync PRs.');
+  await row.getByRole('button', { name: `Pause ${title}` }).click();
+  await expect(row).toContainText('paused');
+  await expect(row.getByRole('button', { name: `Resume ${title}` })).toBeVisible();
+  const mine = await (await page.request.get(`/api/timers/${me.orchestratorId}`)).json();
+  expect(mine.timers.find((x: { id: string }) => x.id === id).state).toBe('paused');
+  // Someone else's timers are not theirs to see or touch.
+  const mateCtx = await mateContext(browser);
+  try {
+    expect((await mateCtx.request.get(`/api/timers/${me.orchestratorId}`)).status()).toBe(403);
+    expect((await mateCtx.request.post(`/api/timers/${me.orchestratorId}/${id}`, { data: { action: 'cancel' } })).status()).toBe(403);
+  } finally {
+    await mateCtx.close();
+  }
+  await row.getByRole('button', { name: `Cancel ${title}` }).click();
+  await expect(row).toContainText('ended');
+});

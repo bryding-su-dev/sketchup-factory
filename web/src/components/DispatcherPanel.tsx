@@ -9,6 +9,7 @@ import { Markdown } from './Markdown';
 import { SessionView } from './SessionView';
 import { accountOf } from './SystemMeters';
 import { Chip, Confirm, Dot, Icon, Menu } from './ui';
+import { TimersButton } from './Timers';
 
 type Tab = 'requests' | 'intake' | 'conversation';
 
@@ -81,6 +82,7 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
           <Dot tone={glance.tone} pulse={isBusy(session)} />
           <h2 className="ellipsis">Dispatcher</h2>
           <div className="spacer" />
+          {owner && session && <TimersButton sessionId={session.id} label="Dispatcher" />}
           {owner && session && (
             <Menu label="Dispatcher options">
               {(close) => (

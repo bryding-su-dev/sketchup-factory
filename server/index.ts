@@ -8,6 +8,7 @@ import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, publi
 import { Store, bus } from './store.ts';
 import { SandboxManager } from './sandboxes.ts';
 import { SessionManager, snapshotOf } from './sessions.ts';
+import { TIMER_LIMITS } from './timers.ts';
 import { Agents } from './agents.ts';
 import { MachineManager, machineForPath, parseSandboxRef } from './machines.ts';
 import { hostSandboxFrom } from './hostMigration.ts';
@@ -598,6 +599,31 @@ route('POST', '/api/sessions/([\\w-]+)/seen', async (req, [id]) => {
   return {};
 });
 
+// ---- orchestrator timers (server/timers.ts, docs/orchestrators.md "Timers"): its person sees and pauses or cancels
+// their own orchestrator's; the dispatcher's only an owner (mayDrive). Nobody else sees them.
+route('GET', '/api/timers/([\\w-]+)', async (req, [id]) => {
+  const s = sessions.get(id);
+  if (s.info.kind !== 'orchestrator') throw new HttpError(400, 'timers belong to orchestrators');
+  mayDrive(req, s.info);
+  return { timers: agents.timers.list(id), deliveredToday: agents.timers.deliveredToday(id), limits: TIMER_LIMITS };
+});
+route('POST', '/api/timers/([\\w-]+)/([\\w-]+)', async (req, [id, timerId]) => {
+  const s = sessions.get(id);
+  if (s.info.kind !== 'orchestrator') throw new HttpError(400, 'timers belong to orchestrators');
+  mayDrive(req, s.info);
+  const { action } = await readJson<{ action?: string }>(req);
+  try {
+    if (action === 'pause') agents.timers.update(id, timerId, { enabled: false });
+    else if (action === 'resume') agents.timers.update(id, timerId, { enabled: true });
+    else if (action === 'cancel') agents.timers.cancel(id, timerId);
+    else throw new HttpError(400, 'action: pause, resume or cancel');
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(400, (e as Error).message);
+  }
+  return { timers: agents.timers.list(id), deliveredToday: agents.timers.deliveredToday(id), limits: TIMER_LIMITS };
+});
+
 /** Validate images sent with a message. */
 function checkImages(images: unknown): ImageInput[] {
   if (images === undefined) return [];
@@ -804,10 +830,17 @@ route('POST', '/api/orchestrator/reset', async (req) => {
   const { which } = await readJson<{ which?: 'mine' | 'dispatcher' }>(req);
   const me = requesterOf(req);
   let id: string;
+  let was: string | undefined;
   if (which === 'dispatcher') {
     if (identity.get(me.userId)?.role !== 'owner') throw new HttpError(403, 'only the owner resets the dispatcher');
+    was = agents.dispatcherId;
     id = agents.newDispatcher().info.id;
-  } else id = agents.orchestrators.resetPersonal(me).info.id;
+  } else {
+    was = agents.orchestrators.personalOf(me.userId)?.info.id;
+    id = agents.orchestrators.resetPersonal(me).info.id;
+  }
+  // A fresh conversation keeps its standing timers (server/timers.ts): they are the person's jobs, not the transcript's.
+  if (was) agents.timers.rehome(was, id);
   // Each page has its own home chat, so each gets its own state.
   for (const [c, user] of clients) if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'state', state: appState(user) } satisfies ServerEvent));
   return { id };

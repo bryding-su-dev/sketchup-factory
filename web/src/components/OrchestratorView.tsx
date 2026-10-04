@@ -9,6 +9,7 @@ import { AttentionButton, DrawerButton } from './ShellButtons';
 import { Confirm, Icon, Menu, StateText } from './ui';
 import { chatOwner, fmtCost, fmtRelative, sessionLabel, sessionTone, useNow } from '../util';
 import { accountOf } from './SystemMeters';
+import { TimersButton } from './Timers';
 
 const SUGGESTIONS = ["What's running, and what needs me?", 'Start work on spec 098', 'Play the tutorial single-player and log the bugs', 'Read the Discord forums and find bugs'];
 
@@ -128,6 +129,7 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
             <Icon name="pulse" size={13} /> {heartbeat} min
           </span>
         )}
+        <TimersButton sessionId={session.id} />
         {!compact && <AttentionButton />}
         <Menu label="Conversation options" className="orch-menu">
           {(close) => (

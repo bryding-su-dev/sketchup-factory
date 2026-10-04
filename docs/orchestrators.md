@@ -14,7 +14,8 @@ person. It runs on their own Claude token when config `userClaudeEnv` has one, o
 
 - read everything: `list_sandboxes`, `list_machines`, `list_branches`, `agent_transcript`, `search_transcripts`,
   `system_status`, `ffbox_activity`, `max_activity`, `list_standing_agents`, `list_delegation_requests`;
-- its own `wake_me`, and its person's heartbeat (`set_heartbeat`);
+- its own `wake_me`, its own timers (`set_timer`, `list_timers`, `update_timer`, `cancel_timer`; [Timers](#timers)), and
+  its person's heartbeat (`set_heartbeat`);
 - `message_agent`, only to its person's own workers (they started it, or one of their requests is on it);
 - the ledger: `request_work`, `list_work`, `update_work`;
 - `message_person`, to another person's own orchestrator ([People to people](#people-to-people)).
@@ -159,6 +160,39 @@ The folder sits in `data/`, which workers' guard already protects (`server/guard
 orchestrator's memory either. Workers and standing agents are unchanged. Reading stays as before: an orchestrator can
 read any file, other orchestrators' memory included.
 
+## Timers
+
+Lothsahn (w362): "give yourself the ability to set timers in the FF Factory harness itself, so you don't have to keep
+reminding yourself to do things in the chat." `wake_me` is one pending, one-off check-in that a person's message cancels.
+A timer is a standing job (`server/timers.ts`):
+
+- **Tools**, for each personal orchestrator and the dispatcher (a remote client's go to its person's own orchestrator):
+  `set_timer {title, note, schedule, jitter_minutes?, until?, max_fires?, skip_if_busy?}` answers its id;
+  `list_timers`; `update_timer {id, …}` (any field, or `enabled` false to pause and true to resume, counting on from now
+  with nothing owed for the pause); `cancel_timer {id}`. `schedule` is one of `at` (once, an ISO time), `every_minutes`
+  (at least 5) or `daily` ("HH:MM", with an optional IANA `tz`, default the server's).
+- **Kept** in `data/timers.json` through the crash-safe writer (`server/durable.ts`), so a restart loses none. A person's
+  message does not touch a timer (it still cancels `wake_me`); a timer stops only by `cancel_timer`, a pause, its `until`,
+  its `max_fires`, its one fire, or its person in the UI. "New conversation" keeps them: they move to the new session
+  (`Timers.rehome`).
+- **Firing.** A tick every 30 s marks each due timer and moves it on. The fire is delivered as the harness's message,
+  `[timer <id> "<title>"] <note>`, waking the orchestrator when it is idle; mid-turn, it waits for the turn's end
+  (`turnEnd`) and is never dropped. Timers due together go in one message. A fire that comes while one still waits joins
+  it ("fired 3 times since it was last delivered"). What came due while FF Factory was down goes once at startup, with
+  the count ("5 fire(s) missed while FF Factory was down"), and the next fire is set from now, not a burst. With
+  `skip_if_busy`, a fire during a turn is skipped instead.
+- **Caps, and why.** 20 active timers per orchestrator (standing jobs are a handful; more is a loop). Every N minutes
+  at least 5 (anything faster belongs in code, not a model's turn). 96 timer messages per orchestrator in any 24 hours,
+  one every 15 minutes all day: messages are turns, which is what costs tokens, and coalescing means one message per
+  turn whatever is due. Past the budget, fires wait, coalesced, until a message fits the window, and that message says
+  so. A runaway timer costs at most 96 short turns a day. `TIMER_LIMITS` in `server/timers.ts`.
+- **No authority.** The message is `system`, so the turn is not a person's (`turnFrom`): the dispatcher's destructive
+  and admin tools refuse it, as do approvals, and a personal orchestrator's per-message budgets do not reset.
+- **Who sees them.** Only the owning orchestrator (its tools take only its own ids) and, in the UI, its person: the
+  Timers button in your chat's header, and the dispatcher's for owners (`GET /api/timers/<orchestrator id>`, `POST
+  /api/timers/<orchestrator id>/<timer id> {action: pause|resume|cancel}`, guarded like writing to that chat). It lists
+  each timer's schedule, next and last fire, state and note, and the day's messages against the budget.
+
 ## Where messages go
 
 | message | to |
@@ -172,6 +206,7 @@ read any file, other orchestrators' memory included.
 | `[unity blocked]` | the dispatcher, and the people whose workers are in that sandbox |
 | `[app restarted]`, `[machines]`, `[unity]`, `[host]`, the orchestrator inbox | the dispatcher. A person's orchestrator cut off mid-turn by a restart is told to pick its turn up again |
 | `[heartbeat]` | each person's own orchestrator, with that person's busy workers, when they turned it on |
+| `[timer <id> "<title>"]` | the orchestrator that set the timer ([Timers](#timers)): after its current turn, coalesced |
 | `[person message]` | the recipient's own orchestrator (message_person), and a notification to the recipient alone |
 | `[work request]` marked intake | the dispatcher, once approved (by a reviewer, or an auto-approve rule for an obvious bug), gathered a minute at a time ([intake.md](intake.md)) |
 | `[intake question]` | the reviewers' own orchestrators, when a worker on an intake request stops at a design decision |
@@ -215,7 +250,8 @@ read any file, other orchestrators' memory included.
   Could you run the firewall script on BEAST?"); Open goes to their chat. Until you open your chat, the sidebar's
   Orchestrator row has an amber count ("Unread: 1 message from Lothsahn"), and your devices get a "Message from
   Lothsahn" notification.
-- Your heartbeat is your own.
+- Your heartbeat is your own, and so are your orchestrator's timers: the clock button in your chat's header lists them,
+  with pause, resume and cancel. Owners see the dispatcher's on its page.
 
 ## The first start
 

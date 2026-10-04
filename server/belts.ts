@@ -28,6 +28,10 @@ export const PERSONAL_TOOLS: ReadonlySet<string> = new Set([
   // its own
   'wake_me',
   'set_heartbeat',
+  'set_timer',
+  'list_timers',
+  'update_timer',
+  'cancel_timer',
   // follow-ups to its person's own workers (scoped in the handler)
   'message_agent',
   // the ledger

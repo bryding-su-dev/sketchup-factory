@@ -1239,6 +1239,36 @@ export interface AppState {
   settings: AppSettings;
 }
 
+/** An orchestrator's timer as its person sees it (server/timers.ts TimerView; docs/orchestrators.md "Timers"). */
+export interface TimerInfo {
+  id: string;
+  owner: string;
+  title: string;
+  note: string;
+  scheduleText: string;
+  state: 'active' | 'paused' | 'ended';
+  createdAt: string;
+  createdBy: string;
+  nextFireAt?: string;
+  lastFiredAt?: string;
+  lastDeliveredAt?: string;
+  fires: number;
+  /** Fires waiting to be delivered (after the current turn, or for the budget). */
+  pending?: number;
+  skipped?: number;
+  until?: string;
+  maxFires?: number;
+  endedAt?: string;
+  endReason?: 'fired' | 'until' | 'max_fires' | 'cancelled';
+}
+
+/** GET /api/timers/<orchestrator id>. */
+export interface TimersAnswer {
+  timers: TimerInfo[];
+  deliveredToday: number;
+  limits: { activePerOwner: number; deliveriesPerDay: number; minEveryMinutes: number };
+}
+
 /** Pushed over the WebSocket at /ws. */
 export type ServerEvent =
   | { type: 'state'; state: AppState }

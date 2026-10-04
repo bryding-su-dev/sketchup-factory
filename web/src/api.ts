@@ -1,6 +1,7 @@
 import { SOCKET_PING_MS } from '../../shared/types';
 import type {
   AppSettings,
+  TimersAnswer,
   AppState,
   CreateSandboxRequest,
   DelegationRequest,
@@ -133,6 +134,10 @@ export const api = {
   deleteSession: (sessionId: string) => request<unknown>('DELETE', `/api/sessions/${enc(sessionId)}`),
   /** A fresh conversation: your own orchestrator's, or the dispatcher's (the owner only). */
   resetOrchestrator: (which: 'mine' | 'dispatcher' = 'mine') => request<{ id: string }>('POST', '/api/orchestrator/reset', { which }),
+  // An orchestrator's timers (docs/orchestrators.md "Timers"): your own orchestrator's, and the dispatcher's for owners.
+  timers: (sessionId: string) => request<TimersAnswer>('GET', `/api/timers/${encodeURIComponent(sessionId)}`),
+  timerAction: (sessionId: string, timerId: string, action: 'pause' | 'resume' | 'cancel') =>
+    request<TimersAnswer>('POST', `/api/timers/${encodeURIComponent(sessionId)}/${encodeURIComponent(timerId)}`, { action }),
   /** The intake (docs/intake.md): a person approves or declines a Discord or FFBox request. */
   approveWork: (id: string) => request<{ id: string; status: string }>('POST', `/api/work/${encodeURIComponent(id)}/approve`, {}),
   intakePoll: () => request<{ ok: boolean; note?: string }>('POST', '/api/intake/poll', {}),

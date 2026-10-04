@@ -5383,3 +5383,13 @@ button.board-head-link:hover {
     min-height: 32px;
   }
 }
+
+/* Orchestrator timers (Timers.tsx) */
+.timers-btn { gap: 4px; width: auto; min-width: 34px; padding: 0 8px; }
+.timers-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.timers-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.timer-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line, rgba(127,127,127,.25)); border-radius: 8px; }
+.timer-row.timer-ended { opacity: .6; }
+.timer-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
+.timer-note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.timer-actions { display: flex; flex-wrap: wrap; gap: 4px; flex-shrink: 0; margin-left: auto; }
