@@ -642,10 +642,17 @@ export function checkAccountConfig(cfg: Pick<Config, 'claudeAccounts' | 'machine
   }
 }
 
-/** The line agents' prompts add when config ownerName is set ("" when it is not). */
+/** Whose a message is, said in every agent's prompt (w389): the first line of each message, never the portal's owner by default. */
+export const SENDER_RULE =
+  'Each message names its sender on its first line: "[from <name>]" when a person wrote it, "[from the orchestrator, for <name>]" when an orchestrator sent it on their behalf. Attribute an approval, a hold, an override or a decision only to the person a message names (or the ledger records as asking), in PR descriptions, release notes, ledger notes and reports. When a message names nobody, write "unconfirmed" and ask; never write a name.';
+
+/**
+ * The lines agents' prompts add about who runs the portal and whose a message is. Several people use the portal, so
+ * the owner is named as the one who runs it, never as the one speaking (w389).
+ */
 export function ownerLine(cfg: Pick<Config, 'ownerName'>): string {
   const n = cfg.ownerName?.replace(/\s+/g, ' ').trim();
-  return n ? `\nThe user (the person who runs this portal) is ${n}.\n` : '';
+  return n ? `\nThe person who runs this portal is ${n}; others use it too, so that does not make ${n} the sender of a message. ${SENDER_RULE}\n` : `\n${SENDER_RULE}\n`;
 }
 
 let appOrigin: string | undefined | null = null;

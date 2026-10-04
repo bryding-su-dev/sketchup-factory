@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CLAUDE_DOCS_CONNECTOR, ROOT, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
+import { CLAUDE_DOCS_CONNECTOR, ROOT, SENDER_RULE, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
 import { gitIsClean, gitRemotes } from './guard.ts';
 import { appVersion, formatVersion, readSha, readVersion } from './version.ts';
 
@@ -81,10 +81,13 @@ test('loadConfig: no file says how to make one', (t) => {
   assert.throws(() => loadConfig(), /Copy config.example.json/);
 });
 
-test('ownerLine: one line naming the user, or nothing', () => {
-  assert.equal(ownerLine({}), '');
-  assert.equal(ownerLine({ ownerName: '  ' }), '');
-  assert.equal(ownerLine({ ownerName: ' Ben\n Ryding ' }), '\nThe user (the person who runs this portal) is Ben Ryding.\n');
+test('ownerLine: names who runs the portal, never as the sender; whose a message is comes from its own first line (w389)', () => {
+  assert.equal(ownerLine({}), `\n${SENDER_RULE}\n`);
+  assert.equal(ownerLine({ ownerName: '  ' }), `\n${SENDER_RULE}\n`);
+  const l = ownerLine({ ownerName: ' Ben\n Ryding ' });
+  assert.match(l, /^\nThe person who runs this portal is Ben Ryding; others use it too, so that does not make Ben Ryding the sender of a message\./);
+  assert.match(l, /write "unconfirmed" and ask; never write a name/);
+  assert.doesNotMatch(l, /The user \(the person who runs this portal\)/);
 });
 
 test('version: package.json and the checkout, with an override for builds without .git', (t) => {

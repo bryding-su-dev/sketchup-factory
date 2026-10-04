@@ -11,10 +11,10 @@
  *   "#fail"        ends the turn with an error result
  *   "#die"         the agent process ends mid-turn (as when the server's process tree is stopped)
  *   "#bg"          starts a background task (a background command, a watcher) and ends the turn
+ *   "#whoami"      says the sender line the message came with: "Sender: [from …]", or "Sender: none" (w389)
  *   "#tool <name> <json>"  (one per line) calls that tool of the session's in-process MCP server (an orchestrator's
  *                  belt) with those arguments, and says what it answered: "Called <name>: <answer>". Only in a
- *                  person's own message to an orchestrator (the "[from <name>]" line), so a notice quoting the tag
- *                  never sets it off.
+ *                  person's own message (the "[from <name>]" line), so a notice quoting the tag never sets it off.
  *   anything else  "Echo: <text>" (and how many images came with it)
  */
 import type { McpServerConfig, Options, PermissionResult, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -99,7 +99,7 @@ export function fakeQuery(fake: FakeOptions = {}) {
       for await (const m of prompt) {
         if (abort.signal.aborted) return;
         const content = m.message.content;
-        const said = typeof content === 'string' ? content : content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
+        const said = (typeof content === 'string' ? content : content.map((b) => (b.type === 'text' ? b.text : '')).join(' ')).trimStart();
         const images = typeof content === 'string' ? 0 : content.filter((b) => b.type === 'image').length;
         const uuid = m.uuid ?? '';
         yield state('running');
@@ -155,6 +155,10 @@ export function fakeQuery(fake: FakeOptions = {}) {
         } else if (/#die\b/i.test(words)) {
           yield text('Working on it...');
           throw new Error('Claude Code process exited with code 1');
+        } else if (/#whoami\b/i.test(words)) {
+          const line = /^\[from [^\]\n]*\]/.exec(said)?.[0] ?? 'none';
+          yield text(`Sender: ${line}`);
+          yield result(uuid, true, `Sender: ${line}`);
         } else if (/#bg\b/i.test(words)) {
           yield { type: 'system', subtype: 'background_tasks_changed', tasks: [{ id: `bg-${++msgId}`, ambient: false }], session_id: sessionId, uuid: `b${msgId}` } as never;
           yield text('Started the build in the background; it will wake me.');

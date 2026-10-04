@@ -8,7 +8,7 @@ import type { DeliveredAttachment, EffortLevel, ImageInput, ImageRef, Orchestrat
 import { attachmentBlock } from '../shared/attachments.ts';
 import { emit } from './store.ts';
 import { accountKeyOf } from './usage.ts';
-import type { SessionSnapshot, Unanswered } from './restart.ts';
+import { senderOf, type SessionSnapshot, type Unanswered } from './restart.ts';
 import { checkObject, readJsonDurable, writeJsonDurable } from './durable.ts';
 
 /** A session is mid-turn: working, starting or waiting for a permission answer. Only these count toward the agent limits (w384). */
@@ -144,13 +144,13 @@ function textOf(content: unknown): string {
 }
 
 /**
- * What the model reads for a message: the orchestrator's briefs are marked as such, and in the orchestrator's
- * chat, which several people share, each person's message starts with who wrote it.
+ * What the model reads for a message: every message from a person, or from the orchestrator on a person's behalf,
+ * starts with whose it is, in every kind of session (w389: a worker read a person's unmarked "Undo the release hold"
+ * as the portal owner's and wrote his name on a release decision he never made). Harness messages carry their own tag.
  */
-export function promptText(kind: SessionKind, text: string, from: 'human' | 'orchestrator' | 'system', requestedBy?: Requester): string {
-  if (from === 'orchestrator') return `[from the orchestrator${requestedBy ? `, for ${requestedBy.displayName}` : ''}]\n${text}`;
-  if (from === 'human' && kind === 'orchestrator' && requestedBy) return `[from ${requestedBy.displayName}]\n${text}`;
-  return text;
+export function promptText(_kind: SessionKind, text: string, from: 'human' | 'orchestrator' | 'system', requestedBy?: Requester): string {
+  const who = senderOf(from, requestedBy);
+  return who ? `[from ${who}]\n${text}` : text;
 }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars)` : s);
@@ -215,7 +215,7 @@ export class AgentSession implements SessionHandle {
     this.lastFrom = from;
     this.stoppedOnPurpose = false;
     clearTimeout(this.graceTimer);
-    this.outstanding.set(uuid, { text, from });
+    this.outstanding.set(uuid, { text, from, ...(requestedBy ? { requestedBy } : {}) });
     // Images arrive stored already (with an id) or are kept here, so the transcript can show them.
     const refs = images.map((i) => ({ id: i.id ?? this.store.saveImage(this.info.id, i.mediaType, i.data), mediaType: i.mediaType }));
     this.store.append(this.info.id, { kind: 'user', text, from, uuid, ...(refs.length ? { images: refs } : {}), ...(attachments.length ? { attachments } : {}), ...(requestedBy ? { requestedBy } : {}) });

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { DrainStatus, SessionInfo, SessionKind } from '../shared/types.ts';
+import type { DrainStatus, Requester, SessionInfo, SessionKind } from '../shared/types.ts';
 import { writeJsonDurable } from './durable.ts';
 
 /**
@@ -13,6 +13,19 @@ import { writeJsonDurable } from './durable.ts';
 export interface Unanswered {
   text: string;
   from: 'human' | 'orchestrator' | 'system';
+  /** The person it came from or was sent for (w389: the resume says whose it was). */
+  requestedBy?: Requester;
+}
+
+/**
+ * Who a message is from, as an agent reads it (w389). A person's message names them, the orchestrator's names the
+ * person it is for, and one whose person the portal does not know says so: an agent attributes an approval or a
+ * decision only to a person a message names, never to "the user" by default. Harness messages: undefined.
+ */
+export function senderOf(from: 'human' | 'orchestrator' | 'system', requestedBy?: Requester): string | undefined {
+  if (from === 'orchestrator') return `the orchestrator, for ${requestedBy ? requestedBy.displayName : 'no named person'}`;
+  if (from === 'human') return requestedBy ? requestedBy.displayName : 'a person the portal did not name';
+  return undefined;
 }
 
 /** What collectResume needs to know about one session at shutdown. */
@@ -127,7 +140,7 @@ export function resumeMessage(e: ResumeEntry, f: Pick<ResumeFile, 'reason' | 'at
   const pending = e.unanswered.filter((u) => u.text.trim());
   if (pending.length) {
     lines.push('', 'Messages you had not answered yet, oldest first:');
-    for (const u of pending) lines.push(`- (${u.from}) ${clip(u.text.replace(/\s+/g, ' ').trim(), 600)}`);
+    for (const u of pending) lines.push(`- (from ${senderOf(u.from, u.requestedBy) ?? 'FF Factory'}) ${clip(u.text.replace(/\s+/g, ' ').trim(), 600)}`);
   }
   return lines.join('\n');
 }
