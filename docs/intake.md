@@ -155,7 +155,7 @@ The worker ends its final message with one line (`parseMarkers`):
 |---|---|
 | `FIX-LANDED: <sha>` | closes the request as done, records the commit (`WorkItem.delivery.fixCommit`). Before that, the worker replied in the thread ("fixed, it ships with the next build") and closed it |
 | `RESOLVED: <one line>` | closes it as done (not a bug, already fixed, a duplicate, needs info the worker asked for) |
-| `DESIGN-QUESTION: <one line>` | turns it into a question: the reviewers join the request, their orchestrators get an `[intake question]`, they get a notification. Their answer (`update_work` note) reopens it for the dispatcher |
+| `DESIGN-QUESTION: <one line>` | turns it into a question: the reviewers join the request, their orchestrators get an `[intake question]`, they get a notification. Their answer (`update_work` note) reopens it for the dispatcher. A line that asks nothing is ignored (w355: "DESIGN-QUESTION: none — waiting on CI for PR #1018"): empty, none, n/a, no, -, or text starting with none, no question, nothing or waiting on (`noQuestion`) |
 
 Max's replies and closes in an intake thread are read back from the ffdiscord events file (docs/max.md) onto the
 request (`delivery.repliedAt`, `closedAt`).

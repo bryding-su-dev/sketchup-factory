@@ -17,6 +17,7 @@ import {
   parseBugThread,
   parseDevRequest,
   parseMarkers,
+  noQuestion,
   quoteUntrusted,
   releaseDraft,
   isFfboxOwned,
@@ -173,6 +174,22 @@ test('markers: FIX-LANDED, RESOLVED and DESIGN-QUESTION on a line of their own, 
   assert.deepEqual(parseMarkers('- `DESIGN-QUESTION: should splitters prefer the left belt?`'), { designQuestion: 'should splitters prefer the left belt?' });
   assert.deepEqual(parseMarkers('I will write FIX-LANDED: abc1234 at the end'), {}, 'mid-sentence is not a marker');
   assert.deepEqual(parseMarkers('FIX-LANDED: zzz'), {});
+});
+
+test('w355: a DESIGN-QUESTION that asks nothing is no question; a real one still is', () => {
+  // w349's worker, two turns running: the request became a question for Ben and Lothsahn.
+  assert.deepEqual(parseMarkers('Pushed the fix.\n\nDESIGN-QUESTION: none — waiting on CI for PR #1018 before merging.'), {});
+  assert.deepEqual(parseMarkers('**DESIGN-QUESTION: none — waiting on CI for PR #1018**'), {});
+  for (const t of ['none', 'None.', 'n/a', 'N/A', 'no', '-', '—', 'nothing to decide', 'No question: CI is running', 'waiting on CI', 'Waiting for the build', '"none"']) {
+    assert.deepEqual(parseMarkers(`DESIGN-QUESTION: ${t}`), {}, t);
+  }
+  assert.deepEqual(parseMarkers('DESIGN-QUESTION: none\nFIX-LANDED: 1a2b3c4d'), { fixCommit: '1a2b3c4d' }, 'the other markers still count');
+  assert.deepEqual(parseMarkers('DESIGN-QUESTION: Should haulers wait at night or keep moving?'), { designQuestion: 'Should haulers wait at night or keep moving?' });
+  assert.deepEqual(parseMarkers('DESIGN-QUESTION: Nothing in the save says which belt wins: should the left one?'), {}, 'starts with "nothing": ignored, as the rule says');
+  assert.deepEqual(parseMarkers('DESIGN-QUESTION: Not-yet-built ships: should they count?'), { designQuestion: 'Not-yet-built ships: should they count?' });
+  assert.deepEqual(parseMarkers('DESIGN-QUESTION: Nobody can repair it: allow it?'), { designQuestion: 'Nobody can repair it: allow it?' });
+  assert.equal(noQuestion('none — waiting on CI for PR #1018'), true);
+  assert.equal(noQuestion('Should the cap be 20?'), false);
 });
 
 test('worker rules: a bug report brings the untrusted rules, the posting limits, the thread to close and the markers', () => {

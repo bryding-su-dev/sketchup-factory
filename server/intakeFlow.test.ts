@@ -310,6 +310,11 @@ test('intake: a design question goes to the reviewers, who join the request; the
   o.approveIntake(w.id, LOTH);
   await call(dispatcher().info, 'start_agent', { sandbox: 'alpha', prompt: 'Look at the splitter report.', title: 'Splitter', work_id: w.id });
   const worker = [...store.sessions.values()].find((s) => s.kind === 'worker')!;
+  // w355: w349's worker ended two turns like this; the request became a question for nothing.
+  const status = w.status;
+  o.workerTurnEnded(worker, 'Pushed the fix.\n\nDESIGN-QUESTION: none — waiting on CI for PR #1018 before merging.');
+  assert.deepEqual([w.status, w.flag], [status, undefined], 'w355: "none — waiting on CI" is no question');
+  assert.equal(heard(o.personalFor(LOTH).info.id, '[intake question]').length, 0, 'w355: nobody is asked anything');
   o.workerTurnEnded(worker, 'It is by design today.\nDESIGN-QUESTION: should splitters alternate outputs evenly?');
   assert.deepEqual([w.status, w.flag?.text], ['question', 'should splitters alternate outputs evenly?']);
   assert.deepEqual(w.requesters.map((r) => r.userId), ['ben', 'lothsahn']);
