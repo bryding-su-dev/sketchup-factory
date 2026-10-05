@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ROOT, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
+import { CLAUDE_DOCS_CONNECTOR, ROOT, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
 import { gitIsClean, gitRemotes } from './guard.ts';
 import { appVersion, formatVersion, readSha, readVersion } from './version.ts';
 
@@ -48,6 +48,16 @@ test('loadConfig: defaults fill what the file leaves out, nested objects merge',
   assert.equal(cfg.voice.toolsDir, path.join(dir, 'data', 'tools', 'whisper'));
   assert.equal(cfg.standingRoot, path.join(path.resolve(dir, 'sb'), '_agents'));
   assert.equal(cfg.orchestrator.notifyOnWorkerEvents, true);
+  assert.deepEqual(cfg.worker.claudeAiConnectors, [CLAUDE_DOCS_CONNECTOR]);
+});
+
+test('loadConfig: worker.claudeAiConnectors must be a list of https URLs', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffsb-config-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  withConfig(t, { ...minimal(dir), dataDir: path.join(dir, 'data'), worker: { claudeAiConnectors: 'Claude Docs' } });
+  assert.throws(() => loadConfig(), /worker.claudeAiConnectors is a list/);
+  withConfig(t, { ...minimal(dir), dataDir: path.join(dir, 'data'), worker: { claudeAiConnectors: [] } });
+  assert.deepEqual(loadConfig().worker.claudeAiConnectors, []);
 });
 
 test('loadConfig: required keys, and standing agents kept out of the app and its data', (t) => {

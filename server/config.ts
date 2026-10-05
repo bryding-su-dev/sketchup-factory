@@ -332,6 +332,11 @@ export interface Config {
   worker: {
     permissionMode: PermissionMode;
     effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+    /**
+     * The claude.ai connectors sandbox workers on this host load, by upstream URL (wildcards allowed; docs/accounts.md,
+     * "Artifacts and claude.ai connectors"). Default: Claude Docs only. [] loads none and keeps strict MCP config.
+     */
+    claudeAiConnectors: string[];
   };
   /**
    * Extra environment for every Claude session, e.g. { "CLAUDE_CODE_OAUTH_TOKEN": "<from claude setup-token>" }
@@ -406,6 +411,9 @@ export const VOICE_DEFAULTS: Omit<VoiceConfig, 'toolsDir'> = {
 /** The default of config usagePollMinutes. */
 export const DEFAULT_USAGE_POLL_MINUTES = 15;
 
+/** The claude.ai "Claude Docs" connector's upstream URL (Claude Code lists it under the connector's config `url`). */
+export const CLAUDE_DOCS_CONNECTOR = 'https://api.anthropic.com/v1/pages/mcp';
+
 const DEFAULTS: Omit<Config, 'sandboxRoot' | 'standingRoot' | 'repo' | 'unity' | 'voice' | 'hostGuard'> = {
   port: 8790,
   project: PROJECT_DEFAULTS,
@@ -422,7 +430,7 @@ const DEFAULTS: Omit<Config, 'sandboxRoot' | 'standingRoot' | 'repo' | 'unity' |
   models: ['opus', 'sonnet', 'haiku', 'fable'],
   defaultModel: 'opus',
   orchestrator: { model: 'opus', effort: 'medium', notifyOnWorkerEvents: true },
-  worker: { permissionMode: 'bypassPermissions', effort: 'high' },
+  worker: { permissionMode: 'bypassPermissions', effort: 'high', claudeAiConnectors: [CLAUDE_DOCS_CONNECTOR] },
 };
 
 const UNITY_WATCHDOG_DEFAULTS: Config['unity']['watchdog'] = { stallMinutes: 15, autoDismiss: true, startingPollSeconds: 10, runningPollSeconds: 60 };
@@ -581,6 +589,7 @@ export function loadConfig(): Config {
   for (const key of ['workerBriefFile', 'orchestratorBriefFile'] as const) {
     if (cfg.project[key]) cfg.project[key] = path.resolve(ROOT, cfg.project[key]!);
   }
+  checkConnectorConfig(cfg);
   cfg.dataDir = path.resolve(ROOT, cfg.dataDir);
   cfg.sandboxRoot = path.resolve(cfg.sandboxRoot);
   cfg.standingRoot = path.resolve(raw.standingRoot ?? path.join(cfg.sandboxRoot, '_agents'));
@@ -598,6 +607,13 @@ export function loadConfig(): Config {
  * Throws when config claudeAccounts or machines.useHostClaudeEnv is malformed: a typo there would otherwise
  * quietly run agents on another account than the one meant.
  */
+export function checkConnectorConfig(cfg: Pick<Config, 'worker'>) {
+  const list: unknown = cfg.worker.claudeAiConnectors;
+  if (!Array.isArray(list) || list.some((u) => typeof u !== 'string' || !/^https:\/\/[^/\s]+/.test(u))) {
+    throw new Error(`config worker.claudeAiConnectors is a list of claude.ai connector URLs, e.g. ["${CLAUDE_DOCS_CONNECTOR}"]`);
+  }
+}
+
 export function checkAccountConfig(cfg: Pick<Config, 'claudeAccounts' | 'machines'>) {
   const a: unknown = cfg.claudeAccounts;
   if (a !== undefined) {

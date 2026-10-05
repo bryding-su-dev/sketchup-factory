@@ -8,6 +8,23 @@ import { publicIdentityEnv } from './publicGit.ts';
 import { usageEnv } from './usage.ts';
 import type { StandingToolGroup } from '../shared/types.ts';
 
+/**
+ * Claude Code leaves its Artifact tools out of every SDK session (its "sdk_default_off" gate) unless this is set.
+ * Publishing still needs a claude.ai login, not a setup-token (docs/accounts.md, "Artifacts and claude.ai connectors").
+ * Laid under config claudeEnv, so `"CLAUDE_CODE_ARTIFACT": "0"` there turns it off again.
+ */
+export const ARTIFACT_ENV = { CLAUDE_CODE_ARTIFACT: '1' } as const;
+
+/**
+ * The MCP allowlist (settings `allowedMcpServers`) of a session that loads some claude.ai connectors without the
+ * user's own MCP servers: its own servers by name, and the connectors whose upstream URL matches one of
+ * `connectorUrls`. Claude Code matches a connector by URL only, never by its "claude.ai <name>" name, and with a URL
+ * entry present it matches every remote server by URL, so `ownServers` must be stdio or SDK servers.
+ */
+export function connectorAllowlist(ownServers: string[], connectorUrls: string[]): { serverName?: string; serverUrl?: string }[] {
+  return [...ownServers.map((serverName) => ({ serverName })), ...connectorUrls.map((serverUrl) => ({ serverUrl }))];
+}
+
 /** A stdio MCP server the agent process starts (on a machine: the daemon's Unity MCP server, machine/unityMcp.ts). */
 export interface StdioServer {
   command: string;
