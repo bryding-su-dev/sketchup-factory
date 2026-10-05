@@ -374,7 +374,10 @@ sandbox agents in all), `max_unity: 2`.
   (stops its agents and editor, removes the Library, the worktree and the folder; the branch stays),
   `unity {sandbox: "lothdesktop/sb1", action}` (status, start, stop, restart, log), `start_agent {sandbox:
   "lothdesktop/sb1", prompt, ...}`, `switch_branch {sandbox: "lothdesktop/sb1", branch}` (refused while its editor
-  runs: stop it first, or Unity stops on "The open scene(s) have been modified externally").
+  runs: stop it first, or Unity stops on "The open scene(s) have been modified externally"; and while another agent
+  in it is mid-turn, named by title. The portal checks, then the daemon again with what it runs (`othersMidTurn` in
+  `server/sessions.ts`); neither counts the worker calling it, nor a "running" left by an agent whose process is gone,
+  which the portal clears, w422).
 - `list_sandboxes` shows this host's sandboxes and then each machine's, grouped, with each group's limits and free
   count, one line per sandbox (a **FREE** flag when it is ready, labelled unused and has no live agent) and only
   its live agents. An offline machine's sandboxes show as last reported.

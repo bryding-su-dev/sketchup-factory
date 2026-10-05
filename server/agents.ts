@@ -18,7 +18,7 @@ import { openUnity, unityMcpServerFor, type SceneState, type UnityBridge } from 
 import { ARTIFACT_ENV, CATALOG, connectorAllowlist } from './launch.ts';
 import { COMPILE_DONE, COMPILE_FAILED, activityLine, readSince, Waker } from './wake.ts';
 import { TIMER_LIMITS, Timers, scheduleText, type TimerView } from './timers.ts';
-import { AgentSession, isMidTurn, snapshotOf, type OptionsFactory, type SessionHandle, type SessionManager } from './sessions.ts';
+import { AgentSession, isMidTurn, midTurnRefusal, othersMidTurn, snapshotOf, type OptionsFactory, type SessionHandle, type SessionManager } from './sessions.ts';
 import { HostMigrator, hostSandboxFrom } from './hostMigration.ts';
 import { WORK_OPEN, WORK_PRIORITIES, type AttachmentRef, type DeliveredAttachment, type ImageInput, type PermissionMode, type Requester, type Sandbox, type SessionInfo, type TranscriptEvent, type WorkItem, type WorkPriority, type WorkStatus } from '../shared/types.ts';
 import { attachmentForMachine, publicRef, type AttachmentStore } from './attachments.ts';
@@ -1220,12 +1220,20 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
    */
   async switchBranch(req: { sandbox?: string; machine?: string; branch: string; createFrom?: string; callerSessionId?: string }): Promise<string> {
     const t = this.target(req.sandbox, req.machine);
-    // The worker calling its own switch_branch is mid-turn by definition; any OTHER busy agent refuses it.
-    const busy = (ids: string[]) =>
-      ids
-        .filter((id) => id !== req.callerSessionId)
-        .map((id) => this.store.sessions.get(id))
-        .filter((s): s is SessionInfo => !!s && ['running', 'starting', 'waiting_permission'].includes(s.status));
+    // The worker calling its own switch_branch is mid-turn by definition; any OTHER busy agent refuses it (othersMidTurn).
+    // A mid-turn status with no process behind it is left over from an agent that stopped or crashed: cleared, not counted.
+    const busy = (ids: string[]) => {
+      const handles = ids.map((id) => {
+        const info = this.store.sessions.get(id);
+        return info && (this.sessions.sessions.get(id) ?? { info, live: false });
+      });
+      const { busy, stale } = othersMidTurn(handles, req.callerSessionId);
+      for (const s of stale) {
+        Object.assign(s.info, { status: 'stopped', statusDetail: 'its process was gone (cleared by switch_branch)', pendingPermissions: [] });
+        this.store.putSession(s.info);
+      }
+      return busy;
+    };
     if (t.machine) {
       const m = this.machines.require(t.machine);
       // Only the agents of the same place: the main clone, or that one sandbox.
@@ -1236,8 +1244,9 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
       }
       const where = sb ? `${m.id}/${sb.id}` : m.id;
       const b = busy(sb ? sb.sessionIds : m.sessionIds.filter((id) => !this.store.sessions.get(id)?.machineSandbox));
-      if (b.length) throw new Error(`agent(s) ${b.map((s) => `"${s.title}"`).join(', ')} are mid-turn in ${where}; wait for them (or stop them) first`);
-      const r = await this.machines.switchBranch(m.id, req.branch, req.createFrom, sb?.id);
+      if (b.length) throw new Error(midTurnRefusal(b, where));
+      // The daemon checks again with what it runs, and must not count the caller either.
+      const r = await this.machines.switchBranch(m.id, req.branch, req.createFrom, sb?.id, req.callerSessionId);
       return `${where}: ${r.from} → ${r.to}. ${r.notes.join('; ')}.`;
     }
     const sb = this.sandboxes.require(t.sandbox!);
@@ -1245,7 +1254,7 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
     const problem = branchProblem(req.branch);
     if (problem) throw new Error(problem);
     const b = busy(sb.sessionIds);
-    if (b.length) throw new Error(`agent(s) ${b.map((s) => `"${s.title}"`).join(', ')} are mid-turn in ${sb.id}; wait for them (or stop them) first`);
+    if (b.length) throw new Error(midTurnRefusal(b, sb.id));
     // With the editor open, a switch that rewrites an open scene's file makes Unity ask "The open scene(s)
     // have been modified externally… reload?" and hold the editor. So: check the open scenes over the
     // bridge first; if none has unsaved edits, park them (an empty scene) across the switch and open them

@@ -15,6 +15,26 @@ import { checkObject, readJsonDurable, writeJsonDurable } from './durable.ts';
 export const MID_TURN: ReadonlySet<SessionInfo['status']> = new Set(['running', 'starting', 'waiting_permission']);
 export const isMidTurn = (i: Pick<SessionInfo, 'status'>) => MID_TURN.has(i.status);
 
+/**
+ * The agents that hold up a branch switch of their place (switch_branch), on the portal and on a machine's daemon (w422):
+ * mid-turn with a process behind them, other than the caller, which is mid-turn by definition since it is in the tool
+ * call. A mid-turn status with no process (left by an agent that stopped or crashed) does not count: those are `stale`,
+ * for the portal to clear. 'starting' counts without one: a machine's agent is 'starting' before its daemon reports it.
+ */
+export function othersMidTurn<T extends { readonly info: SessionInfo; readonly live: boolean }>(handles: Iterable<T | undefined>, callerId?: string) {
+  const busy: T[] = [];
+  const stale: T[] = [];
+  for (const h of handles) {
+    if (!h || h.info.id === callerId || !isMidTurn(h.info)) continue;
+    (h.live || h.info.status === 'starting' ? busy : stale).push(h);
+  }
+  return { busy, stale };
+}
+
+/** switch_branch's refusal while othersMidTurn found agents: who they are, by title. */
+export const midTurnRefusal = (busy: { info: SessionInfo }[], where: string) =>
+  `agent(s) ${busy.map((s) => `"${s.info.title}"`).join(', ')} ${busy.length === 1 ? 'is' : 'are'} mid-turn in ${where}; wait for them (or stop them) first`;
+
 /** A message waiting for a free running slot (w384): delivered in order once one frees. Kept in data/send-queue.json. */
 export interface QueuedSend {
   uuid: string;

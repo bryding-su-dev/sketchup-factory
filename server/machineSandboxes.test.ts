@@ -8,7 +8,10 @@ import { execFileSync } from 'node:child_process';
 import type { EventEmitter } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { Store } from './store.ts';
-import { SessionManager, type SessionHandle, type SessionSink } from './sessions.ts';
+import { SessionManager, midTurnRefusal, othersMidTurn, type SessionHandle, type SessionSink } from './sessions.ts';
+import { SandboxManager } from './sandboxes.ts';
+import { Agents } from './agents.ts';
+import { Identity } from './identity.ts';
 import { MachineManager, limitOptions, machineForPath, mergeSandboxes, parseSandboxRef, poolSettingsOf } from './machines.ts';
 import { daemonConfig } from './machineDeploy.ts';
 import { Daemon, type Probes } from '../machine/daemon.ts';
@@ -427,4 +430,113 @@ test('machine sandboxes: create, run agents (per-sandbox limit), drive the edito
   assert.match(await mm.deleteSandbox('pc', 'sb1'), /Deleted sandbox sb1/);
   assert.deepEqual(store.machines.get('pc')!.sandboxes, []);
   assert.equal(fs.existsSync(sb.path), false);
+});
+
+// ---------------------------------------------------------------- switch_branch's mid-turn check (w422)
+
+test('switch_branch busy check: never the caller; others mid-turn by title; a mid-turn status with no process is stale', () => {
+  const h = (id: string, status: SessionInfo['status'], live: boolean) => ({ info: { id, title: `t-${id}`, status } as SessionInfo, live });
+  const me = h('me', 'running', true);
+  assert.deepEqual(othersMidTurn([me], 'me'), { busy: [], stale: [] }, 'the caller alone');
+  const other = h('o', 'waiting_permission', true);
+  const starting = h('st', 'starting', false);
+  const gone = h('g', 'running', false);
+  const r = othersMidTurn([me, other, starting, gone, h('i', 'idle', true), h('s', 'stopped', false), undefined], 'me');
+  assert.deepEqual(r.busy, [other, starting], "another agent's turn, and one starting before its process is reported");
+  assert.deepEqual(r.stale, [gone]);
+  assert.deepEqual(othersMidTurn([me]).busy, [me], 'no caller (the orchestrator): every agent mid-turn counts');
+  assert.equal(midTurnRefusal([other], 'sb1'), 'agent(s) "t-o" is mid-turn in sb1; wait for them (or stop them) first');
+  assert.match(midTurnRefusal([other, starting], 'pc/sb1'), /^agent\(s\) "t-o", "t-st" are mid-turn in pc\/sb1;/);
+});
+
+test('switch_branch on a machine sandbox: the calling worker alone switches, through the portal and the daemon; others block by name; stale ones are cleared (w422)', async (t) => {
+  const r = repos();
+  const cfg = {
+    dataDir: path.join(r.root, 'data'),
+    sandboxRoot: path.join(r.root, 'host-sb'),
+    standingRoot: path.join(r.root, '_agents'),
+    repo: { url: 'x', basePath: path.join(r.root, 'base') },
+    defaultBase: 'origin/develop',
+    models: ['opus'],
+    defaultModel: 'opus',
+    protectedPaths: [],
+    limits: { maxSessions: 6, maxUnity: 2, maxSandboxes: 4, minFreeGB: 0, minFreeRamGB: 0 },
+    orchestrator: { model: 'opus', effort: 'low', notifyOnWorkerEvents: false },
+    worker: { permissionMode: 'default', effort: 'low' },
+    unity: {},
+  } as unknown as Config;
+  fs.mkdirSync(cfg.dataDir, { recursive: true });
+  const store = new Store(cfg.dataDir);
+  const sessions = new SessionManager(cfg, store);
+  const mm = new MachineManager(cfg, store, sessions);
+  const agents = new Agents(cfg, store, new SandboxManager(cfg, store), sessions, mm, new Identity(cfg, () => []));
+  // Stand-in launch specs (no Claude here); the switch is the real Agents.switchBranch.
+  mm.hooks = {
+    specFor: (info, m) => {
+      const sb = info.machineSandbox ? mm.requireSandbox(m.id, info.machineSandbox) : undefined;
+      return { cwd: sb?.path ?? r.main, sandbox: sb?.id, settingSources: [], append: '', strictMcp: true, guard: { id: sb?.id ?? 'x', ownPath: sb?.path ?? r.main, protectedPaths: [], gameRepos: [] } };
+    },
+    handlersFor: () => ({}),
+  };
+  const server = http.createServer();
+  server.on('upgrade', (req, socket, head) => mm.upgrade(req, socket, head, '127.0.0.1'));
+  await new Promise<void>((res) => server.listen(0, '127.0.0.1', res));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const { token } = mm.register({ id: 'pc', host: 'pc', purpose: 'unused', status: 'ready', repoPath: r.main, home: r.root, portalUrl: url, maxSessions: 3, sandboxRoot: r.sbRoot, maxSandboxes: 2, maxAgentsPerSandbox: 3, maxUnity: 1 });
+  const { d: poolDeps } = deps(r.main);
+  const daemon = new Daemon({ portalUrl: url, id: 'pc', token, repoPath: r.main, appDir: path.join(r.root, 'app'), claude: 'no-such-claude', maxSessions: 3, maxEventsFile: null }, (i, s, o, e) => new FakeAgent(i, s, o, e), PROBES, poolDeps);
+  t.after(async () => {
+    agents.orchestrators.close();
+    daemon.shutdown();
+    server.close();
+    await new Promise((res) => setTimeout(res, 300));
+    store.flush();
+    r.cleanup();
+  });
+  daemon.start();
+  await until('online with hello', () => mm.isOnline('pc') && !!store.machines.get('pc')?.info);
+  await mm.createSandbox('pc', { name: 'sb1' });
+  await until('sb1 ready', () => store.machines.get('pc')?.sandboxes?.find((s) => s.id === 'sb1')?.status === 'ready');
+
+  const worker = (title: string) => {
+    const s = mm.createSession('pc', { kind: 'worker', title, permissionMode: 'default', sandbox: 'sb1' });
+    sessions.send(s.info.id, 'go');
+    return s;
+  };
+  const a1 = worker('pr-fix-a2');
+  const a2 = worker('other worker');
+  await until('both live and idle', () => a1.live && a2.live && a1.info.status === 'idle' && a2.info.status === 'idle');
+  // What the daemon itself runs: its own check reads these, not the portal's copies.
+  const onDaemon = (id: string) => (daemon as unknown as { entries: Map<string, { s: SessionHandle }> }).entries.get(id)!.s.info;
+  const midTurn = (s: { info: SessionInfo }, status: SessionInfo['status']) => {
+    s.info.status = status;
+    onDaemon(s.info.id).status = status;
+  };
+
+  // The worker calls switch_branch in its own turn, alone in its sandbox (w421: refused with "1 agent(s) are mid-turn").
+  midTurn(a1, 'running');
+  assert.match(await agents.switchBranch({ sandbox: 'pc/sb1', branch: 'feature/z', callerSessionId: a1.info.id }), /^pc\/sb1: sandbox\/sb1 → feature\/z/);
+  // Creating a branch is the same call, with create_from.
+  assert.match(await agents.switchBranch({ sandbox: 'pc/sb1', branch: 'feature/new', createFrom: 'origin/develop', callerSessionId: a1.info.id }), /→ feature\/new/);
+
+  // Another agent mid-turn there blocks it, by its title: on the portal...
+  midTurn(a2, 'running');
+  await assert.rejects(agents.switchBranch({ sandbox: 'pc/sb1', branch: 'feature/w', callerSessionId: a1.info.id }), /agent\(s\) "other worker" is mid-turn in pc\/sb1/);
+  // ...and on the daemon, when the portal has not heard of that turn yet.
+  a2.info.status = 'idle';
+  await assert.rejects(agents.switchBranch({ sandbox: 'pc/sb1', branch: 'feature/w', callerSessionId: a1.info.id }), /agent\(s\) "other worker" is mid-turn in sandbox sb1/);
+  // The orchestrator (no caller) is held up by both.
+  a2.info.status = 'running';
+  await assert.rejects(agents.switchBranch({ sandbox: 'pc/sb1', branch: 'feature/w' }), /"pr-fix-a2", "other worker" are mid-turn/);
+
+  // A stopped agent left "running" on the portal (no process behind it) does not block, and is cleared.
+  a2.stop();
+  await until('a2 stopped', () => !a2.live && a2.info.status === 'stopped');
+  a2.info.status = 'running';
+  assert.match(await agents.switchBranch({ sandbox: 'pc/sb1', branch: 'feature/w', callerSessionId: a1.info.id }), /→ feature\/w/);
+  assert.equal(a2.info.status, 'stopped');
+  assert.equal(r.git(mm.requireSandbox('pc', 'sb1').path, 'branch', '--show-current'), 'feature/w');
+  midTurn(a1, 'idle');
+  a1.stop();
+  await until('a1 stopped', () => !a1.live);
 });

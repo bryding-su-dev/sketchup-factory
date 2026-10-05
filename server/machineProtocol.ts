@@ -51,8 +51,11 @@ export type ToDaemon =
   | { type: 'fs'; id: string; op: 'read'; path: string; sessionId?: string }
   | { type: 'fs'; id: string; op: 'list'; dirs?: string[] }
   | { type: 'interrupt' | 'stop' | 'remove'; sessionId: string }
-  /** Switch the clone's branch (server/switchBranch.ts); answered by switch_result. */
-  | { type: 'switch'; id: string; branch: string; createFrom?: string; sandbox?: string }
+  /**
+   * Switch the clone's branch (server/switchBranch.ts); answered by switch_result. callerSessionId: the agent that called
+   * switch_branch, mid-turn by definition, so not counted as busy (w422; older daemons ignore it and refuse their caller).
+   */
+  | { type: 'switch'; id: string; branch: string; createFrom?: string; sandbox?: string; callerSessionId?: string }
   /**
    * A sandbox (protocol 5, machine/sandboxes.ts), answered by sandbox_result: create (returns once recorded; progress
    * comes in `sandboxes` snapshots), delete (returns when it is gone), log (the tail of its editor log).

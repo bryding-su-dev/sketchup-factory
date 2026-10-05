@@ -1362,8 +1362,8 @@ export class MachineManager {
 
   private readonly switchCalls = new Map<string, { resolve: (r: { from: string; to: string; notes: string[] }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 
-  /** Switch the branch of a machine's clone, on the machine (server/switchBranch.ts). */
-  switchBranch(machineId: string, branch: string, createFrom?: string, sandbox?: string) {
+  /** Switch the branch of a machine's clone, on the machine (server/switchBranch.ts). callerSessionId: the agent asking, which its daemon does not count as busy. */
+  switchBranch(machineId: string, branch: string, createFrom?: string, sandbox?: string, callerSessionId?: string) {
     const sb = sandbox ? (this.requireSandboxDaemon(machineId), this.requireSandbox(machineId, sandbox).id) : undefined;
     return new Promise<{ from: string; to: string; notes: string[] }>((resolve, reject) => {
       const id = randomUUID();
@@ -1373,7 +1373,7 @@ export class MachineManager {
       }, 10 * 60_000);
       this.switchCalls.set(id, { resolve, reject, timer });
       try {
-        this.post(machineId, { type: 'switch', id, branch, createFrom, ...(sb ? { sandbox: sb } : {}) });
+        this.post(machineId, { type: 'switch', id, branch, createFrom, ...(sb ? { sandbox: sb } : {}), ...(callerSessionId ? { callerSessionId } : {}) });
       } catch (e) {
         clearTimeout(timer);
         this.switchCalls.delete(id);

@@ -11,7 +11,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
-import { AgentSession, isMidTurn, type OptionsFactory, type SessionHandle, type SessionSink } from '../server/sessions.ts';
+import { AgentSession, isMidTurn, midTurnRefusal, othersMidTurn, type OptionsFactory, type SessionHandle, type SessionSink } from '../server/sessions.ts';
 import { bus, type DistributiveOmit } from '../server/store.ts';
 import { CATALOG, buildOptions, type CatalogTool, type LaunchSpec, type ToolHandler } from '../server/launch.ts';
 import { PROTOCOL_VERSION, type FromDaemon, type SignalName, type ToDaemon } from '../server/machineProtocol.ts';
@@ -738,10 +738,12 @@ export class Daemon {
         return;
       }
       case 'switch': {
-        // Agents of the same place only: a sandbox's agents do not hold up the main clone, nor the other way round.
-        const busy = [...this.entries.values()].filter((e) => e.s.live && e.s.info.status !== 'idle' && e.spec?.sandbox === msg.sandbox);
+        // Agents of the same place only: a sandbox's agents do not hold up the main clone, nor the other way round. The
+        // agent that called switch_branch is mid-turn in it by definition and never holds itself up (w422).
+        const here = [...this.entries.values()].filter((e) => e.spec?.sandbox === msg.sandbox).map((e) => e.s);
+        const { busy } = othersMidTurn(here, msg.callerSessionId);
         if (busy.length) {
-          this.send({ type: 'switch_result', id: msg.id, ok: false, error: `${busy.length} agent(s) are mid-turn ${msg.sandbox ? `in sandbox ${msg.sandbox}` : "in this machine's main clone"}` });
+          this.send({ type: 'switch_result', id: msg.id, ok: false, error: midTurnRefusal(busy, msg.sandbox ? `sandbox ${msg.sandbox}` : "this machine's main clone") });
           return;
         }
         // The main clone's git is shared with its sandboxes' worktrees: the same lock as theirs.
