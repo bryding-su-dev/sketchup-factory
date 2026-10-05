@@ -39,7 +39,7 @@ async function until(what: string, cond: () => boolean, ms = 5000) {
   }
 }
 
-function setup(t: { after: (fn: () => void | Promise<void>) => void }, opts: { legacy?: boolean; notify?: boolean } = {}) {
+function setup(t: { after: (fn: () => void | Promise<void>) => void }, opts: { legacy?: boolean; notify?: boolean; people?: UserInfo[] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffsb-orch-'));
   const cfg = {
     dataDir: dir,
@@ -66,7 +66,7 @@ function setup(t: { after: (fn: () => void | Promise<void>) => void }, opts: { l
   const sessions = new SessionManager(cfg, store);
   const sandboxes = new SandboxManager(cfg, store);
   const machines = new MachineManager(cfg, store, sessions);
-  const agents = new Agents(cfg, store, sandboxes, sessions, machines, new Identity(cfg, () => PEOPLE));
+  const agents = new Agents(cfg, store, sandboxes, sessions, machines, new Identity(cfg, () => opts.people ?? PEOPLE));
   // Workers start without the sandbox machinery (git identity, guard, Unity MCP): the fake agent needs none of it.
   Object.defineProperty(agents, 'workerOptions', { value: () => ({ model: 'opus' }) });
   store.putSandbox({ id: 'alpha', name: 'alpha', branch: 'sandbox/alpha', base: 'origin/develop', path: path.join(dir, 'alpha'), purpose: 'unused', status: 'ready', createdAt: T0, unity: { state: 'stopped' }, sessionIds: [] });
@@ -539,4 +539,58 @@ test('w384: the reaper stops idle workers whose request closed, moved on, or tha
   sessions.send(done.info.id, 'one more thing');
   await until('resumed', () => done.info.status === 'idle' && done.live);
   assert.equal(done.info.sdkSessionId === sdk || !!done.info.sdkSessionId, true);
+});
+
+
+// ---------------------------------------------------------------- w402: owners close each other's requests
+
+test("w402: an owner closes or reopens another person's request in their own turn, with a reason; logged, its person told", async (t) => {
+  const { store, dispatcher, chat, call, heard } = setup(t, { people: [{ ...BEN, role: 'owner' }, { ...LOTH, role: 'owner' }] });
+  const ben = chat(BEN);
+  const loth = chat(LOTH);
+  ben.lastFrom = 'human';
+  await call(ben.info, 'request_work', { title: 'Tidy the ledger page', brief: 'Sort the closed requests newest first.' });
+  const w = () => store.work.get('w1')!;
+  // Not in a turn Lothsahn started with his own message (a harness notice, a worker, a relayed FFBox/Discord text): refused.
+  loth.lastFrom = 'system';
+  const outside = await call(loth.info, 'update_work', { id: 'w1', close: 'done', note: 'the cleanup says it shipped' });
+  assert.match(outside.text, /only Lothsahn, in their own words in this turn, closes or reopens Ben's request w1: ask them/);
+  assert.equal(w().status, 'new');
+  loth.lastFrom = 'human';
+  // In his own turn, still only a close or a reopen, and only with a reason.
+  assert.match((await call(loth.info, 'update_work', { id: 'w1', note: 'add dark mode too' })).text, /w1 is Ben's request, not Lothsahn's: another owner may close or reopen it/);
+  assert.match((await call(loth.info, 'update_work', { id: 'w1', close: 'done', priority: 'high', note: 'x' })).text, /its priority stays its people's to change/);
+  assert.match((await call(loth.info, 'update_work', { id: 'w1', close: 'done' })).text, /say why in a note: Ben will be told who closed w1 and why/);
+  assert.equal(w().status, 'new', 'nothing changed yet');
+  const r = await call(loth.info, 'update_work', { id: 'w1', close: 'done', note: 'Ben asked me to close it: shipped in #1040.' });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /^w1 \(Ben's request\) is done: closed as done by Lothsahn\. Ben's orchestrator is told who and why\.$/);
+  assert.deepEqual([w().status, w().outcome, w().requestedBy.userId], ['done', 'Ben asked me to close it: shipped in #1040.', 'ben']);
+  assert.match(w().log.at(-1)!, /closed as done by Lothsahn \(Ben's request\), in Lothsahn's own turn: Ben asked me to close it: shipped in #1040\.$/);
+  await until("Ben's orchestrator hears who closed it and why", () => heard(ben.info.id, '[dispatch]').some((e) => /w1 "Tidy the ledger page": closed as done by Lothsahn, who asked for it in their own words \(it is your request\)\.\nBen asked me to close it/.test(e.text)));
+  // Reopened the same way; the dispatcher hears a reopen, as for the person's own.
+  const back = await call(loth.info, 'update_work', { id: 'w1', reopen: true, note: 'Closed by mistake: the sort is not in yet.' });
+  assert.match(back.text, /^w1 \(Ben's request\) is new: reopened by Lothsahn\./);
+  assert.equal(w().status, 'new');
+  assert.match(w().log.at(-1)!, /reopened by Lothsahn \(Ben's request\), in Lothsahn's own turn: Closed by mistake/);
+  await until('Ben hears the reopen', () => heard(ben.info.id, '[dispatch]').some((e) => /reopened by Lothsahn/.test(e.text)));
+  await until('the dispatcher hears the reopen', () => heard(dispatcher().info.id, '[work update]').some((e) => /w1 "Tidy the ledger page" \(new\) from Lothsahn: reopened for Ben/.test(e.text)), 5000);
+  // And Ben, an owner too, closes Lothsahn's.
+  await call(loth.info, 'request_work', { title: 'Profile the belts', brief: 'Where does the tick go?' });
+  ben.lastFrom = 'human';
+  assert.match((await call(ben.info, 'update_work', { id: 'w2', close: 'cancelled', note: 'Lothsahn dropped it this morning.' })).text, /^w2 \(Lothsahn's request\) is cancelled: cancelled by Ben\./);
+});
+
+test("w402: a member cannot close or reopen another person's request, even in their own turn", async (t) => {
+  const { store, chat, call } = setup(t);
+  const ben = chat(BEN);
+  const loth = chat(LOTH);
+  ben.lastFrom = 'human';
+  await call(ben.info, 'request_work', { title: 'Tidy the ledger page', brief: 'Sort the closed requests newest first.' });
+  loth.lastFrom = 'human';
+  const r = await call(loth.info, 'update_work', { id: 'w1', close: 'done', note: 'looks done to me' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /^ERROR: w1 is Ben's request, not Lothsahn's; only an owner closes or reopens another person's request$/);
+  assert.equal(store.work.get('w1')!.status, 'new');
+  assert.equal(store.work.get('w1')!.log.some((l) => /Lothsahn/.test(l)), false, 'nothing logged');
 });

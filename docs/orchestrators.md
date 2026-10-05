@@ -78,6 +78,24 @@ for a request runs for the person who filed it, on their account. The requester'
 answers a question), change the priority, close the request, or reopen it within 7 days (`update_work`). Closing is the
 filer's: the others still on the request hear it. Someone whose request was merged into it only leaves it.
 
+**Owners close each other's requests when asked** (w402, Lothsahn: "ben and I can close each other's requests if we
+explicitly ask"). A person with the `owner` role (docs/identity.md; Ben and Lothsahn today) may have their own
+orchestrator close (done or cancelled) or reopen **another person's** request with `update_work`
+(`Orchestrators.closeForOther`, `server/orchestrators.ts`), under the guard approving an intake request uses:
+
+- only in a turn the owner started with their own message; a turn a harness notice, a worker, a standing agent or
+  relayed FFBox or Discord text started is refused ("only Lothsahn, in their own words in this turn, closes or reopens
+  Ben's request w234: ask them");
+- only close or reopen, and only with a note saying why. A note alone or a priority change on someone else's request
+  stays refused: those are its people's to give (a note can answer the dispatcher's question for them);
+- the request's log says `closed as done by Lothsahn (Ben's request), in Lothsahn's own turn: <note>` (or cancelled,
+  reopened), and its people's orchestrators get a `[dispatch]` line naming who did it and why. A cancel or a reopen
+  reaches the dispatcher as a `[work update]`, as their own would. It does not change whose request it is, or
+  `humanAsked`: another owner's word is not its people's own.
+
+A member keeps the rule above: their own requests only ("w234 is Ben's request, not X's; only an owner closes or
+reopens another person's request").
+
 The ledger is `data/work.json`: every open request and the newest 300 closed ones. The page gets the open ones and those
 closed in the last 3 days.
 
