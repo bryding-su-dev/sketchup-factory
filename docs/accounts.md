@@ -64,6 +64,43 @@ The environment is fixed when an agent's process starts. A change applies to age
 running ones keep their account until their process restarts. For the orchestrator, that means restarting
 the app.
 
+## Artifacts and claude.ai connectors
+
+Workers can publish a self-contained HTML file as a claude.ai artifact page (Claude Code's `Artifact`,
+`ArtifactComments` and `ArtifactData` tools) and use the claude.ai connectors config allows. Two gates in
+Claude Code keep both out of an SDK session by default:
+
+- **Artifact**: Claude Code withholds the tools from every SDK session ("sdk_default_off") unless
+  `CLAUDE_CODE_ARTIFACT` is set. `ARTIFACT_ENV` (`server/launch.ts`) sets it for sandbox workers here
+  (`workerOptions`) and for workers on a Mac (their launch spec), under config `claudeEnv`, so
+  `"CLAUDE_CODE_ARTIFACT": "0"` there turns it off. Publishing needs a claude.ai login: it works on this
+  host's stored login (`claudeAccounts.workers: "login"`) and a Mac's. On a `claude setup-token` token it
+  is untested.
+- **claude.ai connectors**: a session with strict MCP config never loads them. Sandbox workers here used to
+  run with strict MCP config so the host user's own MCP servers (`~/.claude.json`, a project's `.mcp.json`,
+  plugins) stay out, an `ffsb` entry most of all. With connectors configured they run without it, and an MCP
+  allowlist (settings `allowedMcpServers`, `connectorAllowlist`) admits only their own servers (`sandbox`,
+  `UnityMCP`, by name) and the connectors whose upstream URL matches config `worker.claudeAiConnectors`.
+  Claude Code matches a connector by URL, not by its "claude.ai …" name. `mcp__ffsb` is also in
+  `disallowedTools`, in case an organization's managed allowlist replaces this one. A connector needs a
+  login with the `user:mcp_servers` scope, which a setup-token lacks, so none load on a token.
+
+| Config | Default | Meaning |
+|---|---|---|
+| `worker.claudeAiConnectors` | `["https://api.anthropic.com/v1/pages/mcp"]` (Claude Docs) | Upstream URLs (`*` wildcards) of the claude.ai connectors sandbox workers on this host load. `[]`: none, and strict MCP config as before. |
+
+Find a connector's URL in a session's MCP status (`mcpServerStatus()`, `config.url`). Allow only what
+workers need: they run with `bypassPermissions` on text that can come from Discord or the web, and a connector
+such as Gmail or Drive acts as the person whose login it is. Edit `config.json` to change it (it is not in
+`set_app_config`'s allowlist).
+
+Workers on a Mac run without strict MCP config already, so they load the Mac's own MCP servers and every
+connector of the Mac's login. Standing agents and orchestrators have no Artifact tools: their `tools` lists
+leave them out on purpose. Standing agents also keep strict MCP config, so they load no connectors either.
+
+Like the account, all of this is fixed when a process starts: after an app update, every worker picks it up
+when its process next starts, including a resumed one.
+
 ## Attribution: meters, system_status, agent details
 
 Each session maps to an account source key (`sessionSource`, `server/usage.ts`):

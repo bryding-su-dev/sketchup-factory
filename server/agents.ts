@@ -15,7 +15,7 @@ import { machineDir, parseSandboxRef, poolSettingsOf } from './machines.ts';
 import { switchBranch } from './switchBranch.ts';
 import { searchTranscripts } from './search.ts';
 import { openUnity, unityMcpServerFor, type SceneState, type UnityBridge } from './unityMcp.ts';
-import { CATALOG } from './launch.ts';
+import { ARTIFACT_ENV, CATALOG, connectorAllowlist } from './launch.ts';
 import { COMPILE_DONE, COMPILE_FAILED, activityLine, readSince, Waker } from './wake.ts';
 import { AgentSession, snapshotOf, type OptionsFactory, type SessionHandle, type SessionManager } from './sessions.ts';
 import { HostMigrator, hostSandboxFrom } from './hostMigration.ts';
@@ -931,6 +931,12 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
 
   readonly workerOptions: OptionsFactory = (info: SessionInfo): Options => {
     const sb = this.sandboxes.require(info.sandboxId!);
+    const mcpServers = {
+      sandbox: this.workerTools(sb, info.id),
+      // Confined to this sandbox's editor (server/unityMcp.ts statusDirFor): it cannot find, or fall back to, another.
+      ...(this.cfg.unity.mcpServer ? { UnityMCP: { type: 'stdio' as const, ...unityMcpServerFor(this.cfg, sb.id)! } } : {}),
+    };
+    const connectors = this.cfg.worker.claudeAiConnectors ?? [];
     return {
       cwd: sb.path,
       model: info.model,
@@ -938,13 +944,13 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
       settingSources: ['user', 'project', 'local'],
       systemPrompt: { type: 'preset', preset: 'claude_code', append: this.workerBrief(sb) },
       // Only the MCP servers named here: never the host user's own (e.g. an ffsb entry pointing back
-      // at this server, which would let a worker launch more workers).
-      strictMcpConfig: true,
-      mcpServers: {
-        sandbox: this.workerTools(sb, info.id),
-        // Confined to this sandbox's editor (server/unityMcp.ts statusDirFor): it cannot find, or fall back to, another.
-        ...(this.cfg.unity.mcpServer ? { UnityMCP: { type: 'stdio' as const, ...unityMcpServerFor(this.cfg, sb.id)! } } : {}),
-      },
+      // at this server, which would let a worker launch more workers). Strict MCP config would also drop every
+      // claude.ai connector, so with connectors (config worker.claudeAiConnectors) an allowlist does it instead:
+      // these servers by name, the connectors by URL. mcp__ffsb stays off should a managed allowlist replace it.
+      ...(connectors.length
+        ? { strictMcpConfig: false, settings: { allowedMcpServers: connectorAllowlist(Object.keys(mcpServers), connectors) }, disallowedTools: ['mcp__ffsb'] }
+        : { strictMcpConfig: true }),
+      mcpServers,
       hooks: {
         // This server's own directory (code, config with the Claude token, user and session files) is
         // protected alongside the configured paths.
@@ -966,7 +972,7 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
       // The MCP-for-Unity server takes 20-40 s to answer on Windows; Claude Code's default connect timeout is 30 s.
       // The Claude account: the person's own (config userClaudeEnv) when they have one, else what config
       // claudeAccounts.workers picks (docs/accounts.md).
-      env: { MCP_TIMEOUT: '120000', ...claudeEnvFor(this.cfg, info.requestedBy, hostProcessEnv(this.cfg, 'workers')), ...this.publicGitEnv(), FF_SANDBOX_ID: sb.id, FF_SANDBOX_PATH: sb.path, ...maxEnv(this.cfg, info.id), ...sessionTempEnv(os.tmpdir(), info.id) },
+      env: { MCP_TIMEOUT: '120000', ...ARTIFACT_ENV, ...claudeEnvFor(this.cfg, info.requestedBy, hostProcessEnv(this.cfg, 'workers')), ...this.publicGitEnv(), FF_SANDBOX_ID: sb.id, FF_SANDBOX_PATH: sb.path, ...maxEnv(this.cfg, info.id), ...sessionTempEnv(os.tmpdir(), info.id) },
       ...(this.cfg.claudeExecutable ? { pathToClaudeCodeExecutable: this.cfg.claudeExecutable } : {}),
     };
   };
@@ -1180,7 +1186,7 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
       // The host's Claude account (config machines.useHostClaudeEnv), for this agent only: not the Mac's login. A
       // person with their own (config userClaudeEnv) runs on theirs (docs/identity.md).
       // FF_SESSION_ID tags what the agent does as Max (docs/max.md); the daemon adds FF_MAX_EVENTS, the machine's own file.
-      env: { ...claudeEnvFor(this.cfg, info.requestedBy, hostClaudeEnvFor(this.cfg, m)), FF_MACHINE_ID: m.id, FF_SESSION_ID: info.id },
+      env: { ...ARTIFACT_ENV, ...claudeEnvFor(this.cfg, info.requestedBy, hostClaudeEnvFor(this.cfg, m)), FF_MACHINE_ID: m.id, FF_SESSION_ID: info.id },
       login: machineUsesLogin(this.cfg, m),
     };
   }
@@ -1260,6 +1266,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
       },
       publicGit: this.publicGit(),
       env: {
+        ...ARTIFACT_ENV,
         ...claudeEnvFor(this.cfg, info.requestedBy, hostClaudeEnvFor(this.cfg, m)),
         FF_MACHINE_ID: m.id,
         FF_SANDBOX_ID: sb.id,
