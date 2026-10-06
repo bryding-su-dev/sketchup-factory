@@ -19,7 +19,7 @@ export type IconName =
   | 'menu' | 'plus' | 'send' | 'stop' | 'trash' | 'copy' | 'check' | 'x' | 'chevron' | 'back'
   | 'expand' | 'play' | 'power' | 'log' | 'refresh' | 'bell' | 'chat' | 'branch' | 'folder' | 'bot' | 'logout'
   | 'clock' | 'pause' | 'edit' | 'wallet' | 'image' | 'download' | 'paperclip' | 'bellOff' | 'search' | 'mic' | 'wave' | 'more'
-  | 'pulse' | 'alert' | 'inbox' | 'info' | 'tools' | 'arrowDown' | 'bulb' | 'settings' | 'monitor' | 'file';
+  | 'pulse' | 'alert' | 'inbox' | 'info' | 'tools' | 'arrowDown' | 'bulb' | 'settings' | 'monitor' | 'file' | 'camera';
 
 const PATHS: Record<IconName, ReactNode> = {
   pulse: <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />,
@@ -92,6 +92,12 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   download: <path d="M12 4v11M7 10l5 5 5-5M5 19h14" />,
+  camera: (
+    <>
+      <path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </>
+  ),
   paperclip: <path d="M8 12.5l5.5-5.5a3 3 0 0 1 4.2 4.2l-7 7a5 5 0 0 1-7-7L10 5" />,
   file: (
     <>

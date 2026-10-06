@@ -2377,6 +2377,21 @@ select.input {
   touch-action: manipulation;
 }
 
+/* The paperclip's menu on Android (w528): a sheet along the bottom of the screen, as Android's own choosers are (the
+   composer clips anything that would stick out of it, see overflow below). */
+.composer-attach .menu-pop {
+  position: fixed;
+  top: auto;
+  left: var(--s-3);
+  right: var(--s-3);
+  bottom: calc(var(--s-3) + env(safe-area-inset-bottom, 0px));
+  width: auto;
+}
+
+.composer-attach .menu-item {
+  min-height: 52px;
+}
+
 .composer-spacer {
   flex: 1;
   min-width: 0;

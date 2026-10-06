@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import type { DeliveredAttachment, TranscriptEvent } from '../shared/types.ts';
+import { RED_PNG } from './fakeAgent.ts';
 import { appState, expect, openSandbox, startWorker, test, uniq } from './fixtures.ts';
 
 /**
@@ -22,10 +23,13 @@ const bytes = (n: number, seed: number) => {
 
 type FileSpec = { name: string; mimeType: string; buffer: Buffer };
 
-/** The paperclip, then the file chooser it opens, as a person picks files on a desktop or a phone. */
+const isAndroid = async (page: Page) => /Android/.test(await page.evaluate(() => navigator.userAgent));
+
+/** The paperclip, then the file chooser it opens, as a person picks files on a desktop or a phone (on Android: Files). */
 async function attach(page: Page, scope: string, files: FileSpec[]) {
   const chooser = page.waitForEvent('filechooser');
   await page.locator(`${scope} .composer`).getByRole('button', { name: 'Attach files' }).click();
+  if (await isAndroid(page)) await page.getByRole('menuitem', { name: /^Files/ }).click();
   await (await chooser).setFiles(files);
 }
 
@@ -96,6 +100,55 @@ test('orchestrator chat: a .zip and a .log through the paperclip upload with pro
   expect(sha(await r.body())).toBe(sha(save));
 });
 
+test('w528: the paperclip opens the phone chooser (photos, camera, files), never the camera alone, and a photo and a video arrive', async ({ authed: page }) => {
+  const tag = uniq('pick');
+  const composer = page.locator('.orch .composer');
+  const android = await isAndroid(page);
+  const input = (name: string) => composer.locator(`input[type="file"][data-picker="${name}"]`);
+  const attrs = (name: string) =>
+    input(name).evaluate((el) => ({ accept: el.getAttribute('accept'), capture: el.getAttribute('capture'), multiple: el.hasAttribute('multiple') }));
+  // Any file, several at once, and no capture: a capture attribute sends a phone straight to its camera.
+  expect(await attrs('files')).toEqual({ accept: null, capture: null, multiple: true });
+  if (android) {
+    // Android Chrome shows its photo picker (Gallery, Google Photos) only for an input of images and videos alone.
+    expect(await attrs('photos')).toEqual({ accept: 'image/*,video/*', capture: null, multiple: true });
+    expect(await attrs('camera')).toEqual({ accept: 'image/*', capture: 'environment', multiple: false });
+    await expect(composer.locator('input[type="file"][capture]')).toHaveCount(1);
+  } else {
+    // iOS's own sheet (and a desktop's dialog) already offer the photo library, the camera and files: one picker.
+    await expect(composer.locator('input[type="file"]')).toHaveCount(1);
+  }
+
+  const chooser = page.waitForEvent('filechooser');
+  await composer.getByRole('button', { name: 'Attach files' }).click();
+  if (android) {
+    await expect(page.getByRole('menuitem')).toHaveText(['Photos and videos', 'Camera', 'Files: saves, bug reports, logs']);
+    await page.getByRole('menuitem', { name: 'Photos and videos' }).click();
+    await expect(page.getByRole('menuitem')).toHaveCount(0);
+  }
+  const picked = await chooser;
+  expect(await picked.element().getAttribute('data-picker')).toBe(android ? 'photos' : 'files');
+  expect(picked.isMultiple()).toBe(true);
+  const video = bytes(3 * MB, 11);
+  await picked.setFiles([
+    { name: `PXL_${tag}.png`, mimeType: 'image/png', buffer: Buffer.from(RED_PNG, 'base64') },
+    { name: `PXL_${tag}.mp4`, mimeType: 'video/mp4', buffer: video },
+  ]);
+  // The photo goes inline as an image; the video is uploaded as a file.
+  await expect(composer.locator('.composer-image')).toHaveCount(1);
+  await expect(composer.locator('.composer-file.done')).toHaveCount(1, { timeout: 20_000 });
+  await sendFrom(page, '.orch', `from my phone ${tag}`);
+
+  const bubble = page.locator('.orch .msg-user', { hasText: `from my phone ${tag}` });
+  await expect(bubble.locator('.img-strip img')).toHaveCount(1);
+  const id = (await bubble.locator('.attach-chip').getAttribute('href'))!.match(/^\/api\/attachments\/(att_[a-z0-9]{12})\/download$/)![1];
+  // The orchestrator got the image and the video, by its id and SHA-256.
+  const reply = page.locator('.orch .msg-assistant', { hasText: `from my phone ${tag}` });
+  await expect(reply).toContainText('(1 image)');
+  await expect(reply).toContainText(`${id} "PXL_${tag}.mp4": file, 3.0 MB (3,145,728 bytes)`);
+  await expect(reply).toContainText(`sha256 ${sha(video)}`);
+});
+
 test('paste and drop: a pasted log and a dropped zip become files to send, not images', async ({ authed: page }) => {
   const tag = uniq('pd');
   await fire(page, '.orch .composer [role="textbox"]', 'paste', [{ name: `pasted-${tag}.log`, type: 'text/plain', text: `pasted ${tag}` }]);
@@ -134,9 +187,7 @@ test('a worker gets the file in its sandbox: Inbox/<id>-<name>, byte for byte, a
 
 test('limits and locks: the size cap in the composer and the server, login for everything, raw chunks only with the upload header', async ({ authed: page, playwright }) => {
   // Too big for the 20 MB cap: refused in the composer before anything is sent.
-  const chooser = page.waitForEvent('filechooser');
-  await page.locator('.orch .composer').getByRole('button', { name: 'Attach files' }).click();
-  await (await chooser).setFiles([{ name: 'huge.zip', mimeType: 'application/zip', buffer: Buffer.alloc(21 * MB) }]);
+  await attach(page, '.orch', [{ name: 'huge.zip', mimeType: 'application/zip', buffer: Buffer.alloc(21 * MB) }]);
   await expect(page.locator('.toast', { hasText: 'huge.zip is 21.0 MB; the limit is 20.0 MB' })).toBeVisible();
   await expect(page.locator('.orch .composer-file')).toHaveCount(0);
 

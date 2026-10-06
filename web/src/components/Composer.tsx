@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, type ChangeEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SessionInfo } from '../../../shared/types';
 import { api } from '../api';
 import { holdReload } from '../freshness';
@@ -13,12 +13,25 @@ import { useVoicePrefs } from '../voice/dictation';
 import { DictationBar, MicButton } from './Mic';
 import { onScreenKeyboard } from '../viewport';
 import { VoiceModeButton, VoiceModeOverlay, useVoiceMode } from './VoiceMode';
-import { Icon } from './ui';
+import { Icon, Menu } from './ui';
 
 /** Without the app's settings yet: the server's defaults (config attachments). */
 const ATTACH_DEFAULTS = { maxBytes: 200 * 1024 * 1024, retentionDays: 30, maxPerMessage: 10 };
 /** Images go to the agent as images (converted when needed); one the browser cannot read is uploaded as a file. */
 const IMAGE_INPUT = /^image\//;
+/**
+ * Android Chrome opens its photo picker (Gallery and Google Photos) only for an input that accepts nothing but images and
+ * videos; one that takes any file gets a Camera / Files chooser with no photos in it (Chromium SelectFileDialog.java,
+ * shouldUsePhotoPicker). So on Android the paperclip asks which (w528). iOS's own sheet already offers the photo library,
+ * the camera and files for one input, and a desktop has no camera, so they keep the single picker.
+ */
+const ANDROID = /Android/i.test(navigator.userAgent);
+/** What each picker takes: photos and videos (the photo picker), the camera, or any file (saves, zips, logs too). */
+const PICKERS = {
+  photos: { accept: 'image/*,video/*', multiple: true },
+  camera: { accept: 'image/*', capture: 'environment' },
+  files: { multiple: true },
+} as const;
 
 export const Composer = memo(function Composer({
   session,
@@ -53,6 +66,8 @@ export const Composer = memo(function Composer({
   // The message box is contenteditable, not a textarea: see web/src/editable.ts.
   const ta = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const photoPicker = useRef<HTMLInputElement>(null);
+  const cameraPicker = useRef<HTMLInputElement>(null);
   const busy = isBusy(session);
   // Phones and tablets: with their on-screen keyboard (no Shift to hand) Enter inserts a new line and the
   // button sends; with a hardware keyboard (an iPad's) Enter sends, as on a desktop (onScreenKeyboard).
@@ -98,6 +113,12 @@ export const Composer = memo(function Composer({
         setReading((n) => n - 1);
       }
     }
+  };
+
+  /** A picker's choice; cleared so the same file can be picked again. */
+  const picked = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) void addFiles(e.target.files);
+    e.target.value = '';
   };
 
   // Pictures pasted into a message live only in this page: a new version's reload waits for them to be sent or removed.
@@ -371,20 +392,47 @@ export const Composer = memo(function Composer({
         <div className="composer-actions">
           {canAttach && (
             <>
-              <button className="btn btn-ghost btn-icon" onClick={() => picker.current?.click()} title={`Attach images or files: saves, bug reports, logs (up to ${fmtBytes(limits.maxBytes)}; or paste / drop them)`} aria-label="Attach files">
-                <Icon name="paperclip" size={16} />
-              </button>
+              {ANDROID ? (
+                <Menu label="Attach files" icon="paperclip" className="composer-attach">
+                  {(close) => (
+                    <>
+                      {(
+                        [
+                          ['image', 'Photos and videos', photoPicker],
+                          ['camera', 'Camera', cameraPicker],
+                          ['file', 'Files: saves, bug reports, logs', picker],
+                        ] as const
+                      ).map(([icon, label, ref]) => (
+                        <button
+                          key={icon}
+                          type="button"
+                          role="menuitem"
+                          className="menu-item"
+                          onClick={() => {
+                            close();
+                            ref.current?.click();
+                          }}
+                        >
+                          <Icon name={icon} />
+                          {label}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </Menu>
+              ) : (
+                <button className="btn btn-ghost btn-icon" onClick={() => picker.current?.click()} title={`Attach images or files: saves, bug reports, logs (up to ${fmtBytes(limits.maxBytes)}; or paste / drop them)`} aria-label="Attach files">
+                  <Icon name="paperclip" size={16} />
+                </button>
+              )}
               {/* Any file: images go inline, everything else is uploaded (docs/attachments.md). */}
-              <input
-                ref={picker}
-                type="file"
-                multiple
-                hidden
-                onChange={(e) => {
-                  if (e.target.files) void addFiles(e.target.files);
-                  e.target.value = '';
-                }}
-              />
+              <input ref={picker} type="file" data-picker="files" {...PICKERS.files} hidden onChange={picked} />
+              {ANDROID && (
+                <>
+                  <input ref={photoPicker} type="file" data-picker="photos" {...PICKERS.photos} hidden onChange={picked} />
+                  <input ref={cameraPicker} type="file" data-picker="camera" {...PICKERS.camera} hidden onChange={picked} />
+                </>
+              )}
             </>
           )}
           <span className="composer-spacer" />

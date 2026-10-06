@@ -17,7 +17,11 @@ parsing, no preview.
 <img src="images/attachments-sent-mobile.png" alt="The same on a phone" width="320">
 
 - **Paperclip, paste or drop**, in every chat with a composer except standing agents' (their runs are text only):
-  orchestrators, the dispatcher, workers. The paperclip opens the system's file picker, on a phone too. A paste takes
+  orchestrators, the dispatcher, workers. The paperclip opens the system's file picker. On Android it first asks
+  **Photos and videos** (Chrome's photo picker: Gallery, Google Photos), **Camera** or **Files** (saves, zips, logs),
+  because Android Chrome shows its photo picker only for an input that accepts nothing but images and videos, and an
+  any-file input gets a Camera / Files chooser without the photos (Chromium `SelectFileDialog.java`,
+  `shouldUsePhotoPicker`; w528). iOS's own sheet already offers the photo library, the camera and files. A paste takes
   whatever files the browser puts on the clipboard event (a screenshot always; files copied in Finder or Explorer
   depend on the browser).
 - **Images** (`image/*`) are shrunk and sent inline as before. An image the browser cannot read (HEIC on some
