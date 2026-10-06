@@ -72,6 +72,30 @@ test("the dispatcher's Compact conversation is an owner's only", async ({ authed
   await expect(panel.locator('.sys-line', { hasText: /^Compacted:/ })).toHaveCount(2, { timeout: 15_000 });
 });
 
+test('past its threshold the orchestrator compacts itself after the turn (w535): one line, and its context in the header', async ({ authed: page }) => {
+  const tag = uniq('auto');
+  const me = await appState(page.request);
+  // The e2e server compacts at 900,000 tokens; the fake agent's "#ctx" sets the context its reply reports. It waits 3
+  // turns after any compaction, and the /compact test above shares this orchestrator: a big turn again until it has.
+  const line = page.locator('.orch .sys-line', { hasText: /^Compacted: [\d,]+ → 18,000 tokens \(automatically: the context passed 900,000 tokens\)/ });
+  let n = 0;
+  await expect(async () => {
+    if (!(await line.count())) {
+      await sendMessage(page.request, me.orchestratorId, `a big one ${tag}-${++n} #ctx 950000`);
+      await expect(page.locator('.orch .msg-assistant', { hasText: `Echo: a big one ${tag}-${n}` })).toBeVisible({ timeout: 15_000 });
+    }
+    await expect(line.first()).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 60_000 });
+  const evs = await transcript(page.request, me.orchestratorId);
+  // Nothing was said when it started, and the compaction never reached the model as a person's message.
+  expect(evs.some((e) => e.kind === 'system' && e.text.startsWith('Compacting this conversation') && e.text.includes(tag))).toBe(false);
+  expect(evs.some((e) => e.kind === 'user' && e.text.startsWith('/compact'))).toBe(false);
+  const chip = page.locator('.orch').getByTestId('context-size');
+  await expect(chip).toHaveText(/^Context \d+k$/);
+  await expect.poll(async () => (await appState(page.request)).sessions.find((s) => s.id === me.orchestratorId)?.lastCompaction?.before).toBeTruthy();
+  await expect(chip).toHaveAttribute('title', /^context \d+k tokens · compacted .* \(.+ → .+, .+\)$/);
+});
+
 test('/compact mid-turn is refused with why', async ({ authed: page }) => {
   const me = await appState(page.request);
   await sendMessage(page.request, me.orchestratorId, `take your time #slow ${uniq('slow')}`);

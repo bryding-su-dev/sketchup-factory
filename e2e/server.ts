@@ -103,7 +103,8 @@ fs.writeFileSync(
       models: ['opus', 'sonnet'],
       defaultModel: 'opus',
       // Worker updates reach people's own orchestrators (docs/orchestrators.md; e2e/orchestrators.spec.ts).
-      orchestrator: { model: 'opus', effort: 'low', notifyOnWorkerEvents: true },
+      // Automatic compaction (w535) only when a test asks for it ("#ctx 950000"): the fake's context grows 5k a message.
+      orchestrator: { model: 'opus', effort: 'low', notifyOnWorkerEvents: true, compactAtTokens: 900_000, compactAtTurnUsd: 0 },
       worker: { permissionMode: 'bypassPermissions', effort: 'low' },
       voice: { enabled: false, autoInstall: false, tts: false },
       // A 20 MB cap: e2e/attachments.spec.ts sends a 9 MB file (two chunks) and is refused a 21 MB one.

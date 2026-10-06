@@ -103,6 +103,21 @@ test('app config: attachments.maxMB and attachments.retentionDays, live, bounded
   assert.deepEqual(full.attachments, { retentionDays: 14 }, 'null: back to the default (200 MB)');
 });
 
+test('app config: orchestrator.compactAtTokens and compactAtTurnUsd (w535), live, bounded, 0 is off', (t) => {
+  const { file, cfg } = setup(t);
+  const full = { ...cfg, orchestrator: { model: 'opus', effort: 'medium', notifyOnWorkerEvents: true } } as unknown as Config;
+  setAppConfig(file, full, 'orchestrator.compactAtTokens', '300000');
+  setAppConfig(file, full, 'orchestrator.compactAtTurnUsd', 0.75);
+  assert.deepEqual(full.orchestrator, { model: 'opus', effort: 'medium', notifyOnWorkerEvents: true, compactAtTokens: 300_000, compactAtTurnUsd: 0.75 }, 'applies at once, the rest kept');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).orchestrator, { compactAtTokens: 300_000, compactAtTurnUsd: 0.75 });
+  setAppConfig(file, full, 'orchestrator.compactAtTokens', 0);
+  assert.equal(full.orchestrator.compactAtTokens, 0, '0 turns it off');
+  for (const bad of ['49999', '900001', '1.5', 'lots']) assert.throws(() => setAppConfig(file, full, 'orchestrator.compactAtTokens', bad), /0 \(off\) or a whole number of tokens from 50,000 to 900,000/, bad);
+  for (const bad of ['0.01', '51', 'cheap']) assert.throws(() => setAppConfig(file, full, 'orchestrator.compactAtTurnUsd', bad), /0 \(off\) or a cost in USD from 0.05 to 50/, bad);
+  setAppConfig(file, full, 'orchestrator.compactAtTurnUsd', null);
+  assert.equal(full.orchestrator.compactAtTurnUsd, undefined, 'null: back to the default ($1)');
+});
+
 test('app config: usagePollMinutes, live, 5 to 240 minutes, default 15', (t) => {
   const { file, cfg } = setup(t);
   const full = { ...cfg, usagePollMinutes: 15 } as unknown as Config;

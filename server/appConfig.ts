@@ -6,6 +6,7 @@ import { OAUTH_TOKEN, SECRET_KEYS, hostLoginProblem, maskSecret } from './secret
 import { PROVIDER_TOKEN, tokenSha256 } from './providerProtocol.ts';
 import { USER_ID } from './identity.ts';
 import { writeFileDurable } from './durable.ts';
+import { AUTO_COMPACT_LIMITS } from './autoCompact.ts';
 
 /**
  * The config.json keys an agent may change (the set_app_config tool). Only cosmetic ones, plus the public
@@ -55,6 +56,10 @@ export const SETTABLE_KEYS = [
   // write-only: only its SHA-256 is stored, as providers.ffbox.tokenSha256.
   'providers.ffbox.enabled',
   'providers.ffbox.token',
+  // When the orchestrators compact their conversations by themselves (w535, server/autoCompact.ts): the context in
+  // tokens, and a turn's cost in USD. 0 turns either trigger off.
+  'orchestrator.compactAtTokens',
+  'orchestrator.compactAtTurnUsd',
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
@@ -157,6 +162,16 @@ export function normalizeSetting(key: SettableKey, value: unknown, cfg?: Config)
     case 'attachments.maxMB': {
       const n = Number(value);
       if (!Number.isInteger(n) || n < 1 || n > 4096) throw new Error('attachments.maxMB is a whole number of megabytes from 1 to 4096');
+      return n;
+    }
+    case 'orchestrator.compactAtTokens': {
+      const n = Number(value);
+      if (!Number.isInteger(n) || (n !== 0 && (n < AUTO_COMPACT_LIMITS.minTokens || n > AUTO_COMPACT_LIMITS.maxTokens))) throw new Error(`orchestrator.compactAtTokens is 0 (off) or a whole number of tokens from ${AUTO_COMPACT_LIMITS.minTokens.toLocaleString('en-US')} to ${AUTO_COMPACT_LIMITS.maxTokens.toLocaleString('en-US')}`);
+      return n;
+    }
+    case 'orchestrator.compactAtTurnUsd': {
+      const n = Number(value);
+      if (!Number.isFinite(n) || (n !== 0 && (n < AUTO_COMPACT_LIMITS.minTurnUsd || n > AUTO_COMPACT_LIMITS.maxTurnUsd))) throw new Error(`orchestrator.compactAtTurnUsd is 0 (off) or a cost in USD from ${AUTO_COMPACT_LIMITS.minTurnUsd} to ${AUTO_COMPACT_LIMITS.maxTurnUsd}`);
       return n;
     }
     case 'attachments.retentionDays': {
@@ -311,6 +326,8 @@ export function setAppConfig(file: string, cfg: Config, key: SettableKey, value:
     cfg.providers = { ...cfg.providers, ffbox };
   }
   else if (key === 'hostGuard.cleanup.ageRules') cfg.hostGuard.cleanup.ageRules = (v as { path: string; olderThanDays: number }[] | undefined) ?? [];
+  else if (key === 'orchestrator.compactAtTokens') cfg.orchestrator = { ...cfg.orchestrator, compactAtTokens: v as number | undefined };
+  else if (key === 'orchestrator.compactAtTurnUsd') cfg.orchestrator = { ...cfg.orchestrator, compactAtTurnUsd: v as number | undefined };
   else if (key === 'usagePollMinutes') cfg.usagePollMinutes = (v as number | undefined) ?? DEFAULT_USAGE_POLL_MINUTES;
   else if (key === 'hostGuard.cleanup.everyMinutes') cfg.hostGuard.cleanup.everyMinutes = (v as number | undefined) ?? DEFAULT_CLEANUP.everyMinutes;
   else if (key === 'hostGuard.cleanup.softFreeGB') cfg.hostGuard.cleanup.softFreeGB = (v as number | undefined) ?? DEFAULT_CLEANUP.softFreeGB;

@@ -72,6 +72,16 @@ test('notify: events become notices, pushed to each device that wants that kind'
   assert.equal(sent[0].payload.url, '#/session/s1');
 });
 
+test('notify: an automatic compaction (w535) is no finished turn; a person\'s /compact still says it is done', async (t) => {
+  const { sessions, notices } = setup(t);
+  const h = { info: info({}) };
+  sessions.events.emit('turnEnd', h, 'Echo: the last reply', { compaction: 'tokens' });
+  sessions.events.emit('turnEnd', h, 'Echo: the last reply', { compaction: 'self' });
+  sessions.events.emit('turnEnd', h, 'Compacted the conversation (the context was 276,366 tokens).', { compaction: 'person' });
+  await flush();
+  assert.deepEqual(notices, ['turnEnd:Belt fix finished']);
+});
+
 test('notify: a subscription the push service says is gone is dropped; bad subscriptions are refused', async (t) => {
   const { n, sessions, setFail } = setup(t);
   n.subscribe('alice', sub('old'), {}, 'x');

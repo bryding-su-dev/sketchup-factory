@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { AppVersion, ImageInput, Machine, MachineSandbox, MaxSummary, PermissionMode, Provider, Sandbox, SessionInfo, WorkItem, WorkStatus, SessionStatus, UnityState, SandboxStatus, StandingAgent, StandingRunOutcome, StandingTrigger } from '../../shared/types';
+import type { AppVersion, CompactionTrigger, ImageInput, Machine, MachineSandbox, MaxSummary, PermissionMode, Provider, Sandbox, SessionInfo, WorkItem, WorkStatus, SessionStatus, UnityState, SandboxStatus, StandingAgent, StandingRunOutcome, StandingTrigger } from '../../shared/types';
 import { displayName, isUnused } from '../../shared/labels';
 
 export { displayName, isUnused };
@@ -21,6 +21,34 @@ export function fmtBytes(n: number | undefined): string {
 export function fmtCost(usd: number | undefined): string {
   if (!usd) return '$0.00';
   return usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`;
+}
+
+/** A token count as the dashboard shows it: "940", "182k", "1.02M". */
+export function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+const COMPACTED_BY: Record<CompactionTrigger, string> = {
+  person: 'asked by a person',
+  tokens: 'automatically, past its token threshold',
+  cost: 'automatically, after a costly turn',
+  self: 'at its own request',
+  claude: 'by Claude Code at its limit',
+};
+
+/**
+ * An orchestrator's context and its last compaction (w535), for its header and menu: `short` ("182k") and the whole
+ * line ("context 182k tokens · compacted 2h ago (276k → 31k, automatically, past its token threshold)"). Undefined
+ * until either is known.
+ */
+export function contextGlance(s: Pick<SessionInfo, 'contextTokens' | 'lastCompaction'>, now: number): { short: string; line: string } | undefined {
+  const c = s.lastCompaction;
+  if (s.contextTokens === undefined && !c) return undefined;
+  const ctx = s.contextTokens !== undefined ? `context ${fmtTokens(s.contextTokens)} tokens` : 'context not measured yet';
+  const last = c ? `compacted ${fmtRelative(c.at, now)} (${fmtTokens(c.before)} → ${c.after !== undefined ? fmtTokens(c.after) : '?'}, ${COMPACTED_BY[c.trigger] ?? c.trigger})` : 'not compacted yet';
+  return { short: s.contextTokens !== undefined ? fmtTokens(s.contextTokens) : '–', line: `${ctx} · ${last}` };
 }
 
 export function fmtDuration(ms: number): string {

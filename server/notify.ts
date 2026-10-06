@@ -3,7 +3,7 @@ import path from 'node:path';
 import webpush from 'web-push';
 import { nameWithSlot } from '../shared/labels.ts';
 import { bus, emit, type Store } from './store.ts';
-import type { SessionHandle, SessionManager } from './sessions.ts';
+import type { SessionHandle, SessionManager, TurnEndMeta } from './sessions.ts';
 import type { DelegationRequest, NotifyKind, NotifyPrefs, Requester, Sandbox, ServerEvent, SessionInfo, StandingAgent, StandingRun, UnityBlocked, WorkItem } from '../shared/types.ts';
 import { checkArray, isObject, readJsonDurable, writeJsonDurable, type Check } from './durable.ts';
 
@@ -83,8 +83,10 @@ export class Notifier {
     sessions.events.on('permission', (s: SessionHandle, p: { toolName: string; input: unknown }) =>
       this.fire({ kind: 'permission', title: `${this.name(s.info)} needs you`, body: `Wants to use ${p.toolName}`, url: this.route(s.info), tag: `perm-${s.info.id}` }, this.audience?.(s.info, 'permission')),
     );
-    sessions.events.on('turnEnd', (s: SessionHandle, text: string) => {
+    sessions.events.on('turnEnd', (s: SessionHandle, text: string, meta?: TurnEndMeta) => {
       if (s.info.kind === 'standing') return; // runs are reported below, and only when they go wrong
+      // An automatic compaction (w535) is nobody's reply: no notification; a person's /compact still says it is done.
+      if (meta?.compaction && meta.compaction !== 'person') return;
       if (s.info.status === 'error') return;
       this.fire({ kind: 'turnEnd', title: `${this.name(s.info)} finished`, body: clip(firstLine(text || s.info.lastResult || 'Turn finished.'), 180), url: this.route(s.info), tag: `turn-${s.info.id}` }, this.audience?.(s.info, 'turnEnd'));
     });

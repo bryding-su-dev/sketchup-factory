@@ -4,7 +4,7 @@ import { api } from '../api';
 import { isMine, ledgerOrder } from '../../../shared/workOrder';
 import { sessionRoute } from '../attention';
 import { attempt, reloadTranscript, sessionsByIds } from '../store';
-import { dispatcherGlance, fmtCost, fmtRelative, isBusy, isOpenWork, navigate, useNow, workLabel, workTone } from '../util';
+import { contextGlance, dispatcherGlance, fmtCost, fmtRelative, isBusy, isOpenWork, navigate, useNow, workLabel, workTone } from '../util';
 import { Markdown } from './Markdown';
 import { SessionView } from './SessionView';
 import { accountOf } from './SystemMeters';
@@ -68,6 +68,8 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
   const owner = app.me?.role === 'owner';
   const glance = dispatcherGlance(session, open, app.me?.userId);
   const account = session ? accountOf(app, session.id) : undefined;
+  // Its context and last compaction (w535).
+  const ctx = session ? contextGlance(session, now) : undefined;
   const waiting = work.filter((w) => w.source && pendingApproval(w)).length;
 
   return (
@@ -82,6 +84,11 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
           <Dot tone={glance.tone} pulse={isBusy(session)} />
           <h2 className="ellipsis">Dispatcher</h2>
           <div className="spacer" />
+          {ctx && (
+            <span className="hb-on hide-phone" title={ctx.line} data-testid="context-size">
+              Context {ctx.short}
+            </span>
+          )}
           {owner && session && <TimersButton sessionId={session.id} label="Dispatcher" />}
           {owner && session && (
             <Menu label="Dispatcher options">
@@ -110,6 +117,12 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
                   <div className="menu-foot">
                     {session.model ?? 'default model'}
                     {account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
+                    {ctx && (
+                      <>
+                        <br />
+                        {ctx.line}
+                      </>
+                    )}
                   </div>
                 </>
               )}

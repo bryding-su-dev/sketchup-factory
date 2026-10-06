@@ -7,7 +7,7 @@ import { ModeSelect } from './SessionView';
 import { Transcript } from './Transcript';
 import { AttentionButton, DrawerButton } from './ShellButtons';
 import { Confirm, Icon, Menu, StateText } from './ui';
-import { chatOwner, fmtCost, fmtRelative, sessionLabel, sessionTone, useNow } from '../util';
+import { chatOwner, contextGlance, fmtCost, fmtRelative, sessionLabel, sessionTone, useNow } from '../util';
 import { accountOf } from './SystemMeters';
 import { TimersButton } from './Timers';
 
@@ -72,6 +72,13 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
 
   const running = session.status === 'running' || session.status === 'starting';
   const owner = readOnly ? chatOwner(session) : undefined;
+  // Its context and last compaction (w535): what each turn sends again, and when it was last cut down.
+  const ctx = contextGlance(session, now);
+  const ctxChip = ctx && (
+    <span className="hb-on hide-phone" title={ctx.line} data-testid="context-size">
+      Context {ctx.short}
+    </span>
+  );
   if (owner) {
     return (
       <section className={`orch orch-readonly${compact ? ' orch-compact' : ''}`}>
@@ -81,6 +88,7 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
             <span className="orch-name">{owner.displayName}</span>
             <StateText tone={sessionTone(session.status)} label={sessionLabel[session.status]} pulse={running} className="orch-state" />
           </div>
+          {ctxChip}
           {!compact && <AttentionButton />}
         </header>
         <Transcript
@@ -131,6 +139,7 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
             <Icon name="pulse" size={13} /> {heartbeat} min
           </span>
         )}
+        {ctxChip}
         <TimersButton sessionId={session.id} />
         {!compact && <AttentionButton />}
         <Menu label="Conversation options" className="orch-menu">
@@ -173,6 +182,12 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
               <div className="menu-foot">
                 {session.model ?? 'default model'}
                 {account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
+                {ctx && (
+                  <>
+                    <br />
+                    {ctx.line}
+                  </>
+                )}
               </div>
             </>
           )}

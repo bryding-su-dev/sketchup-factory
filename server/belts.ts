@@ -27,6 +27,7 @@ export const PERSONAL_TOOLS: ReadonlySet<string> = new Set([
   'list_delegation_requests',
   // its own
   'wake_me',
+  'compact_conversation',
   'set_heartbeat',
   'set_timer',
   'list_timers',
@@ -50,6 +51,9 @@ const NOT_DISPATCHER: ReadonlySet<string> = new Set([...PERSONAL_ONLY, 'set_hear
 
 /** Tools only the dispatcher has. */
 const DISPATCHER_ONLY: ReadonlySet<string> = new Set(['decide_work', 'send_to_ffbox']);
+
+/** Tools for an orchestrator's own conversation (w535), which a remote client does not have. */
+const NOT_REMOTE: ReadonlySet<string> = new Set(['compact_conversation']);
 
 /**
  * The dispatcher's destructive and administrative tools, which run only when a person asked. They run in a turn a
@@ -78,7 +82,7 @@ export type BeltRole = 'dispatcher' | 'personal' | 'remote';
  */
 export function beltFor<T extends BeltTool>(role: BeltRole, all: readonly T[], guard?: (tool: string, workId: string | undefined) => string | undefined): T[] {
   if (role === 'personal') return all.filter((t) => PERSONAL_TOOLS.has(t.name));
-  if (role === 'remote') return all.filter((t) => !PERSONAL_ONLY.has(t.name) && !DISPATCHER_ONLY.has(t.name));
+  if (role === 'remote') return all.filter((t) => !PERSONAL_ONLY.has(t.name) && !DISPATCHER_ONLY.has(t.name) && !NOT_REMOTE.has(t.name));
   return all
     .filter((t) => !NOT_DISPATCHER.has(t.name))
     .map((t) => {

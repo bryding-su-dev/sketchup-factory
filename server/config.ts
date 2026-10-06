@@ -339,6 +339,17 @@ export interface Config {
      * (server/memoryGit.ts).
      */
     memoryRoot?: string;
+    /**
+     * Automatic compaction (w535, server/autoCompact.ts, docs/orchestrators.md "Compacting a conversation"): an
+     * orchestrator, the dispatcher included, compacts its conversation between turns once its context reaches this many
+     * tokens. Default 200,000; 0 turns this trigger off. Settable live (set_app_config).
+     */
+    compactAtTokens?: number;
+    /**
+     * Automatic compaction's cost trigger (w535): a turn that cost at least this many USD, with the context at
+     * 100,000 tokens or more, compacts the conversation after it. Default 1; 0 turns this trigger off.
+     */
+    compactAtTurnUsd?: number;
   };
   worker: {
     permissionMode: PermissionMode;

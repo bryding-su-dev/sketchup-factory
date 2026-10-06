@@ -195,10 +195,38 @@ export interface SessionInfo {
   /** Background tasks (a background command, a watcher) still open: they would have re-invoked it; a restart ends them. */
   backgroundTasks?: number;
   /**
+   * The context its next model call reads, in tokens (w535): the last call's input, cached and uncached, plus its
+   * output, as the SDK reported it; after a compaction, the size Claude Code measured. This host's sessions only.
+   */
+  contextTokens?: number;
+  /** What its last finished turn cost, in USD (w535): what the automatic compaction's cost trigger reads. */
+  lastTurnCostUsd?: number;
+  /** Its last compaction (w518, w535), whoever started it. */
+  lastCompaction?: CompactionRecord;
+  /**
    * Machine sessions: stopped or interrupted on purpose (stop_agent, interrupt_agent, the UI) since its last message.
    * Kept by the portal, never by the daemon: no dropped link or restart resumes it until it is sent a message again.
    */
   stoppedOnPurpose?: boolean;
+}
+
+/**
+ * Who started a compaction (w535): a person's `/compact` or the menu (`person`), FF Factory because the context or a
+ * turn's cost passed its threshold (`tokens`, `cost`), the orchestrator itself (`self`, compact_conversation), or Claude
+ * Code at its own hard limit (`claude`).
+ */
+export type CompactionTrigger = 'person' | 'tokens' | 'cost' | 'self' | 'claude';
+
+/** One finished compaction of a session's conversation (w535): when, why, and the context before and after. */
+export interface CompactionRecord {
+  at: string;
+  trigger: CompactionTrigger;
+  /** The context it compacted, in tokens (Claude Code's compact_boundary pre_tokens). */
+  before: number;
+  /** The context afterwards, in tokens, when it could be measured. */
+  after?: number;
+  /** The session's turn count then: automatic compaction waits a few turns before the next. */
+  turns: number;
 }
 
 /** An image kept with a session's transcript, served at /api/uploads/<sessionId>/<id>. */

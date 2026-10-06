@@ -129,6 +129,21 @@ test("tool belts: a person's orchestrator sees and files; the dispatcher acts; a
   const remote = names(beltFor('remote', agents.toolSpecs('human', agents.fixedActor(BEN), { role: 'remote', owner: BEN })));
   for (const x of ['start_agent', 'list_work', 'set_heartbeat']) assert.ok(remote.has(x), `remote has ${x}`);
   for (const x of ['request_work', 'update_work', 'decide_work', 'message_person']) assert.ok(!remote.has(x), `remote has no ${x}`);
+  // An orchestrator's own conversation (w535): both roles may ask to compact it; a remote client has none.
+  assert.ok(personal.has('compact_conversation') && d.has('compact_conversation'));
+  assert.ok(!remote.has('compact_conversation'));
+});
+
+test('compact_conversation (w535): an orchestrator asks for it in a turn, and its conversation is compacted once that turn ends', async (t) => {
+  const { store, chat, sessions } = setup(t);
+  const ben = chat(BEN);
+  sessions.send(ben.info.id, 'hello', 'human', undefined, { requestedBy: BEN });
+  await until('the first turn', () => ben.info.status === 'idle');
+  sessions.send(ben.info.id, '#tool compact_conversation {"focus":"keep the w530 numbers"}', 'human', undefined, { requestedBy: BEN });
+  await until('the compaction', () => ben.info.lastCompaction?.trigger === 'self');
+  const texts = store.readTranscript(ben.info.id).map((e) => ('text' in e ? e.text : ''));
+  assert.ok(texts.some((l) => /^Called compact_conversation: Your conversation is compacted once this turn ends/.test(l)), 'the tool answered in the turn');
+  assert.ok(texts.some((l) => /^Compacted: [\d,]+ → 18,000 tokens \(automatically: the orchestrator asked for it\)/.test(l)), 'one line when it is done');
 });
 
 test('filing and dedupe: the overlap is found at once, a repeat is the same request, the dispatcher must merge or say why not', async (t) => {

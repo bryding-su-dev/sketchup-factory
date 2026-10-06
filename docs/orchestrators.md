@@ -248,6 +248,67 @@ from 35,471 tokens before to 18,824 at the boundary, while `pre_tokens` said 35,
 summary alone). `detail: 'summary'` did not move after a compaction, so it is not used. The /compact's own `result`
 (no turns) came in one run and not in another, so nothing waits for it.
 
+### Automatic compaction
+
+Nobody has to type `/compact` (w535, Ben: "can you just compact yourself when youre starting to get full?"). FF Factory
+compacts every orchestrator of this portal, the dispatcher included, by itself (`server/autoCompact.ts`):
+
+- **When.** After a turn, once its context reaches `orchestrator.compactAtTokens` (default 200,000 tokens), or a turn
+  cost at least `orchestrator.compactAtTurnUsd` (default $1) with the context at 100,000 tokens or more. Both are set
+  live with `set_app_config` (an owner's ask); 0 turns either off. The context is the last model call's input, cached
+  and uncached, plus its output, from the SDK's own `usage` (`SessionInfo.contextTokens`); a turn's cost is the spend
+  between the turn's first message and its result (`lastTurnCostUsd`). Claude Code's own compaction near its 1M limit
+  still applies behind it.
+- **Only between turns.** It runs 2 s after a turn ends, and only if the orchestrator is idle with its process up: not
+  mid-turn, no permission prompt open, no message unanswered or waiting in the send queue (`compactBlocker`). A message
+  that arrives in those 2 s goes first, and the check runs again after that turn. One that arrives while it compacts
+  (it took 54 s at 525k tokens) waits behind it and is answered after it, as with `/compact`. It waits 3 turns after any
+  compaction, and the token trigger waits until the context has grown by half the threshold past what the last one left,
+  so a conversation a summary cannot bring under the threshold is not compacted over and over. One that does not finish
+  holds the next automatic one for 30 minutes.
+- **What it keeps.** Claude Code's `/compact` with a focus: for a person's orchestrator, every open request with its id,
+  state, worker, sandbox or machine, PRs and what it waits on; unanswered questions both ways; decisions, approvals and
+  holds with who gave them; timers and check-ins; promised reports; every id with what it is (`PERSONAL_FOCUS`). The
+  dispatcher's (`DISPATCHER_FOCUS`) also keeps queued requests, priorities, deploy checks and capacity facts. Its memory
+  folder is not touched, and `list_work` still has the ledger.
+- **What you see.** One line when it is done, "Compacted: 525,115 → 57,292 tokens (automatically: the context passed
+  200,000 tokens), in 54 s"; nothing when it starts, and no push notification (`TurnEndMeta.compaction`; a person's
+  `/compact` still notifies). A failure is an error line. The orchestrator's header shows **Context 182k**, and its
+  tooltip, the chat menu's footer and the sidebar rows' hints say the context and the last compaction: "context 182k
+  tokens · compacted 2h ago (525k → 57k, automatically, past its token threshold)" (`SessionInfo.lastCompaction`, set
+  by every compaction, a person's and Claude Code's own included). The dispatcher's page has the same.
+- **Asking for it.** An orchestrator may call `compact_conversation` (optional `focus`) when a long stretch of work is
+  done; it runs once that turn ends, under the same rules, and is refused within 3 turns of the last compaction. A remote
+  client (`/mcp`) does not have it.
+
+How the defaults were settled (measured 2026-10-06, read-only, from Claude Code's own transcripts of the three live
+orchestrators, 6,950 turns: the cost from each call's `usage` at Opus 5.5's prices, $4 input, $20 output, $0.20 cache
+reads, cache writes 1.25x and 2x input, matched the portal's recorded spend within 1%: $467.22 against $467.73 for
+Lothsahn's, $446.52 against $444.75 for Ben's, $910.67 against $905.30 for the dispatcher's):
+
+| context at a turn's start | median cost per turn (Lothsahn / Ben / dispatcher) |
+|---|---|
+| 100k-150k | $0.06 / $0.04 / $0.07 |
+| 200k-300k | $0.07 / $0.07 / $0.13 |
+| 500k-600k | $0.13 / $0.13 / $0.25 |
+| 800k-1M | $0.21 / $0.20 / $0.36 |
+
+A model call costs about $0.20 per million tokens of context (cache reads), and each compacted
+cycle let the context grow 1.3k-2.4k tokens a turn from 30-90k up to Claude Code's own compaction at about 967k, every
+390-750 turns. A compaction cost $0.17 at 276k (Lothsahn's `/compact`) and $0.23 at 525k (below). Treating the context
+as a sawtooth from about 40k to the threshold, the cheapest threshold is about 100k on cost alone, and the average cost
+per turn is $0.039 at 200k against $0.15 at today's 967k (about 4x less); 200k compacts about every 95 turns, half as
+often as 100k for about $0.01 a turn more, because each compaction drops detail. $1 a turn is past the 90th percentile
+at every context size (at most $0.65), so the cost trigger only catches outliers.
+
+Before and after, on a copy of Ben's orchestrator (its 533k-token conversation copied, resumed as a fork in a scratch
+folder with no tools, the live session untouched; `/compact` with `PERSONAL_FOCUS`): a cached turn cost $0.21 at 521k
+and $0.10 at 70k (the context part of each call went from $0.10 to $0.013); the compaction cost $0.23 and went 525,115 →
+57,292 tokens in 54 s. Asked the same question before and after (every open request, unanswered question, decision and
+timer), the two answers after it had, between them, all 23 eight-character ids (workers, a timer, a commit), all 13 PR numbers
+and 61 of the 62 request ids: w478 was missing,
+but the question it labelled ("brighten the lamps after w478?") was kept.
+
 ## Where messages go
 
 | message | to |
