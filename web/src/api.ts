@@ -103,6 +103,8 @@ export const api = {
   /** `note` is set for a standing agent: what the message did (started a run, joined one, waited). */
   sendMessage: (sessionId: string, text: string, images?: ImageInput[], attachments?: string[]) =>
     request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }),
+  /** Compact an orchestrator's conversation now (w518): what `/compact [focus]` typed in its chat does. */
+  compact: (sessionId: string, instructions?: string) => request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/compact`, instructions ? { instructions } : {}),
   // Attachments (docs/attachments.md): an upload starts here; web/src/upload.ts sends the chunks.
   beginAttachment: (name: string, size: number) => request<{ uploadId: string; name: string; size: number; received: number; chunkBytes: number }>('POST', '/api/attachments', { name, size }),
   attachmentUpload: (uploadId: string) => request<{ received: number; size: number }>('GET', `/api/attachments/uploads/${enc(uploadId)}`),

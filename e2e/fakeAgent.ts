@@ -12,6 +12,10 @@
  *   "#die"         the agent process ends mid-turn (as when the server's process tree is stopped)
  *   "#bg"          starts a background task (a background command, a watcher) and ends the turn
  *   "#whoami"      says the sender line the message came with: "Sender: [from …]", or "Sender: none" (w389)
+ *   "/compact [focus]"  Claude Code's /compact, as the CLI answers it when the message is the command itself (w518):
+ *                  "compacting", a compact_boundary with the context before and the summary's size, a result of no
+ *                  turns; getContextUsage() then says the smaller context. With "#fail" in the focus the compaction
+ *                  fails (a status with compact_result "failed").
  *   "#tool <name> <json>"  (one per line) calls that tool of the session's in-process MCP server (an orchestrator's
  *                  belt) with those arguments, and says what it answered: "Called <name>: <answer>". Only in a
  *                  person's own message (the "[from <name>]" line), so a notice quoting the tag never sets it off.
@@ -41,6 +45,8 @@ export function fakeQuery(fake: FakeOptions = {}) {
     const abort = options?.abortController ?? new AbortController();
     let interrupted = false;
     let msgId = 0;
+    // The context in use, as getContextUsage() reports it: every message adds to it, a /compact shrinks it.
+    let context = 20_000;
 
     const text = (t: string): SDKMessage =>
       ({ type: 'assistant', parent_tool_use_id: null, uuid: `a${++msgId}`, session_id: sessionId, message: { id: `m${msgId}`, role: 'assistant', content: [{ type: 'text', text: t }] } }) as never;
@@ -103,6 +109,21 @@ export function fakeQuery(fake: FakeOptions = {}) {
         const images = typeof content === 'string' ? 0 : content.filter((b) => b.type === 'image').length;
         const uuid = m.uuid ?? '';
         yield state('running');
+        if (/^\/compact\b/.test(said)) {
+          yield { type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId, uuid: `c${++msgId}` } as never;
+          await sleep(step);
+          if (/#fail\b/.test(said)) {
+            yield { type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'the summary request failed', session_id: sessionId, uuid: `c${++msgId}` } as never;
+          } else {
+            const pre = context;
+            context = 18_000;
+            yield { type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: pre, post_tokens: 2_000, duration_ms: 1_500 }, session_id: sessionId, uuid: `c${++msgId}` } as never;
+          }
+          yield { type: 'result', subtype: 'success', is_error: false, result: '', total_cost_usd: 0.01 * msgId, num_turns: 0, duration_ms: 1500, user_message_uuids: [uuid], session_id: sessionId, uuid: `x${++msgId}` } as never;
+          yield state('idle');
+          continue;
+        }
+        context += 5_000;
         // The harness's "[from the orchestrator]" / "[from <person>]" line (server/sessions.ts, promptText) is not the message.
         const words = said.replace(/^\[from [^\]\n]*\]\n/, '');
         const byPerson = /^\[from (?!the orchestrator)[^\]\n]*\]\n/.test(said);
@@ -193,6 +214,9 @@ export function fakeQuery(fake: FakeOptions = {}) {
         interrupted = true;
       },
       async setPermissionMode() {},
+      async getContextUsage() {
+        return { categories: [], totalTokens: context, maxTokens: 200_000, settings: {} };
+      },
       async setModel() {},
       close() {
         abort.abort();

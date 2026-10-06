@@ -7,7 +7,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, publicIdentityOf, ROOT } from './config.ts';
 import { Store, bus } from './store.ts';
 import { SandboxManager } from './sandboxes.ts';
-import { SessionManager, snapshotOf } from './sessions.ts';
+import { SessionManager, compactCommand, snapshotOf } from './sessions.ts';
 import { TIMER_LIMITS } from './timers.ts';
 import { Agents } from './agents.ts';
 import { MachineManager, machineForPath, parseSandboxRef } from './machines.ts';
@@ -48,7 +48,7 @@ import { UsageTracker, accountLines, buildAccounts, hostToken, machineToken, ses
 import { appVersion, formatVersion } from './version.ts';
 import { VoiceService } from './voice.ts';
 import { MAX_DICTATION_SECONDS, MAX_TTS_CHARS, buildVoicePrompt, wavSeconds, type SpeakRequest, type TranscribeRequest, type VocabularySource } from '../shared/voice.ts';
-import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
+import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, Requester, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
 
 const WEB = path.join(ROOT, 'web', 'dist');
 
@@ -582,6 +582,9 @@ route('POST', '/api/sessions/([\\w-]+)/message', async (req, [id]) => {
   }
   if (!imgs.length && !files.length) need(text, 'text');
   mayDrive(req, s.info);
+  // `/compact [focus]` (w518) is no message: it compacts the conversation. Its wake_me check-in and budgets stay.
+  const focus = s.info.kind === 'orchestrator' && !imgs.length && !files.length ? compactCommand(String(text ?? '')) : undefined;
+  if (focus !== undefined) return { note: compactNow(id, focus, requesterOf(req)) };
   if (s.info.kind === 'orchestrator') {
     // A person wrote to their orchestrator: its own wake_me check-in is moot, and its budgets start again.
     agents.waker.cancel(id);
@@ -589,6 +592,24 @@ route('POST', '/api/sessions/([\\w-]+)/message', async (req, [id]) => {
   }
   await agents.sendWithAttachments(id, String(text ?? '').trim(), 'human', { images: imgs, attachments: files, requestedBy: requesterOf(req) });
   return {};
+});
+
+/** Compact an orchestrator's conversation (w518); a refusal is a 409 the page shows. */
+function compactNow(id: string, focus: string, by: Requester): string {
+  try {
+    return sessions.compact(id, focus, by);
+  } catch (e) {
+    throw new HttpError(409, `Not compacted: ${(e as Error).message}.`);
+  }
+}
+
+// `/compact` as a button (w518): a person's own orchestrator for them, the dispatcher (nobody chats with it) for an owner.
+route('POST', '/api/sessions/([\\w-]+)/compact', async (req, [id]) => {
+  const s = sessions.get(id);
+  if (s.info.kind !== 'orchestrator') throw new HttpError(400, '/compact is for the orchestrators\' chats');
+  mayDrive(req, s.info);
+  const { instructions } = await readJson<{ instructions?: string }>(req);
+  return { note: compactNow(id, String(instructions ?? ''), requesterOf(req)) };
 });
 
 // A person opened their own chat: the messages other people sent them there are read (docs/orchestrators.md).

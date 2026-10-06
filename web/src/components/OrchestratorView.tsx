@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useState } from 'react';
 import type { SessionInfo } from '../../../shared/types';
 import { api } from '../api';
-import { attempt, openSession, reloadTranscript, useStore } from '../store';
+import { attempt, openSession, reloadTranscript, toast, useStore } from '../store';
 import { Composer } from './Composer';
 import { ModeSelect } from './SessionView';
 import { Transcript } from './Transcript';
@@ -40,6 +40,8 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
   const [prefill, setPrefill] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const clearPrefill = useCallback(() => setPrefill(null), []);
+  // `/clear` (or `/new`, as in Claude Code) asks before starting a fresh conversation, like the menu's New conversation (w518).
+  const clearCommand = useCallback((t: string) => /^\/(clear|new)$/i.test(t.trim()) && (setConfirmReset(true), true), []);
   const heartbeat = useHeartbeat();
   const now = useNow(30_000);
   const account = useStore((s) => (s.app && session ? accountOf(s.app, session.id) : undefined));
@@ -157,6 +159,17 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
               >
                 <Icon name="plus" size={15} /> New conversation…
               </button>
+              <button
+                className="menu-item"
+                title="Summarise the conversation so far, so each turn costs less (the same as typing /compact)"
+                onClick={async () => {
+                  close();
+                  const ok = await attempt(api.compact(session.id));
+                  if (ok?.note) toast(ok.note);
+                }}
+              >
+                <Icon name="refresh" size={15} /> Compact conversation
+              </button>
               <div className="menu-foot">
                 {session.model ?? 'default model'}
                 {account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
@@ -167,7 +180,7 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
       </header>
       <Transcript session={session} size={compact ? 'normal' : 'large'} empty={empty} />
       <div className="orch-composer-wrap">
-        <Composer key={session.id} session={session} size={compact ? 'normal' : 'large'} placeholder="Message the orchestrator" prefill={prefill} onPrefillUsed={clearPrefill} autoFocus={!compact} />
+        <Composer key={session.id} session={session} size={compact ? 'normal' : 'large'} placeholder="Message the orchestrator" prefill={prefill} onPrefillUsed={clearPrefill} autoFocus={!compact} onCommand={clearCommand} />
       </div>
       {confirmReset && (
         <Confirm

@@ -96,6 +96,17 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
                   >
                     <Icon name="plus" size={15} /> New conversation…
                   </button>
+                  <button
+                    className="menu-item"
+                    title="Summarise the dispatcher's conversation so far, so each of its turns costs less"
+                    onClick={async () => {
+                      close();
+                      const ok = await attempt(api.compact(session.id));
+                      if (ok?.note) toast(ok.note);
+                    }}
+                  >
+                    <Icon name="refresh" size={15} /> Compact conversation
+                  </button>
                   <div className="menu-foot">
                     {session.model ?? 'default model'}
                     {account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}

@@ -27,6 +27,7 @@ export const Composer = memo(function Composer({
   prefill,
   onPrefillUsed,
   autoFocus,
+  onCommand,
 }: {
   session: SessionInfo;
   size?: 'normal' | 'large';
@@ -36,6 +37,8 @@ export const Composer = memo(function Composer({
   onPrefillUsed?: () => void;
   /** Put the caret here when the conversation opens (desktop only: on a phone it would pop the keyboard). */
   autoFocus?: boolean;
+  /** A text-only message the page handles itself instead of sending (w518: `/clear`): true when it did. */
+  onCommand?: (text: string) => boolean;
 }) {
   const key = `ffsb.draft.${session.id}`;
   const [text, setText] = useState(() => lsGet(key) ?? '');
@@ -199,6 +202,7 @@ export const Composer = memo(function Composer({
     const t = (override ?? text).trim();
     if ((!t && !images.length && !files.length) || sending || reading || uploading) return;
     if (failed) return toast('An attachment did not upload: retry it or remove it', 'error');
+    if (!images.length && !files.length && onCommand?.(t)) return setText('');
     setSending(true);
     const sentFiles = files;
     const ok = await attempt(

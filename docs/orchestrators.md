@@ -211,6 +211,43 @@ A timer is a standing job (`server/timers.ts`):
   /api/timers/<orchestrator id>/<timer id> {action: pause|resume|cancel}`, guarded like writing to that chat). It lists
   each timer's schedule, next and last fire, state and note, and the day's messages against the budget.
 
+## Compacting a conversation
+
+A long conversation costs more each turn, because every turn sends all of it again (Lothsahn saw $20.54 on one short
+reply). An orchestrator cannot compact its own conversation, so its person does, as in Claude Code (w518):
+
+- **`/compact`**, or **`/compact <focus>`** ("/compact keep the open requests and their PR numbers"), typed in your own
+  chat, or **Compact conversation** in the chat's menu. It is not sent to the model as text. The server
+  (`POST /api/sessions/<id>/message` catches it with `compactCommand`; `POST /api/sessions/<id>/compact` is the button)
+  calls `SessionManager.compact`, which sends Claude Code's own `/compact [focus]` to the session as a message of its
+  own, without the `[from …]` line that would make it text (`AgentSession.compact`, `server/sessions.ts`). A stopped
+  orchestrator resumes its conversation for it.
+- **The dispatcher**, which nobody chats with, has the same **Compact conversation** in its page's menu, for an owner
+  only (`mayDrive`).
+- **What you see:** "Compacting this conversation (asked by …)" in the chat at once, the session's state says
+  "compacting the conversation", and when it is done one line with the size measured before and after: "Compacted: the
+  context went from 412,300 tokens to 41,200 tokens (of 1,000,000 tokens), in 48 s". Before is Claude Code's own count
+  of what it compacted (`compact_boundary`'s `pre_tokens`); after is `getContextUsage()` once it is done. If that cannot
+  answer within 20 s, the line gives the summary's size instead (`post_tokens`, which leaves out the system prompt and
+  tools) and says so. A compaction that fails says why, as an error line. The turn's end (your device's notification)
+  says it compacted, and the last report stays the last real reply. Claude Code's own automatic compactions leave a
+  line too.
+- **Nothing in flight is lost.** Mid-turn (working, starting, or waiting for a permission answer) `/compact` is
+  refused with why ("Not compacted: it is mid-turn …; send it again once this turn has ended, or stop the turn first"),
+  nothing is sent, and the text stays in the box. Unlike a message, `/compact` does not cancel the orchestrator's
+  `wake_me` check-in or reset its budgets, and timers are untouched. A wake, a timer or a worker's report that arrives
+  while it compacts waits behind it and is answered afterwards, with the compacted history.
+- **`/clear`** (or `/new`) in your own chat opens the menu's "Start a new conversation?" dialog; it starts nothing
+  without that confirmation. A new conversation keeps your requests, workers and timers ([Timers](#timers)).
+
+How it was settled (measured 2026-10-06 with the Agent SDK 0.3.284 this repo pins, in three short runs on Haiku in
+streaming-input mode, the way orchestrators run): `/compact <focus>` sent as a user message compacted (`status`
+"compacting", then `compact_boundary` with `trigger: 'manual'`), also as the first message after a `resume`; a message
+queued behind it was answered after it and still knew what the focus kept; `getContextUsage({ detail: 'full' })` went
+from 35,471 tokens before to 18,824 at the boundary, while `pre_tokens` said 35,535 and `post_tokens` 2,561 (the
+summary alone). `detail: 'summary'` did not move after a compaction, so it is not used. The /compact's own `result`
+(no turns) came in one run and not in another, so nothing waits for it.
+
 ## Where messages go
 
 | message | to |
@@ -295,6 +332,8 @@ or not, takes no slot. Orchestrators never count. The Unity editor limits are un
   Could you run the firewall script on BEAST?"); Open goes to their chat. Until you open your chat, the sidebar's
   Orchestrator row has an amber count ("Unread: 1 message from Lothsahn"), and your devices get a "Message from
   Lothsahn" notification.
+- `/compact [focus]` in your chat, or Compact conversation in its menu, compacts your orchestrator's conversation; an
+  owner has the same for the dispatcher ([Compacting a conversation](#compacting-a-conversation)).
 - Your heartbeat is your own, and so are your orchestrator's timers: the clock button in your chat's header lists them,
   with pause, resume and cancel. Owners see the dispatcher's on its page.
 

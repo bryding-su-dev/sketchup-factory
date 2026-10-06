@@ -132,6 +132,11 @@ export interface SessionHandle {
    */
   send(text: string, from?: 'human' | 'orchestrator' | 'system', uuid?: string, images?: ImageInput[], requestedBy?: Requester, attachments?: DeliveredAttachment[]): string;
   interrupt(): Promise<void>;
+  /**
+   * Compact the conversation now (w518, a person's `/compact [focus]`): Claude Code's own /compact, between turns only.
+   * Returns what to tell the person; throws why it cannot. Only sessions in this process have it.
+   */
+  compact?(instructions?: string, by?: Requester): string;
   setMode(mode: PermissionMode): Promise<void>;
   /** `onPurpose` false: the server is stopping, not a person or the orchestrator; the restart marks stay. */
   stop(onPurpose?: boolean): void;
@@ -152,6 +157,9 @@ export function snapshotOf(h: SessionHandle): SessionSnapshot {
 }
 
 const MAX_TOOL_RESULT = 6000;
+
+/** A session's statusDetail while its /compact runs (w518). */
+export const COMPACTING = 'compacting the conversation';
 
 function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -174,6 +182,31 @@ export function promptText(_kind: SessionKind, text: string, from: 'human' | 'or
 }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars)` : s);
+
+/** The longest focus a `/compact <focus>` may carry, in characters. */
+export const COMPACT_FOCUS_CHARS = 2000;
+
+/**
+ * A person's message that is Claude Code's `/compact`, alone or with focus instructions after it (w518): the focus
+ * (empty for none), or undefined for any other message. `/compactly` and a `/compact` inside a sentence are messages.
+ */
+export function compactCommand(text: string): string | undefined {
+  const m = /^\/compact(?:\s+([\s\S]*))?$/.exec(text.trim());
+  return m ? (m[1] ?? '').replace(/\s+/g, ' ').trim() : undefined;
+}
+
+const tokens = (n: number) => `${n.toLocaleString('en-US')} tokens`;
+
+/**
+ * The transcript line a finished /compact leaves (w518). `before` is Claude Code's own count of the context it compacted
+ * (compact_boundary pre_tokens); `after` the context measured once it was done (getContextUsage), or, when that could not
+ * be measured, the summary that replaced the conversation (post_tokens), which leaves out the system prompt and tools.
+ */
+export function compactedLine(before: number, after: { total: number; max?: number } | undefined, summary: number | undefined, ms: number | undefined): string {
+  const took = ms ? `, in ${Math.max(1, Math.round(ms / 1000))} s` : '';
+  if (after) return `Compacted: the context went from ${tokens(before)} to ${tokens(after.total)}${after.max ? ` (of ${tokens(after.max)})` : ''}${took}, as Claude Code measured it before and after.`;
+  return `Compacted: the context was ${tokens(before)}; the summary that replaces it is ${summary !== undefined ? tokens(summary) : 'of unknown size'} (the context after it could not be measured)${took}.`;
+}
 
 /**
  * One Claude Code conversation, driven through the Agent SDK in streaming-input mode so a person
@@ -200,6 +233,10 @@ export class AgentSession implements SessionHandle {
   /** Stopped or interrupted by a person or the orchestrator since its last message: a restart leaves it alone. */
   private stoppedOnPurpose = false;
   private graceTimer?: NodeJS.Timeout;
+  /** The /compact in progress (w518): the uuid of its message, and when it was sent. */
+  private compacting?: { uuid: string; at: number };
+  /** The uuids of /compact messages not answered yet: their results are no turn a person reads. */
+  private readonly compactUuids = new Set<string>();
   private readonly store: SessionSink;
   private readonly makeOptions: OptionsFactory;
   private readonly events: EventEmitter;
@@ -246,6 +283,53 @@ export class AgentSession implements SessionHandle {
     this.update({ status: 'running', statusDetail: undefined, ...(opens ? { turnOpenSince: new Date().toISOString() } : {}) });
     if (opens) this.store.flush?.();
     return uuid;
+  }
+
+  /**
+   * Compact the conversation now (w518): Claude Code's own `/compact [focus]`, sent as a message of its own (without
+   * the sender line, which would make it text). Between turns only: mid-turn it throws, and nothing is sent. A stopped
+   * session resumes for it. Messages that arrive meanwhile (a wake_me, a timer, a worker's report) wait in the input
+   * and are answered after it, with the compacted history. Progress goes to the transcript as system lines.
+   */
+  compact(instructions = '', by?: Requester): string {
+    if (this.compacting) throw new Error('it is compacting already');
+    if (isMidTurn(this.info)) throw new Error(`it is mid-turn (${this.info.status.replace('_', ' ')}); /compact runs between turns, so send it again once this turn has ended, or stop the turn first`);
+    if (!this.info.sdkSessionId) throw new Error('there is no conversation to compact yet');
+    const no = this.q ? undefined : dryRunStartRefusal(this.info, 'human');
+    if (no) throw new Error(`not started: ${no}`);
+    const focus = instructions.replace(/\s+/g, ' ').trim();
+    if (focus.length > COMPACT_FOCUS_CHARS) throw new Error(`the focus is ${focus.length} characters; keep it to ${COMPACT_FOCUS_CHARS}`);
+    if (!this.q) this.start();
+    const uuid = randomUUID();
+    this.compacting = { uuid, at: Date.now() };
+    this.compactUuids.add(uuid);
+    this.store.append(this.info.id, { kind: 'system', text: `Compacting this conversation${by ? ` (asked by ${by.displayName})` : ''}${focus ? `, with the focus: ${focus}` : ''}. Messages that arrive meanwhile are answered after it.` });
+    this.input!.push(`/compact${focus ? ` ${focus}` : ''}`, uuid);
+    this.update({ status: 'running', statusDetail: COMPACTING });
+    return 'Compacting the conversation; the chat says when it is done.';
+  }
+
+  /** The /compact ended without a boundary (it failed, or the process went): say so, and the turn's end says it too. */
+  private compactFailed(why: string) {
+    if (!this.compacting) return;
+    this.compacting = undefined;
+    this.lastTurnText = `The compaction failed: ${why}.`;
+    this.store.append(this.info.id, { kind: 'error', text: this.lastTurnText });
+    if (this.info.statusDetail === COMPACTING) this.update({ statusDetail: undefined });
+  }
+
+  /** The context in use now, as Claude Code measures it (getContextUsage), or undefined when it cannot say within 20 s. */
+  private async contextNow(q: Query): Promise<{ total: number; max: number } | undefined> {
+    if (typeof q.getContextUsage !== 'function') return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const u = await Promise.race([q.getContextUsage({ detail: 'full' }), new Promise<undefined>((r) => (timer = setTimeout(() => r(undefined), 20_000)))]);
+      return u && Number.isFinite(u.totalTokens) ? { total: u.totalTokens, max: u.maxTokens } : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private start() {
@@ -296,6 +380,7 @@ export class AgentSession implements SessionHandle {
         this.q = undefined;
         this.input = undefined;
         this.denyAllPending('session ended');
+        this.compactFailed('the agent process ended first');
         this.keepMarksBriefly();
         this.events.emit('ended', this);
       }
@@ -318,6 +403,25 @@ export class AgentSession implements SessionHandle {
             this.update({ status: this.pending.size ? 'waiting_permission' : 'idle', turnOpenSince: undefined });
             this.store.flush?.();
             this.events.emit('turnEnd', this, this.lastTurnText);
+          }
+        } else if (m.subtype === 'status') {
+          // A /compact (w518): Claude Code says whether it failed.
+          if (m.compact_result === 'failed') this.compactFailed(m.compact_error || 'Claude Code gave no reason');
+        } else if (m.subtype === 'compact_boundary') {
+          const meta = m.compact_metadata;
+          if (meta.trigger === 'manual' && this.compacting) {
+            const c = this.compacting;
+            this.compacting = undefined;
+            // What the turn's end says when nothing else was asked meanwhile (the notification); the transcript line
+            // follows once the context after it is measured.
+            this.lastTurnText = `Compacted the conversation (the context was ${tokens(meta.pre_tokens)}).`;
+            const q = this.q;
+            void (q ? this.contextNow(q) : Promise.resolve(undefined)).then((after) => {
+              this.store.append(id, { kind: 'system', text: compactedLine(meta.pre_tokens, after, meta.post_tokens, meta.duration_ms ?? Date.now() - c.at) });
+              if (this.info.statusDetail === COMPACTING) this.update({ statusDetail: undefined });
+            });
+          } else if (meta.trigger === 'auto') {
+            this.store.append(id, { kind: 'system', text: `Claude Code compacted this conversation by itself: the context was ${tokens(meta.pre_tokens)}.` });
           }
         } else if (m.subtype === 'background_tasks_changed') {
           this.backgroundTasks = m.tasks.filter((t) => !t.ambient).length;
@@ -363,8 +467,21 @@ export class AgentSession implements SessionHandle {
         // A resumed session's first result may already carry the earlier spend; do not count it twice.
         if (this.firstResult && total >= this.costBase) this.costBase = 0;
         this.firstResult = false;
+        const answered = m.user_message_uuids ?? (m.user_message_uuid ? [m.user_message_uuid] : []);
+        // A /compact's own result (w518) is no turn: its cost counts, but it leaves no reply and keeps the last report.
+        if (answered.length && answered.every((u) => this.compactUuids.has(u))) {
+          for (const u of answered) this.compactUuids.delete(u);
+          if (m.subtype !== 'success' || m.is_error) this.compactFailed(m.subtype === 'success' ? m.result || 'an error result' : m.subtype);
+          this.update({ costUsd: this.costBase + total });
+          if (!this.stateEvents) {
+            this.update({ status: this.pending.size ? 'waiting_permission' : 'idle', turnOpenSince: undefined });
+            this.events.emit('turnEnd', this, this.lastTurnText);
+          }
+          return;
+        }
+        for (const u of answered) this.compactUuids.delete(u);
         const text = m.subtype === 'success' ? m.result : `stopped: ${m.subtype}`;
-        for (const u of m.user_message_uuids ?? (m.user_message_uuid ? [m.user_message_uuid] : [])) this.outstanding.delete(u);
+        for (const u of answered) this.outstanding.delete(u);
         this.store.append(id, {
           kind: 'result',
           ok: m.subtype === 'success' && !m.is_error,
@@ -447,6 +564,7 @@ export class AgentSession implements SessionHandle {
     if (!this.q) return;
     this.denyAllPending('interrupted');
     await this.q.interrupt();
+    this.compactFailed('it was interrupted');
     this.outstanding.clear();
     this.stoppedOnPurpose = true;
     this.store.append(this.info.id, { kind: 'system', text: 'Interrupted.' });
@@ -493,6 +611,7 @@ export class AgentSession implements SessionHandle {
     this.q = undefined;
     this.input = undefined;
     this.denyAllPending('session stopped');
+    this.compactFailed('the session was stopped');
     this.update({ status: 'stopped', statusDetail: undefined });
     this.events.emit('ended', this);
   }
@@ -779,6 +898,17 @@ export class SessionManager {
     const gate = startsHere && !bypassGate ? this.startGate?.() : undefined;
     if (gate) throw new Error(`not started: ${gate}`);
     return s;
+  }
+
+  /**
+   * Compact an orchestrator's conversation now (w518: a person's `/compact [focus]`, or the dispatcher's button): what
+   * to tell the person; throws why it cannot (mid-turn, compacting already, nothing to compact yet).
+   */
+  compact(id: string, instructions = '', by?: Requester): string {
+    const s = this.get(id);
+    if (s.info.kind !== 'orchestrator') throw new Error('/compact is for the orchestrators\' chats');
+    if (!s.compact) throw new Error('this session cannot be compacted from here');
+    return s.compact(instructions, by);
   }
 
   /** Rename a session: one line, at most 80 characters. Returns the stored title. */
