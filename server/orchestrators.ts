@@ -619,6 +619,8 @@ export class Orchestrators {
     }
     if (note) {
       what.push(`note: ${note}`);
+      // Kept whole for the workers' briefs (w496); the log line is clipped.
+      w.notes = [...(w.notes ?? []), { at: this.now().toISOString(), by: owner.displayName, text: note.slice(0, 2000) }].slice(-20);
       if (w.status === 'question') w.status = 'new';
       if (w.flag) {
         what.push(`answers the design question "${clip(w.flag.text, 120)}"`);

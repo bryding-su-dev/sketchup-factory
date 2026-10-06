@@ -47,7 +47,15 @@ export interface QueuedSend {
   bypassGate?: boolean;
   at: string;
   why: string;
+  /** The last error a delivery attempt threw (w496): it stays queued and is tried again, up to QUEUE_HOLD_MS. */
+  lastError?: string;
 }
+
+/**
+ * How long a queued message that cannot be delivered yet (its machine's daemon outdated or offline, the host guard) is
+ * tried again before it is given up, with an error in its transcript (w496).
+ */
+export const QUEUE_HOLD_MS = 24 * 3_600_000;
 
 /** Idle agent processes kept on this host besides the running ones (limits.maxIdleAgents); the oldest idle one goes first. */
 export const DEFAULT_MAX_IDLE_AGENTS = 6;
@@ -878,9 +886,12 @@ export class SessionManager {
   }
 
   /** Deliver the queued messages that may go now, in order. Returns how many went. */
-  drain(): number {
+  drain(now = Date.now()): number {
     let sent = 0;
+    // A session whose first waiting message cannot go keeps the rest waiting too, so its messages go in order (w496).
+    const held = new Set<string>();
     for (const q of [...this.queue]) {
+      if (held.has(q.id)) continue;
       const s = this.sessions.get(q.id);
       const drop = () => {
         this.queue = this.queue.filter((x) => x !== q);
@@ -890,16 +901,35 @@ export class SessionManager {
         drop();
         continue;
       }
-      if (this.fullFor(s)) continue;
+      if (this.fullFor(s)) {
+        held.add(q.id);
+        continue;
+      }
       const startsHere = !s.live && s.info.kind !== 'orchestrator' && !s.info.machineId;
-      if (startsHere && !q.bypassGate && this.startGate?.()) continue;
-      drop();
+      if (startsHere && !q.bypassGate && this.startGate?.()) {
+        held.add(q.id);
+        continue;
+      }
       try {
         if (startsHere) this.makeRoom(s);
         s.send(q.text, q.from, q.uuid, q.images, q.requestedBy, q.attachments);
+        drop();
         sent++;
       } catch (e) {
-        this.store.append(q.id, { kind: 'error', text: `A queued message could not be delivered: ${(e as Error).message}` });
+        // Removed only once delivered (w496: a worker's brief was dropped when LothDesktop's daemon was outdated):
+        // tried again on the next pass, given up only after QUEUE_HOLD_MS.
+        const why = (e as Error).message;
+        if (now - (Date.parse(q.at) || now) >= QUEUE_HOLD_MS) {
+          drop();
+          this.store.append(q.id, { kind: 'error', text: `A queued message could not be delivered within ${QUEUE_HOLD_MS / 3_600_000} hours and was given up: ${why}. It began: ${q.text.replace(/\s+/g, ' ').slice(0, 200)}` });
+          continue;
+        }
+        held.add(q.id);
+        if (q.lastError !== why) {
+          q.lastError = why;
+          this.saveQueue();
+          this.store.append(q.id, { kind: 'system', text: `A waiting message could not be delivered yet (${why}); it is tried again shortly.` });
+        }
       }
     }
     return sent;
@@ -933,17 +963,32 @@ export class SessionManager {
    * Send, enforcing the concurrent-agent ceiling and the host guard when this send would start a process.
    * `bypassGate`: the host guard's own messages (resume after recovery, checkpoint requests).
    */
-  send(id: string, text: string, from: 'human' | 'orchestrator' | 'system' = 'human', images?: ImageInput[], opts: { bypassGate?: boolean; requestedBy?: Requester; attachments?: DeliveredAttachment[] } = {}): string {
+  /**
+   * `hold` (w496: a worker's first prompt, its brief): what would refuse it now (the host guard, a machine's daemon that
+   * is outdated or offline) queues it instead, and it goes as soon as it can, before any later message to the session.
+   */
+  send(id: string, text: string, from: 'human' | 'orchestrator' | 'system' = 'human', images?: ImageInput[], opts: { bypassGate?: boolean; requestedBy?: Requester; attachments?: DeliveredAttachment[]; hold?: boolean } = {}): string {
     const s = this.get(id);
+    const queue = (why: string) =>
+      this.enqueue({ uuid: randomUUID(), id, text, from, ...(images?.length ? { images } : {}), ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}), ...(opts.attachments?.length ? { attachments: opts.attachments } : {}), ...(opts.bypassGate ? { bypassGate: true } : {}), at: new Date().toISOString(), why });
     // ALL RUNNING SLOTS BUSY (w384): the message waits and goes when a turn ends, instead of being refused. So does any
     // later message to a session that already has one waiting, so its messages keep their order.
     const full = this.fullFor(s) ?? (this.queue.some((q) => q.id === id) && !isMidTurn(s.info) ? 'an earlier message to it is still waiting' : undefined);
-    if (full) {
-      return this.enqueue({ uuid: randomUUID(), id, text, from, ...(images?.length ? { images } : {}), ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}), ...(opts.attachments?.length ? { attachments: opts.attachments } : {}), ...(opts.bypassGate ? { bypassGate: true } : {}), at: new Date().toISOString(), why: full });
-    }
-    this.checkStart(id, opts.bypassGate);
+    if (full) return queue(full);
+    if (opts.hold) {
+      try {
+        this.checkStart(id, opts.bypassGate);
+      } catch (e) {
+        return queue((e as Error).message);
+      }
+    } else this.checkStart(id, opts.bypassGate);
     if (!s.live && s.info.kind !== 'orchestrator' && !s.info.machineId) this.makeRoom(s);
-    return s.send(text, from, undefined, images, opts.requestedBy, opts.attachments);
+    if (!opts.hold) return s.send(text, from, undefined, images, opts.requestedBy, opts.attachments);
+    try {
+      return s.send(text, from, undefined, images, opts.requestedBy, opts.attachments);
+    } catch (e) {
+      return queue((e as Error).message);
+    }
   }
 
   /**

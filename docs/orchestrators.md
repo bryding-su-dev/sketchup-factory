@@ -342,7 +342,20 @@ or not, takes no slot. Orchestrators never count. The Unity editor limits are un
   queues the message (and `start_agent`'s first prompt) in `data/send-queue.json`, which survives a restart, and delivers
   it, in order, when a turn ends or a process goes (and every 30 s). A message to a session that is mid-turn joins its turn
   at once, and a later message to a session with one waiting queues behind it. `message_agent` and `start_agent` say
-  "Queued, not refused: …" with the reason. The host guard (disk, RAM, the sandbox drive) still refuses a new process.
+  "Queued, not refused: …" with the reason. The host guard (disk, RAM, the sandbox drive) still refuses a new process
+  for a plain message.
+- **A worker's brief is never lost** (w496, 2026-10-06: two workers started while LothDesktop's daemon was outdated got
+  only the dispatcher's later "Start your brief now"). `start_agent`'s first prompt is sent with `hold`: whatever would
+  refuse it now (the host guard, a machine's daemon that is outdated or offline, a sandbox's attachments not fetchable
+  yet) queues it instead, so it goes first once it can, and a later message to that worker waits behind it. Before, the
+  outdated-daemon path wrote the brief to the transcript only and marked the worker failed, so the next message started
+  it without one. A queued message leaves the queue only once delivered: a delivery that throws is tried again on the
+  next pass (the transcript says why it waits), and given up only after 24 hours (`QUEUE_HOLD_MS`), with an error that
+  quotes its start. Before, a throw dropped it.
+- **Every worker gets the request as filed** (w496): after the dispatcher's own brief, `start_agent` (and `message_agent`
+  with a `work_id` the worker is not on yet) adds "The request as filed": its title, brief, constraints, related ids
+  and every `update_work` note (`requestAsFiled`, `server/work.ts`; notes are kept whole in `WorkItem.notes`, older ones
+  are read back from the log), then the intake rules and the `Request:` line. Its attachments go with it as before.
 - **Idle processes are capped by stopping, not refusing.** An idle claude process holds memory: measured on BEAST
   (2026-10-04), 100-300 MB resident and 450-650 MB committed each. Before a new process starts on this host with
   `limits.maxSessions` + `limits.maxIdleAgents` (default 6) processes up, the oldest idle one that nothing protects is

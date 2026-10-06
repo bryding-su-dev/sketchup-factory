@@ -12,6 +12,7 @@ import { Identity } from './identity.ts';
 import { PERSONAL_TOOLS, beltFor } from './belts.ts';
 import { FILINGS_PER_MESSAGE, FOLLOW_UPS_PER_MESSAGE, MESSAGES_PER_PERSON, PERSON_MESSAGE_CHARS } from './orchestrators.ts';
 import type { Config } from './config.ts';
+import { requestAsFiled } from './work.ts';
 import type { Requester, SessionInfo, TranscriptEvent, UserInfo, WorkItem } from '../shared/types.ts';
 import { fakeQuery } from '../e2e/fakeAgent.ts';
 
@@ -608,4 +609,53 @@ test("w402: a member cannot close or reopen another person's request, even in th
   assert.match(r.text, /^ERROR: w1 is Ben's request, not Lothsahn's; only an owner closes or reopens another person's request$/);
   assert.equal(store.work.get('w1')!.status, 'new');
   assert.equal(store.work.get('w1')!.log.some((l) => /Lothsahn/.test(l)), false, 'nothing logged');
+});
+
+// ---------------------------------------------------------------- w496: every dispatched worker's first message is its brief
+
+test('w496: a worker started for a request gets the request as filed and its notes in its first message, at once or queued at the cap', async (t) => {
+  const { cfg, store, sessions, dispatcher, chat, call } = setup(t);
+  const ben = chat(BEN);
+  ben.lastFrom = 'human';
+  await call(ben.info, 'request_work', { title: 'Ghosts fly over the station', brief: 'Remote players float 2 m above the deck after a resync. Reproduce with the attached save.', constraints: 'No save-layout change.', related_ids: ['w445'] });
+  await call(ben.info, 'update_work', { id: 'w1', note: 'It also happens after a host migration, not only a resync: check both.' });
+  const first = (id: string) => store.readTranscript(id).find((e) => e.kind === 'user') as { text: string } | undefined;
+  const checkBrief = (text: string) => {
+    assert.match(text, /^Fix the ghosts \(the dispatcher's brief\)/, 'the dispatcher’s brief first');
+    assert.match(text, /The request as filed \(w1, added by the harness/);
+    assert.match(text, /Title: Ghosts fly over the station/);
+    assert.match(text, /Remote players float 2 m above the deck after a resync/);
+    assert.match(text, /Constraints: No save-layout change\./);
+    assert.match(text, /Related: w445/);
+    assert.match(text, /Notes since it was filed \(1\):\n- .* UTC, Ben: It also happens after a host migration, not only a resync: check both\./);
+  };
+  // The normal path: the brief is the first message.
+  const started = await call(dispatcher().info, 'start_agent', { sandbox: 'alpha', prompt: "Fix the ghosts (the dispatcher's brief).", title: 'Ghosts', work_id: 'w1' });
+  assert.equal(started.isError, false, started.text);
+  const a = /Started agent (\w+)/.exec(started.text)![1];
+  checkBrief(first(a)!.text);
+
+  // Queued at the cap (w384): the first message waits, and is still the brief when it goes, before a later nudge.
+  await call(ben.info, 'request_work', { title: 'Lag lead on the client', brief: 'The client leads the host by 3 heartbeats.' });
+  cfg.limits.maxSessions = 1;
+  sessions.send(a, '#slow keep busy', 'orchestrator');
+  store.putSandbox({ id: 'beta', name: 'beta', branch: 'sandbox/beta', base: 'origin/develop', path: path.join(cfg.sandboxRoot, 'beta'), purpose: 'unused', status: 'ready', createdAt: T0, unity: { state: 'stopped' }, sessionIds: [] });
+  const queued = await call(dispatcher().info, 'start_agent', { sandbox: 'beta', prompt: 'Find the lag lead.', title: 'Lag lead', work_id: 'w2', override_duplicate: 'another request' });
+  assert.match(queued.text, /Queued, not refused: 1 of 1 agents on this host are mid-turn/);
+  const b = /Started agent (\w+)/.exec(queued.text)![1];
+  assert.equal(first(b), undefined, 'nothing delivered yet');
+  sessions.send(b, 'Start your brief now.', 'orchestrator');
+  await until('the brief went', () => !!first(b), 20_000);
+  assert.match(first(b)!.text, /^Find the lag lead\.[\s\S]*The request as filed \(w2[\s\S]*The client leads the host by 3 heartbeats/);
+  await until('the nudge went after it', () => store.readTranscript(b).filter((e) => e.kind === 'user').length === 2, 20_000);
+  assert.match((store.readTranscript(b).filter((e) => e.kind === 'user')[1] as { text: string }).text, /Start your brief now/);
+  await until('the workers answered', () => [...sessions.sessions.values()].filter((s) => s.info.kind === 'worker').every((s) => s.info.status === 'idle'), 20_000);
+});
+
+test('w496: the request as filed: whole notes from WorkItem.notes, older ones from the log; an intake request gets only its notes', () => {
+  const base = { id: 'w9', title: 'T', brief: 'B', requesters: [BEN], log: [] as string[] };
+  assert.match(requestAsFiled({ ...base, notes: [{ at: '2026-10-06T02:30:00.000Z', by: 'Ben', text: 'x'.repeat(1500) }] }), new RegExp(`2026-10-06 02:30 UTC, Ben: ${'x'.repeat(1500)}$`));
+  assert.match(requestAsFiled({ ...base, log: ['01:02 filed by Ben', '01:05 Ben: priority normal → high; note: use the m5 save'] }), /- 01:05, Ben: use the m5 save$/);
+  assert.equal(requestAsFiled({ ...base, source: { kind: 'discord-bug' } as never }), '', 'an intake request without notes: its text is in workerRules');
+  assert.match(requestAsFiled({ ...base, source: { kind: 'discord-bug' } as never, notes: [{ at: '2026-10-06T02:30:00.000Z', by: 'Lothsahn', text: 'Yes, alternate evenly.' }] }), /Notes since it was filed \(1\):\n- .*Lothsahn: Yes, alternate evenly\.$/);
 });

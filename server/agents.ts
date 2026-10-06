@@ -30,7 +30,7 @@ import { Identity, claudeEnvFor, forLine } from './identity.ts';
 import { FILINGS_PER_MESSAGE, FOLLOW_UPS_PER_MESSAGE, MESSAGES_PER_PERSON, Orchestrators, PERSON_MESSAGE_CHARS } from './orchestrators.ts';
 import { beltFor, type BeltRole } from './belts.ts';
 import { memoryDirFor, memoryGuard } from './orchestratorMemory.ts';
-import { DECISIONS, attachmentsNote, describeItem, isFor, ledgerOrder, names, overlapLine, startProblem } from './work.ts';
+import { DECISIONS, attachmentsNote, describeItem, isFor, ledgerOrder, names, overlapLine, requestAsFiled, startProblem } from './work.ts';
 import { sourceTag, workerRules } from './intakeRules.ts';
 import { buildSubmit } from './providerProtocol.ts';
 import { isUnused, labelAfterEnd, labelDecision, type Place } from './labelPolicy.ts';
@@ -353,7 +353,7 @@ export class Agents {
   /** " Queued: …" when a message to this session waits for a free running slot (w384), else "". */
   private queuedLine(id: string): string {
     const q = this.sessions.queued().filter((x) => x.id === id);
-    return q.length ? ` Queued, not refused: ${q[0].why}; it is delivered as soon as a slot frees (nothing to resend).` : '';
+    return q.length ? ` Queued, not refused: ${q[0].why}; it is delivered as soon as it can go, before any later message to it (nothing to resend).` : '';
   }
 
   /** Why an idle worker's process should go (w384), or undefined: its requests are closed, handed to another worker, or it has been idle an hour. */
@@ -739,15 +739,10 @@ export class Agents {
         void this.sendWhenMachineSandboxReady(m.id, sb.id, s.info.id, req.prompt, req.from, req.requestedBy, files);
         return s;
       }
-      try {
-        // The machine's daemon fetches the files into the place's Inbox before the prompt goes on (docs/attachments.md).
-        this.sessions.send(s.info.id, req.prompt, req.from, undefined, { requestedBy: req.requestedBy, attachments: files });
-      } catch (e) {
-        // Keep the record (it can be messaged once the machine is back), but say why it did not start.
-        this.store.append(s.info.id, { kind: 'user', text: req.prompt, from: req.from, ...(req.requestedBy ? { requestedBy: req.requestedBy } : {}) });
-        Object.assign(s.info, { status: 'error', statusDetail: (e as Error).message });
-        this.store.putSession(s.info);
-      }
+      // The machine's daemon fetches the files into the place's Inbox before the prompt goes on (docs/attachments.md).
+      // A daemon that is outdated or offline (w496): the brief waits in the send queue and goes first once it can,
+      // never replaced by a later message. Until then it was written to the transcript only, and lost.
+      this.sessions.send(s.info.id, req.prompt, req.from, undefined, { requestedBy: req.requestedBy, attachments: files, hold: true });
       return s;
     }
     const sb = this.sandboxes.require(t.sandbox!);
@@ -764,12 +759,10 @@ export class Agents {
     });
     sb.sessionIds = [...sb.sessionIds, s.info.id];
     this.store.putSandbox(sb);
-    if (sb.status === 'ready' && !files.length) this.sessions.send(s.info.id, req.prompt, req.from, undefined, { requestedBy: req.requestedBy });
-    else {
-      // Files are copied into the sandbox's Inbox first (once it exists), then the prompt goes; refused now if it could not start.
-      if (sb.status === 'ready') this.sessions.checkStart(s.info.id);
-      void this.sendWhenReady(sb.id, s.info.id, req.prompt, req.from, req.requestedBy, files);
-    }
+    // The host guard refusing a new process now: the brief waits in the send queue (w496).
+    if (sb.status === 'ready' && !files.length) this.sessions.send(s.info.id, req.prompt, req.from, undefined, { requestedBy: req.requestedBy, hold: true });
+    // Files are copied into the sandbox's Inbox first (once it exists), then the prompt goes.
+    else void this.sendWhenReady(sb.id, s.info.id, req.prompt, req.from, req.requestedBy, files);
     return s;
   }
 
@@ -791,7 +784,7 @@ export class Agents {
       if (sb.status === 'ready') break;
     }
     try {
-      await this.sendWithAttachments(sessionId, prompt, from, { requestedBy, attachments: files });
+      await this.sendWithAttachments(sessionId, prompt, from, { requestedBy, attachments: files, hold: true });
     } catch (e) {
       s.info.status = 'error';
       s.info.statusDetail = (e as Error).message;
@@ -804,13 +797,14 @@ export class Agents {
    * sandbox on this host gets a copy of each in its Inbox first; a worker on a machine gets them from its daemon, which
    * fetches them into the Inbox there before the message goes on. Without files, a plain send.
    */
-  async sendWithAttachments(id: string, text: string, from: 'human' | 'orchestrator' | 'system', opts: { images?: ImageInput[]; attachments?: AttachmentRef[]; requestedBy?: Requester; bypassGate?: boolean } = {}): Promise<string> {
+  async sendWithAttachments(id: string, text: string, from: 'human' | 'orchestrator' | 'system', opts: { images?: ImageInput[]; attachments?: AttachmentRef[]; requestedBy?: Requester; bypassGate?: boolean; hold?: boolean } = {}): Promise<string> {
     const files = (opts.attachments ?? []).map(publicRef);
-    const send = (attachments?: DeliveredAttachment[]) => this.sessions.send(id, text, from, opts.images, { requestedBy: opts.requestedBy, bypassGate: opts.bypassGate, attachments });
+    const send = (attachments?: DeliveredAttachment[]) => this.sessions.send(id, text, from, opts.images, { requestedBy: opts.requestedBy, bypassGate: opts.bypassGate, attachments, hold: opts.hold });
     if (!files.length) return send();
     const store = this.attachments;
     if (!store) throw new Error('attachments are not wired into this server');
-    const info = this.sessions.checkStart(id, opts.bypassGate).info;
+    // A held first prompt is queued by send() if it cannot start yet; anything else is refused now, before files are copied.
+    const info = (opts.hold ? this.sessions.get(id) : this.sessions.checkStart(id, opts.bypassGate)).info;
     if (info.kind === 'standing') throw new Error('standing agents take text only: hand the files to a worker instead');
     if (info.kind === 'orchestrator') {
       store.touch(files.map((f) => f.id));
@@ -877,7 +871,7 @@ export class Agents {
       if (Date.now() > until) return fail(`sandbox ${machineId}/${sandbox} is still ${sb.status} after two hours`);
     }
     try {
-      this.sessions.send(sessionId, prompt, from, undefined, { requestedBy, attachments: files });
+      this.sessions.send(sessionId, prompt, from, undefined, { requestedBy, attachments: files, hold: true });
     } catch (e) {
       fail((e as Error).message);
     }
@@ -1753,7 +1747,8 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
             }
             const requestedBy = actor(a.for_user, a.work_id);
             // An intake request always carries its rules (untrusted text, posting limits, the markers), whatever the brief says.
-            const prompt = w?.source ? `${a.prompt}${workerRules(w)}` : a.prompt;
+            // The request as filed goes with every brief (w496), then the intake rules.
+            const prompt = `${a.prompt}${w ? requestAsFiled(w) : ''}${w?.source ? workerRules(w) : ''}`;
             const files = this.attachmentsFor(a.attachments, w);
             const s = this.startWorker({ sandbox: a.sandbox, machine: a.machine, prompt, title: a.title, model: a.model, effort: a.effort, permissionMode: a.permission_mode, from, requestedBy, attachments: files });
             const where = s.info.machineSandbox ? `in sandbox ${s.info.machineId}/${s.info.machineSandbox}` : s.info.machineId ? `on machine ${s.info.machineId}` : `in ${a.sandbox}`;
@@ -1794,7 +1789,9 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
             const linked = !!item?.sessionIds.includes(w.info.id);
             // A worker newly given a request gets its attachments too; one already on it has them.
             const files = this.attachmentsFor(attachments, linked ? undefined : item);
-            await this.sendWithAttachments(session_id, item?.source && !linked ? `${text}${workerRules(item)}` : text, from, { requestedBy, attachments: files });
+            // A worker newly given a request gets it as filed (w496), and its intake rules.
+            const fresh = item && !linked;
+            await this.sendWithAttachments(session_id, `${text}${fresh ? requestAsFiled(item) : ''}${fresh && item.source ? workerRules(item) : ''}`, from, { requestedBy, attachments: files });
             if (work_id) this.orchestrators.linkWorker(work_id, w.info, `sent to ${this.orchestrators.workerLine(w.info.id)}, already on it`);
             return `Sent, for ${requestedBy.displayName}${work_id ? ` (${work_id})` : ''}${sent(files.length)}.${Agents.goneLine(files)}${this.queuedLine(session_id)}`;
           }),

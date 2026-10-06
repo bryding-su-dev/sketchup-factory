@@ -348,3 +348,25 @@ export function ledgerOrder(a: WorkItem, b: WorkItem): number {
   if (isOpen(a)) return prio[a.priority] - prio[b.priority] || a.createdAt.localeCompare(b.createdAt);
   return b.updatedAt.localeCompare(a.updatedAt);
 }
+
+/** Notes in a request's log from before WorkItem.notes (w496): "10:02 Ben: …; note: <text>", clipped as logged. */
+const LOGGED_NOTE = /^(\d\d:\d\d) ([^:]+): (?:.*; )?note: (.+?)(?:; answers the design question .*)?$/;
+
+/**
+ * The request as its people filed it (w496), for every worker started for it or newly given it: the dispatcher's brief
+ * comes first and may summarise; this is the title, brief, constraints, related ids and every update_work note, so
+ * nothing the person asked is lost. An intake request's own text is in workerRules; its notes come here.
+ */
+export function requestAsFiled(w: Pick<WorkItem, 'id' | 'title' | 'brief' | 'constraints' | 'relatedIds' | 'notes' | 'log' | 'requesters' | 'source'>): string {
+  const notes = w.notes?.length
+    ? w.notes.map((n) => `- ${n.at.slice(0, 16).replace('T', ' ')} UTC, ${n.by}: ${n.text}`)
+    : (w.log ?? []).map((l) => LOGGED_NOTE.exec(l)).filter((m): m is RegExpExecArray => !!m).map((m) => `- ${m[1]}, ${m[2]}: ${m[3]}`);
+  const lines = [`\n\n---\nThe request as filed (${w.id}, added by the harness: the brief above is the dispatcher's; this is what ${names(w.requesters)} asked):`];
+  if (!w.source) {
+    lines.push(`Title: ${w.title}`, '', w.brief.length > 8000 ? `${w.brief.slice(0, 8000)}… (${w.brief.length - 8000} more characters: list_work has it whole)` : w.brief);
+    if (w.constraints?.trim()) lines.push('', `Constraints: ${w.constraints.trim()}`);
+    if (w.relatedIds?.length) lines.push('', `Related: ${w.relatedIds.join(', ')}`);
+  } else if (!notes.length) return '';
+  if (notes.length) lines.push('', `Notes since it was filed (${notes.length}):`, ...notes);
+  return lines.join('\n');
+}

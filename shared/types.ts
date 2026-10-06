@@ -1000,6 +1000,8 @@ export interface WorkItem {
   priority: WorkPriority;
   /** Ids the requester named: a spec, a PR, a session, a sandbox, a delegation, another work item. */
   relatedIds?: string[];
+  /** Its people's update_work notes, oldest first (w496: every worker started for it gets them with the brief). */
+  notes?: { at: string; by: string; text: string }[];
   /** What overlaps are matched on: "spec:098", "pr:412", "branch:098-belts", "session:ab12cd34". */
   keys: string[];
   /** Who filed it: its workers run on their account. */
