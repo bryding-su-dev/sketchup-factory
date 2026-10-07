@@ -55,7 +55,9 @@
   "orchestrator": {
     "model": "opus",
     "effort": "medium",
-    "notifyOnWorkerEvents": true
+    "notifyOnWorkerEvents": true,
+    "compactAtTokens": 200000,
+    "compactAtTurnUsd": 1
   },
   "worker": {
     "permissionMode": "bypassPermissions",

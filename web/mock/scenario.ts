@@ -117,7 +117,7 @@ export function buildWorld(scenario: Scenario, now = Date.now()): World {
     orchestratorId: 'orch',
     dispatcherId: 'dispatcher',
     me: { userId: 'ben', displayName: 'Ben', role: 'owner' },
-    config: { defaultModel: 'opus', models: ['opus', 'sonnet', 'haiku', 'fable'], defaultBase: 'origin/develop' },
+    config: { defaultModel: 'opus', models: ['opus', 'sonnet', 'haiku', 'fable'], defaultBase: 'origin/develop', attachments: { maxBytes: 200 * 1024 * 1024, retentionDays: 30, maxPerMessage: 10 } },
     settings: { heartbeatMinutes: null, heartbeat: { ben: 15 } },
   };
 

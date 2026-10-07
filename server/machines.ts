@@ -7,9 +7,9 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { WebSocketServer, type WebSocket } from 'ws';
 import { DEFAULT_USAGE_POLL_MINUTES, ROOT, type Config } from './config.ts';
 import { emit, type Store } from './store.ts';
-import type { SessionHandle, SessionManager } from './sessions.ts';
+import { isMidTurn, type SessionHandle, type SessionManager } from './sessions.ts';
 import type { CatalogTool, LaunchSpec, ToolHandler } from './launch.ts';
-import { ADOPT_PROTOCOL, PROTOCOL_VERSION, SANDBOX_PROTOCOL, type DaemonSandbox, type FromDaemon, type ToDaemon } from './machineProtocol.ts';
+import { ADOPT_PROTOCOL, ATTACHMENT_PROTOCOL, PROTOCOL_VERSION, SANDBOX_PROTOCOL, type DaemonSandbox, type FromDaemon, type ToDaemon } from './machineProtocol.ts';
 import type { OutsideWatchConfig } from '../machine/outsideWatch.ts';
 import { branchProblem, normalizePurpose, slugify } from './sandboxes.ts';
 import { winDir } from './machineDeployWin.ts';
@@ -17,7 +17,8 @@ import type { DaemonExtras, DeployOptions, DeployResult, MachineDirs } from './m
 import { openPr } from './gitStatus.ts';
 import { safeImage } from './images.ts';
 import { HOST_LOGIN, machineLogin, type AccountIdentity } from './usage.ts';
-import type { EffortLevel, ImageInput, Machine, MachinePlatform, MachineSandbox, MachineStats, PermissionMode, PlanUsage, Requester, SandboxPoolSettings, SessionInfo } from '../shared/types.ts';
+import type { AttachmentStore } from './attachments.ts';
+import type { DeliveredAttachment, EffortLevel, ImageInput, Machine, MachinePlatform, MachineSandbox, MachineStats, PermissionMode, PlanUsage, Requester, SandboxPoolSettings, SessionInfo } from '../shared/types.ts';
 import { checkStringMap, readJsonDurable, writeJsonDurable } from './durable.ts';
 
 const PING_MS = 20_000;
@@ -158,9 +159,9 @@ export class RemoteSession implements SessionHandle {
     return this.liveFlag;
   }
 
-  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester): string {
+  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester, attachments: DeliveredAttachment[] = []): string {
     if (requestedBy && from !== 'system') this.info.lastRequestedBy = requestedBy;
-    this.link.dispatchSend(this, text, from, uuid, images, requestedBy);
+    this.link.dispatchSend(this, text, from, uuid, images, requestedBy, attachments);
     this.lastFrom = from;
     // A new turn: the stop is over (as AgentSession.send).
     if (this.info.stoppedOnPurpose) {
@@ -216,6 +217,8 @@ export class MachineManager {
   private readonly store: Store;
   private readonly sessions: SessionManager;
   hooks?: MachineHooks;
+  /** The attachment store (docs/attachments.md): what daemons may fetch, granted as files are sent to their agents. */
+  attachments?: AttachmentStore;
   private readonly links = new Map<string, { ws: WebSocket; lastPong: number; since: number }>();
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
   private readonly tokensFile: string;
@@ -225,6 +228,7 @@ export class MachineManager {
     this.cfg = cfg;
     this.store = store;
     this.sessions = sessions;
+    sessions.placeFull = (s) => this.placeFull(s);
     this.tokensFile = path.join(cfg.dataDir, 'machine-tokens.json');
     // A deploy runs in this process: one still marked at boot was cut short by a restart. Left 'deploying', the
     // offline watch (redeployDue) would never redeploy it; its daemon's hello clears the error if it did start.
@@ -505,6 +509,34 @@ export class MachineManager {
     return [...this.sessions.sessions.values()].filter((s) => s.info.machineId === id && s.info.machineSandbox === sandbox && s.live).length;
   }
 
+  /**
+   * Mid-turn agents in one place of a machine (sandbox undefined: its main clone), or in all its sandboxes (sandbox
+   * '*'): what max_agents_per_sandbox, max_sandbox_agents and the main clone's max_agents count (w384). Idle agents,
+   * their process up or not, take no slot.
+   */
+  runningIn(id: string, sandbox: string | undefined | '*') {
+    return [...this.sessions.sessions.values()].filter((s) => s.info.machineId === id && (sandbox === '*' ? !!s.info.machineSandbox : s.info.machineSandbox === sandbox) && isMidTurn(s.info)).length;
+  }
+
+  /** Why a message to this machine session must wait for a free running slot, or undefined (SessionManager.placeFull). */
+  placeFull(s: SessionHandle): string | undefined {
+    const m = this.store.machines.get(s.info.machineId ?? '');
+    if (!m) return undefined;
+    const sbId = s.info.machineSandbox;
+    if (sbId) {
+      const pool = poolSettingsOf(m);
+      const max = pool?.maxAgentsPerSandbox ?? 2;
+      const here = this.runningIn(m.id, sbId);
+      if (here >= max) return `${here} agents mid-turn in sandbox ${m.id}/${sbId} (max_agents_per_sandbox ${max})`;
+      const all = this.runningIn(m.id, '*');
+      if (pool?.maxAgents !== undefined && all >= pool.maxAgents) return `${all} agents mid-turn in ${m.id}'s sandboxes (max_sandbox_agents ${pool.maxAgents})`;
+      return undefined;
+    }
+    if (s.info.kind === 'worker' && m.local) return undefined; // refused outright by dispatchSend: no queue for it
+    const main = this.runningIn(m.id, undefined);
+    return main >= m.maxSessions ? `${main} agents mid-turn in ${m.id}'s main clone (max_agents ${m.maxSessions})` : undefined;
+  }
+
   /** Re-attach a persisted session on boot. */
   restore(info: SessionInfo, now = Date.now()): SessionHandle | undefined {
     if (!info.machineId || !this.store.machines.has(info.machineId)) return undefined;
@@ -783,22 +815,25 @@ export class MachineManager {
   }
 
   /** RemoteSession.send: checked here so the caller gets the error at once. */
-  dispatchSend(s: RemoteSession, text: string, from: 'human' | 'orchestrator' | 'system', uuid: string, images: ImageInput[] = [], requestedBy?: Requester) {
+  dispatchSend(s: RemoteSession, text: string, from: 'human' | 'orchestrator' | 'system', uuid: string, images: ImageInput[] = [], requestedBy?: Requester, attachments: DeliveredAttachment[] = []) {
     const m = this.require(s.info.machineId!);
     if (!this.isOnline(m.id)) throw new Error(`machine ${m.id} is offline (asleep, or its daemon is not running)`);
+    // Files come with it (docs/attachments.md): only a daemon that fetches them gets them, never one that would drop them.
+    const proto = this.hellos.get(m.id)?.protocol ?? 0;
+    if (attachments.length && proto < ATTACHMENT_PROTOCOL) {
+      this.checkOutdated();
+      throw new Error(`${m.id}'s daemon speaks protocol ${proto} and cannot fetch attachments; it is redeployed once no agent runs there. Try again in a few minutes.`);
+    }
     const sbId = s.info.machineSandbox;
     if (sbId && !s.live) {
       const sb = this.requireSandbox(m.id, sbId);
       this.requireSandboxDaemon(m.id);
       if (sb.status !== 'ready') throw new Error(`sandbox ${m.id}/${sb.id} is ${sb.status}${sb.statusDetail ? ` (${sb.statusDetail})` : ''}`);
-      const pool = poolSettingsOf(m);
-      const max = pool?.maxAgentsPerSandbox ?? 2;
-      if (this.liveIn(m.id, sb.id) >= max) throw new Error(`already ${max} agents running in sandbox ${m.id}/${sb.id} (max_agents_per_sandbox); stop one first`);
-      const inSandboxes = [...this.sessions.sessions.values()].filter((x) => x.info.machineId === m.id && x.info.machineSandbox && x.live).length;
-      if (pool?.maxAgents !== undefined && inSandboxes >= pool.maxAgents) throw new Error(`already ${inSandboxes} agents running in ${m.id}'s sandboxes (max_sandbox_agents ${pool.maxAgents}); stop one first`);
+      // The agent limits count mid-turn agents only and are waited for, not refused: SessionManager queues a message
+      // until placeFull says a slot is free (w384).
     } else if (!s.live && m.local && s.info.kind === 'worker') {
       throw new Error(`${m.id}'s main clone (${m.repoPath}) is the base its sandboxes are worktrees of: start agents in one of its sandboxes`);
-    } else if (!s.live && this.liveIn(m.id, undefined) >= m.maxSessions) throw new Error(`already ${m.maxSessions} agents running in ${m.id}'s main clone; stop one first`);
+    }
     // The portal's own host: its guard's gate (disk space, the sandbox drive, RAM) holds new agent processes there too.
     const gate = !s.live && m.local && from !== 'system' ? this.localGate?.('agent') : undefined;
     if (gate) throw new Error(`not started: ${gate}`);
@@ -816,7 +851,10 @@ export class MachineManager {
     if (spec.mcp && catalog) spec.mcp = { ...spec.mcp, tools: spec.mcp.tools.filter((t) => catalog.includes(t.name)) };
     // Stored here first, so the daemon's transcript event can name them without sending them back.
     const withIds = images.map((i) => ({ ...i, id: i.id ?? this.store.saveImage(s.info.id, i.mediaType, i.data) }));
-    this.post(m.id, { type: 'send', info: s.info, lastSeq: this.store.lastSeq(s.info.id), spec, text, from, uuid, images: withIds, ...(requestedBy ? { requestedBy } : {}) });
+    // The daemon fetches each file into the place's Inbox (GET /machine/attachments/<id>), which this lets it do.
+    if (attachments.length) this.attachments?.grant(m.id, attachments.map((a) => a.id));
+    const files = attachments.map(({ path: _p, error: _e, ...ref }) => ref);
+    this.post(m.id, { type: 'send', info: s.info, lastSeq: this.store.lastSeq(s.info.id), spec, text, from, uuid, images: withIds, ...(requestedBy ? { requestedBy } : {}), ...(files.length ? { attachments: files } : {}) });
   }
 
   /** Ask a machine's daemon for its git status now. */
@@ -1324,8 +1362,8 @@ export class MachineManager {
 
   private readonly switchCalls = new Map<string, { resolve: (r: { from: string; to: string; notes: string[] }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 
-  /** Switch the branch of a machine's clone, on the machine (server/switchBranch.ts). */
-  switchBranch(machineId: string, branch: string, createFrom?: string, sandbox?: string) {
+  /** Switch the branch of a machine's clone, on the machine (server/switchBranch.ts). callerSessionId: the agent asking, which its daemon does not count as busy. */
+  switchBranch(machineId: string, branch: string, createFrom?: string, sandbox?: string, callerSessionId?: string) {
     const sb = sandbox ? (this.requireSandboxDaemon(machineId), this.requireSandbox(machineId, sandbox).id) : undefined;
     return new Promise<{ from: string; to: string; notes: string[] }>((resolve, reject) => {
       const id = randomUUID();
@@ -1335,7 +1373,7 @@ export class MachineManager {
       }, 10 * 60_000);
       this.switchCalls.set(id, { resolve, reject, timer });
       try {
-        this.post(machineId, { type: 'switch', id, branch, createFrom, ...(sb ? { sandbox: sb } : {}) });
+        this.post(machineId, { type: 'switch', id, branch, createFrom, ...(sb ? { sandbox: sb } : {}), ...(callerSessionId ? { callerSessionId } : {}) });
       } catch (e) {
         clearTimeout(timer);
         this.switchCalls.delete(id);

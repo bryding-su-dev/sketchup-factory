@@ -483,11 +483,23 @@ export function parseMarkers(text: string): Markers {
   const fix = line(/^[\s*_>`-]*FIX-LANDED:?\s+([0-9a-f]{7,40})\b/im);
   const resolved = line(/^[\s*_>`-]*RESOLVED:?\s+(.+)$/im);
   const q = line(/^[\s*_>`-]*DESIGN-QUESTION:?\s+(.+)$/im);
+  const question = q ? cleanLine(q.replace(/[`*_]+$/, ''), 500) : '';
   return {
     ...(fix ? { fixCommit: fix.toLowerCase() } : {}),
     ...(resolved ? { resolved: cleanLine(resolved.replace(/[`*_]+$/, ''), 300) } : {}),
-    ...(q ? { designQuestion: cleanLine(q.replace(/[`*_]+$/, ''), 500) } : {}),
+    ...(question && !noQuestion(question) ? { designQuestion: question } : {}),
   };
+}
+
+/**
+ * A DESIGN-QUESTION line that asks nothing (w355): w349's worker ended two turns with "DESIGN-QUESTION: none — waiting on
+ * CI for PR #1018", and the request became a question for Ben and Lothsahn. Empty, "none", "n/a", "no", "-", text
+ * starting with "none", "no question" or "nothing", and a status ("waiting on …") are not a question.
+ */
+export function noQuestion(q: string): boolean {
+  const t = q.trim().replace(/^[\s*_`"'([{<:—–-]+/, '').trim().toLowerCase();
+  if (!t || /^(?:n\/?a|no|none|nil|null|-+|—|–)[\s.!,;:)\]]*$/.test(t)) return true;
+  return /^(?:none|no question|no design question|nothing|waiting on|waiting for|still waiting|pending ci|not yet)\b/.test(t);
 }
 
 // ---------------------------------------------------------------- the rules every intake worker gets
@@ -497,6 +509,7 @@ const END_RULES = [
   '- `FIX-LANDED: <commit sha>` once the fix is on develop (pushed by you, or a PR you merged).',
   '- `RESOLVED: <one line>` when nothing needs changing (not a bug, already fixed, a duplicate, needs info you asked the reporter for).',
   '- `DESIGN-QUESTION: <one line>` when fixing it needs a design decision, a balance or gameplay change, or touches a determinism crown-jewel surface (Documentation/Crown-Jewel-Surfaces.md), save layout, the mod ABI, builds or releases. Do not fix those: the question goes to people (Ben or Lothsahn), and you may be messaged with their answer.',
+  'DESIGN-QUESTION is only for an actual decision a person must make; never write "DESIGN-QUESTION: none" or a status after it. While the work is still going (waiting on CI, a build, a review), end the turn with none of these lines.',
 ].join('\n');
 
 const POSTING_RULES = [
@@ -582,6 +595,7 @@ export function workerRules(w: Pick<WorkItem, 'id' | 'source' | 'brief' | 'triag
       '- `FIX-LANDED: <commit sha>` once the fix (of the game or of the scenario) is on develop.',
       '- `RESOLVED: <one line>` when nothing needs changing (it does not reproduce and the lab was at fault, already fixed on develop, a duplicate).',
       '- `DESIGN-QUESTION: <one line>` when fixing it needs a design, balance or gameplay decision: the question goes to Ben or Lothsahn.',
+      'DESIGN-QUESTION is only for an actual decision a person must make; never write "DESIGN-QUESTION: none" or a status after it. While the work is still going, end the turn with none of these lines.',
     ].join('\n');
   }
   if (s.kind === 'release') {

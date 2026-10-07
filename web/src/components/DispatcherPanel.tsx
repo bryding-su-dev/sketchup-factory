@@ -1,25 +1,17 @@
 import { useEffect, useState } from 'react';
 import type { AppState, IntakeSummary, WorkItem, WorkSource } from '../../../shared/types';
 import { api } from '../api';
+import { isMine, ledgerOrder } from '../../../shared/workOrder';
 import { sessionRoute } from '../attention';
-import { attempt, reloadTranscript, sessionsByIds } from '../store';
-import { dispatcherGlance, fmtCost, fmtRelative, isBusy, isOpenWork, navigate, useNow, workLabel, workTone } from '../util';
+import { attempt, reloadTranscript, sessionsByIds, toast } from '../store';
+import { contextGlance, dispatcherGlance, fmtCost, fmtRelative, isBusy, isOpenWork, navigate, useNow, workLabel, workTone } from '../util';
 import { Markdown } from './Markdown';
 import { SessionView } from './SessionView';
 import { accountOf } from './SystemMeters';
 import { Chip, Confirm, Dot, Icon, Menu } from './ui';
+import { TimersButton } from './Timers';
 
 type Tab = 'requests' | 'intake' | 'conversation';
-
-const RANK: Record<WorkItem['status'], number> = { question: 0, new: 1, queued: 2, active: 3, done: 4, merged: 4, rejected: 4, cancelled: 4 };
-const PRIORITY: Record<WorkItem['priority'], number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-
-/** Open requests first (questions, new, queued, active; then by priority and age), then the closed ones, newest first. */
-function byLedger(a: WorkItem, b: WorkItem) {
-  if (RANK[a.status] !== RANK[b.status]) return RANK[a.status] - RANK[b.status];
-  if (isOpenWork(a)) return PRIORITY[a.priority] - PRIORITY[b.priority] || a.createdAt.localeCompare(b.createdAt);
-  return b.updatedAt.localeCompare(a.updatedAt);
-}
 
 const names = (w: WorkItem) => w.requesters.map((r) => r.displayName).join(', ');
 
@@ -66,7 +58,8 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
   const now = useNow(15_000);
   const [confirmReset, setConfirmReset] = useState(false);
   const session = app.sessions.find((s) => s.id === app.dispatcherId);
-  const work = [...(app.work ?? [])].sort(byLedger);
+  // Open requests first (questions, new, queued, active), then the closed ones; the viewer's own first within each (shared/workOrder.ts).
+  const work = ledgerOrder(app.work ?? [], app.me?.userId);
   const open = work.filter(isOpenWork);
   const closed = work.filter((w) => !isOpenWork(w));
   const current: Tab = tab === 'conversation' ? 'conversation' : tab === 'intake' ? 'intake' : 'requests';
@@ -75,6 +68,8 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
   const owner = app.me?.role === 'owner';
   const glance = dispatcherGlance(session, open, app.me?.userId);
   const account = session ? accountOf(app, session.id) : undefined;
+  // Its context and last compaction (w535).
+  const ctx = session ? contextGlance(session, now) : undefined;
   const waiting = work.filter((w) => w.source && pendingApproval(w)).length;
 
   return (
@@ -89,6 +84,12 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
           <Dot tone={glance.tone} pulse={isBusy(session)} />
           <h2 className="ellipsis">Dispatcher</h2>
           <div className="spacer" />
+          {ctx && (
+            <span className="hb-on hide-phone" title={ctx.line} data-testid="context-size">
+              Context {ctx.short}
+            </span>
+          )}
+          {owner && session && <TimersButton sessionId={session.id} label="Dispatcher" />}
           {owner && session && (
             <Menu label="Dispatcher options">
               {(close) => (
@@ -102,9 +103,26 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
                   >
                     <Icon name="plus" size={15} /> New conversation…
                   </button>
+                  <button
+                    className="menu-item"
+                    title="Summarise the dispatcher's conversation so far, so each of its turns costs less"
+                    onClick={async () => {
+                      close();
+                      const ok = await attempt(api.compact(session.id));
+                      if (ok?.note) toast(ok.note);
+                    }}
+                  >
+                    <Icon name="refresh" size={15} /> Compact conversation
+                  </button>
                   <div className="menu-foot">
                     {session.model ?? 'default model'}
                     {account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
+                    {ctx && (
+                      <>
+                        <br />
+                        {ctx.line}
+                      </>
+                    )}
                   </div>
                 </>
               )}
@@ -333,6 +351,7 @@ function WorkRow({ app, w, open, onToggle, now }: { app: AppState; w: WorkItem; 
           <span className="work-sub">
             <span className={`tone-${tone}`}>{pendingApproval(w) ? waitingLabel(w) : workLabel[w.status]}</span>
             {w.mergedInto ? ` into ${w.mergedInto}` : ''} · <span className="mono">{w.id}</span> · {s ? sourceLabel(s) : names(w)}
+            {isMine(w, app.me?.userId) ? <span className="tone-blue" data-testid="work-yours"> · yours</span> : null}
             {w.triage && !(pendingApproval(w) && w.triage.class === 'needs-human') ? <span className={w.triage.class === 'needs-human' ? 'tone-amber' : ''}> · {triageLabel[w.triage.class]}</span> : null}
             {w.priority === 'urgent' || w.priority === 'high' ? <span className="tone-amber"> · {w.priority}</span> : null}
             {w.flag ? <span className="tone-amber"> · design question</span> : null}

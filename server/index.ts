@@ -4,10 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, ROOT } from './config.ts';
+import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, publicIdentityOf, ROOT } from './config.ts';
 import { Store, bus } from './store.ts';
 import { SandboxManager } from './sandboxes.ts';
-import { SessionManager, snapshotOf } from './sessions.ts';
+import { SessionManager, compactCommand, snapshotOf } from './sessions.ts';
+import { TIMER_LIMITS } from './timers.ts';
 import { Agents } from './agents.ts';
 import { MachineManager, machineForPath, parseSandboxRef } from './machines.ts';
 import { hostSandboxFrom } from './hostMigration.ts';
@@ -28,13 +29,16 @@ import { handleMcp } from './mcp.ts';
 import { IMAGE_TYPES, SOCKET_PING_MS, type ImageInput, type NotifyPrefs, type SendMessageRequest } from '../shared/types.ts';
 import { listImages, MEDIA_TYPE, openVideo, parseRange, readImage, VIDEO_FILE } from './images.ts';
 import { keepMessageImages } from './inlineImages.ts';
+import { AttachmentError, AttachmentStore, downloadDisposition, machineAttachment, publicRef } from './attachments.ts';
 import { HostHealthMonitor } from './hostHealth.ts';
 import { dataRecoveries, describeRecovery } from './durable.ts';
 import { backupMemory, healMemory, memoryRootOf } from './orchestratorMemory.ts';
+import { describeMemoryGit, versionMemory } from './memoryGit.ts';
 import { accountSetupLines, hostAccount, hostRole, scrubTranscripts, usesHostClaudeEnv } from './secrets.ts';
 import { collectNetwork, loadOutsideWatchState, outsideWatchConfig, saveOutsideWatchState, watcherOf } from './outsideWatch.ts';
 import { runHelper } from './privileged.ts';
-import { acceptsGzip, endMaybeGzip, gzippedFile } from './compress.ts';
+import { endMaybeGzip } from './compress.ts';
+import { serveStatic, webBuild } from './webStatic.ts';
 import { appendCleanupLog, biggestConsumers, cleanupRules, hostCleanupEnv, neverDelete, planCleanup, runCleanup, sessionTempDir, staleUnityLibraries } from './cleanup.ts';
 import { pruneEditorLogs, slugify } from './sandboxes.ts';
 import { reapBrowsers } from './reaper.ts';
@@ -44,7 +48,12 @@ import { UsageTracker, accountLines, buildAccounts, hostToken, machineToken, ses
 import { appVersion, formatVersion } from './version.ts';
 import { VoiceService } from './voice.ts';
 import { MAX_DICTATION_SECONDS, MAX_TTS_CHARS, buildVoicePrompt, wavSeconds, type SpeakRequest, type TranscribeRequest, type VocabularySource } from '../shared/voice.ts';
-import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
+import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, Requester, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
+
+const WEB = path.join(ROOT, 'web', 'dist');
+
+/** The server's version plus the web UI build it serves now (server/webStatic.ts): an open page reloads when that changes. */
+const appNow = () => ({ ...appVersion(), web: webBuild(WEB) });
 
 const cfg = loadConfig();
 fs.mkdirSync(cfg.dataDir, { recursive: true });
@@ -74,10 +83,28 @@ const store = new Store(cfg.dataDir);
 // The orchestrators' memory (Claude Code writes it, so it cannot be written crash-safe): a file a crash damaged gets its
 // newest good backup back, and a backup is taken every 10 minutes when something changed (server/orchestratorMemory.ts).
 const memoryRoot = memoryRootOf(cfg);
+// When the memory root is a git repository of its own, each backup pass also commits what changed and pushes it, to a
+// private remote only (server/memoryGit.ts; docs/orchestrators.md, "Memory in a private repository").
+let lastMemoryGit = '';
+const versionMemoryNow = () => {
+  const pub = publicIdentityOf(cfg);
+  const identity = pub.name && pub.email ? { name: pub.name, email: pub.email } : { name: 'FF Factory', email: 'ff-factory@users.noreply.github.com' };
+  void versionMemory(memoryRoot, { identity })
+    .then((r) => {
+      const line = describeMemoryGit(r);
+      // A push that keeps failing says so once, not every ten minutes.
+      if (line && (r.state === 'pushed' || line !== lastMemoryGit)) console[r.state === 'pushed' ? 'log' : 'warn'](line);
+      lastMemoryGit = line ?? '';
+    })
+    .catch((e) => console.warn(`orchestrator memory versioning failed: ${(e as Error).message}`));
+};
 const guardMemory = (what: 'heal' | 'backup') => {
   try {
     if (what === 'heal') healMemory(memoryRoot);
-    else backupMemory(memoryRoot);
+    else {
+      backupMemory(memoryRoot);
+      versionMemoryNow();
+    }
   } catch (e) {
     console.warn(`orchestrator memory ${what} failed: ${(e as Error).message}`);
   }
@@ -93,6 +120,19 @@ setTimeout(() => {
 const sandboxes = new SandboxManager(cfg, store);
 const sessions = new SessionManager(cfg, store);
 const machines = new MachineManager(cfg, store, sessions);
+// Files people attach to messages (docs/attachments.md): stored by SHA-256, never opened; old ones go by retention.
+const attachments = new AttachmentStore(cfg.dataDir, () => cfg.attachments);
+machines.attachments = attachments;
+const pruneAttachments = () => {
+  try {
+    const r = attachments.prune();
+    if (r.records || r.blobs || r.partials) console.log(`attachments: retention removed ${r.records} record(s), ${r.blobs} stored file(s), ${r.partials} unfinished upload(s)`);
+  } catch (e) {
+    console.warn(`attachments: retention failed: ${(e as Error).message}`);
+  }
+};
+setTimeout(pruneAttachments, 60_000).unref();
+setInterval(pruneAttachments, 60 * 60_000).unref();
 // FFBox, through the connector it runs (docs/ffbox-integration.md): read-only reports, off by default.
 const providers = new ProviderManager(cfg);
 // Max, the Discord bot agents post as (docs/max.md): their ffdiscord calls, the token's health, a read-only inbound.
@@ -196,6 +236,7 @@ const auth = new Auth(cfg.dataDir, { trustProxy: cfg.trustProxy });
 // Who is who (docs/identity.md): the logins in data/users.json, and who automatic work is billed to.
 const identity = new Identity(cfg, () => auth.userInfos());
 const agents = new Agents(cfg, store, sandboxes, sessions, machines, identity);
+agents.attachments = attachments;
 if (host.elevated) sandboxes.refuseUnityWhileElevated(host.elevatedWhy ?? 'Run scripts/restart.ps1 to relaunch it non-elevated.');
 
 /** The signed-in person making this request, as work records them (a route only runs for a signed-in user). */
@@ -396,7 +437,7 @@ function appState(user: string | undefined): AppState {
   const me = u ?? { ...identity.owner(), role: 'owner' as const };
   const mine = agents.orchestrators.personalFor(me);
   return {
-    app: appVersion(),
+    app: appNow(),
     sandboxes: sandboxes.list(),
     sessions: [...store.sessions.values()],
     standingAgents: agents.standing.list(),
@@ -415,7 +456,7 @@ function appState(user: string | undefined): AppState {
     me,
     work: agents.orchestrators.forPage(),
     intake: intake.summary(),
-    config: { defaultModel: cfg.defaultModel, models: cfg.models, defaultBase: cfg.defaultBase },
+    config: { defaultModel: cfg.defaultModel, models: cfg.models, defaultBase: cfg.defaultBase, attachments: attachments.settings },
     settings: store.settings,
   };
 }
@@ -528,23 +569,47 @@ route('GET', '/api/search', async (_r, _p, url) => {
 
 route('POST', '/api/sessions/([\\w-]+)/message', async (req, [id]) => {
   // Images come base64 in the JSON (the UI shrinks them first), so this body may be large.
-  const { text, images } = await readJson<SendMessageRequest>(req, 40 * 1024 * 1024);
+  const { text, images, attachments: attachmentIds } = await readJson<SendMessageRequest>(req, 40 * 1024 * 1024);
   const imgs = checkImages(images);
+  // Other files were uploaded first (POST /api/attachments): the message names them by id (docs/attachments.md).
+  const files = attachments.resolve(attachmentIds);
   const s = sessions.get(id);
   // A standing agent only works inside a run (budget, no overlap, agent limit): a message starts one.
   if (s.info.kind === 'standing' && s.info.standingId) {
     if (imgs.length) throw new HttpError(400, 'standing agents take text only; describe the image or put it in their folder');
+    if (files.length) throw new HttpError(400, 'standing agents take text only; attach the file in an orchestrator or worker chat');
     return { note: agents.standing.runNow(s.info.standingId, 'message', need(text, 'text'), requesterOf(req)) };
   }
-  if (!imgs.length) need(text, 'text');
+  if (!imgs.length && !files.length) need(text, 'text');
   mayDrive(req, s.info);
+  // `/compact [focus]` (w518) is no message: it compacts the conversation. Its wake_me check-in and budgets stay.
+  const focus = s.info.kind === 'orchestrator' && !imgs.length && !files.length ? compactCommand(String(text ?? '')) : undefined;
+  if (focus !== undefined) return { note: compactNow(id, focus, requesterOf(req)) };
   if (s.info.kind === 'orchestrator') {
     // A person wrote to their orchestrator: its own wake_me check-in is moot, and its budgets start again.
     agents.waker.cancel(id);
     agents.orchestrators.personWrote(id);
   }
-  sessions.send(id, String(text ?? '').trim(), 'human', imgs, { requestedBy: requesterOf(req) });
+  await agents.sendWithAttachments(id, String(text ?? '').trim(), 'human', { images: imgs, attachments: files, requestedBy: requesterOf(req) });
   return {};
+});
+
+/** Compact an orchestrator's conversation (w518); a refusal is a 409 the page shows. */
+function compactNow(id: string, focus: string, by: Requester): string {
+  try {
+    return sessions.compact(id, focus, by);
+  } catch (e) {
+    throw new HttpError(409, `Not compacted: ${(e as Error).message}.`);
+  }
+}
+
+// `/compact` as a button (w518): a person's own orchestrator for them, the dispatcher (nobody chats with it) for an owner.
+route('POST', '/api/sessions/([\\w-]+)/compact', async (req, [id]) => {
+  const s = sessions.get(id);
+  if (s.info.kind !== 'orchestrator') throw new HttpError(400, '/compact is for the orchestrators\' chats');
+  mayDrive(req, s.info);
+  const { instructions } = await readJson<{ instructions?: string }>(req);
+  return { note: compactNow(id, String(instructions ?? ''), requesterOf(req)) };
 });
 
 // A person opened their own chat: the messages other people sent them there are read (docs/orchestrators.md).
@@ -553,6 +618,31 @@ route('POST', '/api/sessions/([\\w-]+)/seen', async (req, [id]) => {
   mayDrive(req, s.info);
   agents.orchestrators.seen(id);
   return {};
+});
+
+// ---- orchestrator timers (server/timers.ts, docs/orchestrators.md "Timers"): its person sees and pauses or cancels
+// their own orchestrator's; the dispatcher's only an owner (mayDrive). Nobody else sees them.
+route('GET', '/api/timers/([\\w-]+)', async (req, [id]) => {
+  const s = sessions.get(id);
+  if (s.info.kind !== 'orchestrator') throw new HttpError(400, 'timers belong to orchestrators');
+  mayDrive(req, s.info);
+  return { timers: agents.timers.list(id), deliveredToday: agents.timers.deliveredToday(id), limits: TIMER_LIMITS };
+});
+route('POST', '/api/timers/([\\w-]+)/([\\w-]+)', async (req, [id, timerId]) => {
+  const s = sessions.get(id);
+  if (s.info.kind !== 'orchestrator') throw new HttpError(400, 'timers belong to orchestrators');
+  mayDrive(req, s.info);
+  const { action } = await readJson<{ action?: string }>(req);
+  try {
+    if (action === 'pause') agents.timers.update(id, timerId, { enabled: false });
+    else if (action === 'resume') agents.timers.update(id, timerId, { enabled: true });
+    else if (action === 'cancel') agents.timers.cancel(id, timerId);
+    else throw new HttpError(400, 'action: pause, resume or cancel');
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(400, (e as Error).message);
+  }
+  return { timers: agents.timers.list(id), deliveredToday: agents.timers.deliveredToday(id), limits: TIMER_LIMITS };
 });
 
 /** Validate images sent with a message. */
@@ -576,10 +666,13 @@ class StreamReply {
   readonly type: string;
   readonly path: string;
   readonly size: number;
-  constructor(type: string, file: string, size: number) {
+  /** A download (an attachment): saved under this Content-Disposition, never shown. */
+  readonly disposition?: string;
+  constructor(type: string, file: string, size: number, disposition?: string) {
     this.type = type;
     this.path = file;
     this.size = size;
+    this.disposition = disposition;
   }
 }
 
@@ -594,6 +687,33 @@ class FileReply {
     this.data = data;
   }
 }
+
+// ---- attachments (docs/attachments.md): files people attach to messages, uploaded in chunks that resume
+
+route('POST', '/api/attachments', async (req) => {
+  const b = await readJson<{ name?: unknown; size?: unknown }>(req);
+  return attachments.begin({ name: b.name, size: b.size, uploadedBy: auth.user(req) });
+});
+route('GET', '/api/attachments/uploads/([a-f0-9]{32})', async (_r, [uploadId]) => attachments.status(uploadId));
+// A chunk is raw bytes (application/octet-stream with the x-ff-upload header, which the CSRF check lets through).
+route('PUT', '/api/attachments/uploads/([a-f0-9]{32})', async (req, [uploadId], url) => {
+  const length = req.headers['content-length'];
+  const r = await attachments.append(uploadId, Number(url.searchParams.get('offset')), req, undefined, length === undefined ? undefined : Number(length));
+  return { received: r.received, size: r.size, ...(r.attachment ? { attachment: publicRef(r.attachment) } : {}) };
+});
+route('DELETE', '/api/attachments/uploads/([a-f0-9]{32})', async (_r, [uploadId]) => {
+  attachments.cancel(uploadId);
+  return {};
+});
+route('GET', '/api/attachments/(att_[a-z0-9]{12})', async (_r, [id]) => {
+  const [a] = attachments.resolve([id]);
+  return { ...publicRef(a), createdAt: a.createdAt, lastUsedAt: a.lastUsedAt, ...(a.uploadedBy ? { uploadedBy: a.uploadedBy } : {}) };
+});
+// Always a download, as bytes: never shown in the page (an HTML or SVG file must not run here).
+route('GET', '/api/attachments/(att_[a-z0-9]{12})/download', async (_r, [id]) => {
+  const [a] = attachments.resolve([id]);
+  return new StreamReply('application/octet-stream', attachments.pathOf(a), a.size, downloadDisposition(a.name));
+});
 
 route('GET', '/api/uploads/([\\w-]+)/([\\w-]+)', async (_r, [sessionId, imageId]) => {
   const f = store.imagePath(sessionId, imageId);
@@ -731,10 +851,17 @@ route('POST', '/api/orchestrator/reset', async (req) => {
   const { which } = await readJson<{ which?: 'mine' | 'dispatcher' }>(req);
   const me = requesterOf(req);
   let id: string;
+  let was: string | undefined;
   if (which === 'dispatcher') {
     if (identity.get(me.userId)?.role !== 'owner') throw new HttpError(403, 'only the owner resets the dispatcher');
+    was = agents.dispatcherId;
     id = agents.newDispatcher().info.id;
-  } else id = agents.orchestrators.resetPersonal(me).info.id;
+  } else {
+    was = agents.orchestrators.personalOf(me.userId)?.info.id;
+    id = agents.orchestrators.resetPersonal(me).info.id;
+  }
+  // A fresh conversation keeps its standing timers (server/timers.ts): they are the person's jobs, not the transcript's.
+  if (was) agents.timers.rehome(was, id);
   // Each page has its own home chat, so each gets its own state.
   for (const [c, user] of clients) if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'state', state: appState(user) } satisfies ServerEvent));
   return { id };
@@ -983,46 +1110,6 @@ route('POST', '/api/voice/tts', async (req) => {
   }
 });
 
-// ------------------------------------------------------------------ static web app
-
-const WEB = path.join(ROOT, 'web', 'dist');
-const TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.json': 'application/json',
-  '.woff2': 'font/woff2',
-  '.webmanifest': 'application/manifest+json',
-};
-
-async function serveStatic(req: http.IncomingMessage, url: URL, res: http.ServerResponse) {
-  let file = path.normalize(path.join(WEB, decodeURIComponent(url.pathname)));
-  if (!file.startsWith(WEB)) return send(res, 403, { error: 'forbidden' });
-  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(WEB, 'index.html');
-  if (!fs.existsSync(file)) {
-    res.writeHead(200, { 'content-type': 'text/plain' });
-    return res.end('Web UI not built. Run: npm run build');
-  }
-  const immutable = file.includes(`${path.sep}assets${path.sep}`);
-  const headers = {
-    'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream',
-    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-  };
-  // The bundle and styles gzipped (made once per build, server/compress.ts).
-  const gz = acceptsGzip(req.headers['accept-encoding']) ? await gzippedFile(file, fs.statSync(file)) : undefined;
-  if (gz) {
-    res.writeHead(200, { ...headers, 'content-encoding': 'gzip', vary: 'Accept-Encoding', 'content-length': gz.length });
-    return res.end(gz);
-  }
-  res.writeHead(200, headers);
-  fs.createReadStream(file)
-    .on('error', () => res.destroy())
-    .pipe(res);
-}
-
 // ------------------------------------------------------------------ server
 
 /** Parse a request path without ever throwing (a raw "//" or "//x:99999" request line makes WHATWG URL throw). */
@@ -1048,10 +1135,24 @@ const server = http.createServer(async (req, res) => {
       return await handleMcp(agents, who.name, keyUser ? asRequester(keyUser) : identity.owner(), req, res, req.method === 'POST' ? await readJson(req) : undefined);
     }
     if (url.pathname.startsWith('/api/') && req.method !== 'GET') {
-      // CSRF: a cross-site form cannot send application/json, and SameSite=Strict keeps the cookie home.
-      if (req.method !== 'DELETE' && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+      // CSRF: a cross-site form cannot send application/json, and SameSite=Strict keeps the cookie home. An attachment
+      // chunk is raw bytes instead, with a custom header that no cross-site form or simple request can carry.
+      const chunk = req.method === 'PUT' && url.pathname.startsWith('/api/attachments/uploads/');
+      if (chunk) {
+        if (req.headers['x-ff-upload'] !== '1' || !String(req.headers['content-type'] ?? '').startsWith('application/octet-stream')) {
+          return send(res, 415, { error: 'an attachment chunk is application/octet-stream with x-ff-upload: 1' });
+        }
+      } else if (req.method !== 'DELETE' && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
         return send(res, 415, { error: 'JSON only' });
       }
+    }
+    // A machine's daemon fetching an attachment it was handed (docs/attachments.md): its own token, no browser session.
+    const machineFile = req.method === 'GET' ? /^\/machine\/attachments\/(att_[a-z0-9]{12})$/.exec(url.pathname) : null;
+    if (machineFile) {
+      const machineId = machines.authenticate(req.headers.authorization);
+      const r = machineAttachment(attachments, machineId && store.machines.has(machineId) ? machineId : undefined, machineFile[1]);
+      if ('error' in r) return send(res, r.status, { error: r.error });
+      return sendStream(req, res, new StreamReply('application/octet-stream', r.file, r.record.size, downloadDisposition(r.record.name)));
     }
     // The nightly e2e lab's report (docs/intake.md, "Nightly e2e regressions"): a key minted --scope nightly, nothing else.
     if (url.pathname === '/api/intake/nightly' && req.method === 'POST') {
@@ -1075,7 +1176,7 @@ const server = http.createServer(async (req, res) => {
     }
     // Liveness and version, for scripts, monitors and the E2E harness. No login needed: the
     // version of an open-source app is public anyway.
-    if (url.pathname === '/api/health' && req.method === 'GET') return send(res, 200, { ok: true, ...appVersion() });
+    if (url.pathname === '/api/health' && req.method === 'GET') return send(res, 200, { ok: true, ...appNow() });
     if (url.pathname === '/api/login' && req.method === 'POST') {
       const { username, password } = await readJson<{ username?: string; password?: string }>(req);
       if (typeof username !== 'string' || typeof password !== 'string') return send(res, 400, { error: 'username and password required' });
@@ -1100,10 +1201,11 @@ const server = http.createServer(async (req, res) => {
       }
       return send(res, 404, { error: 'no such endpoint' });
     }
-    await serveStatic(req, url, res);
+    await serveStatic(WEB, req, url, res);
   } catch (e) {
-    const status = e instanceof HttpError ? e.status : /^no (sandbox|session|standing agent|delegation|machine)/.test((e as Error).message) ? 404 : 400;
-    send(res, status, { error: (e as Error).message });
+    const status = e instanceof HttpError || e instanceof AttachmentError ? e.status : /^no (sandbox|session|standing agent|delegation|machine)/.test((e as Error).message) ? 404 : 400;
+    // An upload that must resume elsewhere says where (docs/attachments.md).
+    send(res, status, { error: (e as Error).message, ...(e instanceof AttachmentError && e.received !== undefined ? { received: e.received } : {}) });
   }
 });
 
@@ -1153,7 +1255,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 function sendStream(req: http.IncomingMessage, res: http.ServerResponse, f: StreamReply) {
-  const headers = { 'content-type': f.type, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': FILE_CSP };
+  const headers = { 'content-type': f.type, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': FILE_CSP, ...(f.disposition ? { 'content-disposition': f.disposition } : {}) };
   const range = parseRange(req.headers.range, f.size);
   if (range === 'unsatisfiable') {
     res.writeHead(416, { ...headers, 'content-range': `bytes */${f.size}` });

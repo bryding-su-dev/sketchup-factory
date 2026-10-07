@@ -195,10 +195,38 @@ export interface SessionInfo {
   /** Background tasks (a background command, a watcher) still open: they would have re-invoked it; a restart ends them. */
   backgroundTasks?: number;
   /**
+   * The context its next model call reads, in tokens (w535): the last call's input, cached and uncached, plus its
+   * output, as the SDK reported it; after a compaction, the size Claude Code measured. This host's sessions only.
+   */
+  contextTokens?: number;
+  /** What its last finished turn cost, in USD (w535): what the automatic compaction's cost trigger reads. */
+  lastTurnCostUsd?: number;
+  /** Its last compaction (w518, w535), whoever started it. */
+  lastCompaction?: CompactionRecord;
+  /**
    * Machine sessions: stopped or interrupted on purpose (stop_agent, interrupt_agent, the UI) since its last message.
    * Kept by the portal, never by the daemon: no dropped link or restart resumes it until it is sent a message again.
    */
   stoppedOnPurpose?: boolean;
+}
+
+/**
+ * Who started a compaction (w535): a person's `/compact` or the menu (`person`), FF Factory because the context or a
+ * turn's cost passed its threshold (`tokens`, `cost`), the orchestrator itself (`self`, compact_conversation), or Claude
+ * Code at its own hard limit (`claude`).
+ */
+export type CompactionTrigger = 'person' | 'tokens' | 'cost' | 'self' | 'claude';
+
+/** One finished compaction of a session's conversation (w535): when, why, and the context before and after. */
+export interface CompactionRecord {
+  at: string;
+  trigger: CompactionTrigger;
+  /** The context it compacted, in tokens (Claude Code's compact_boundary pre_tokens). */
+  before: number;
+  /** The context afterwards, in tokens, when it could be measured. */
+  after?: number;
+  /** The session's turn count then: automatic compaction waits a few turns before the next. */
+  turns: number;
 }
 
 /** An image kept with a session's transcript, served at /api/uploads/<sessionId>/<id>. */
@@ -216,6 +244,36 @@ export interface ImageInput {
   id?: string;
 }
 
+/**
+ * A file a person attached to a message (docs/attachments.md): a save, a bug-report zip, a log, a desync report.
+ * Stored once by its SHA-256 in the portal's data folder, never unpacked or run there; served for download only.
+ */
+export interface AttachmentRef {
+  /** "att_" and 12 lowercase letters or digits (shared/attachments.ts ATTACHMENT_ID): what orchestrators pass on. */
+  id: string;
+  /** Its file name as uploaded, made safe (attachmentName). */
+  name: string;
+  size: number;
+  sha256: string;
+  /** What it is from its name alone (never opened): "Final Factory bug report (zip)", "Unity Player.log", ... */
+  kind: string;
+  mediaType: string;
+}
+
+/** An attachment as one agent got it: where its copy is for that agent, or why it is not there. */
+export interface DeliveredAttachment extends AttachmentRef {
+  /** The file the agent reads: its Inbox copy (a worker), or the stored file (an orchestrator). */
+  path?: string;
+  error?: string;
+}
+
+/** The attachment limits the page needs (config attachments). */
+export interface AttachmentSettings {
+  maxBytes: number;
+  retentionDays: number;
+  maxPerMessage: number;
+}
+
 /** Image types Claude accepts. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
@@ -229,7 +287,8 @@ export interface ImageFile {
 /** One persisted transcript entry. Streaming deltas are NOT persisted (see ServerEvent). */
 export type TranscriptEvent =
   /** requestedBy: the person who wrote it (from 'human'), or for whom the orchestrator or the harness sent it. */
-  | { seq: number; t: string; kind: 'user'; text: string; from: 'human' | 'orchestrator' | 'system'; uuid?: string; images?: ImageRef[]; requestedBy?: Requester }
+  /** attachments: the files that came with it (docs/attachments.md), with where this agent's copy is. */
+  | { seq: number; t: string; kind: 'user'; text: string; from: 'human' | 'orchestrator' | 'system'; uuid?: string; images?: ImageRef[]; attachments?: DeliveredAttachment[]; requestedBy?: Requester }
   /** images: the files it shows (shared/imagePaths.ts), kept once copied, so they outlive their folder. */
   | { seq: number; t: string; kind: 'assistant'; text: string; images?: ImageRef[] }
   | { seq: number; t: string; kind: 'thinking'; text: string }
@@ -941,6 +1000,8 @@ export interface WorkItem {
   priority: WorkPriority;
   /** Ids the requester named: a spec, a PR, a session, a sandbox, a delegation, another work item. */
   relatedIds?: string[];
+  /** Its people's update_work notes, oldest first (w496: every worker started for it gets them with the brief). */
+  notes?: { at: string; by: string; text: string }[];
   /** What overlaps are matched on: "spec:098", "pr:412", "branch:098-belts", "session:ab12cd34". */
   keys: string[];
   /** Who filed it: its workers run on their account. */
@@ -956,6 +1017,8 @@ export interface WorkItem {
   mergedInto?: string;
   /** The workers started, messaged or linked for it. */
   sessionIds: string[];
+  /** Files its person attached (request_work attachments): every worker started for it gets a copy. */
+  attachments?: AttachmentRef[];
   /** What it may repeat, found when it was filed; strongest first. */
   overlaps: WorkOverlap[];
   /** The latest outcome: a worker's last word, or the note it was closed with. */
@@ -1167,6 +1230,8 @@ export interface IntakeSummary {
 export interface AppVersion {
   version: string;
   sha?: string;
+  /** The web UI build the server serves now (server/webStatic.ts); a page that loaded another reloads. Absent from older servers. */
+  web?: string;
 }
 
 export interface AppState {
@@ -1200,8 +1265,38 @@ export interface AppState {
   work?: WorkItem[];
   /** Discord and FFBox intake into the ledger (docs/intake.md); absent from a server older than this field. */
   intake?: IntakeSummary;
-  config: { defaultModel: string; models: string[]; defaultBase: string };
+  config: { defaultModel: string; models: string[]; defaultBase: string; attachments: AttachmentSettings };
   settings: AppSettings;
+}
+
+/** An orchestrator's timer as its person sees it (server/timers.ts TimerView; docs/orchestrators.md "Timers"). */
+export interface TimerInfo {
+  id: string;
+  owner: string;
+  title: string;
+  note: string;
+  scheduleText: string;
+  state: 'active' | 'paused' | 'ended';
+  createdAt: string;
+  createdBy: string;
+  nextFireAt?: string;
+  lastFiredAt?: string;
+  lastDeliveredAt?: string;
+  fires: number;
+  /** Fires waiting to be delivered (after the current turn, or for the budget). */
+  pending?: number;
+  skipped?: number;
+  until?: string;
+  maxFires?: number;
+  endedAt?: string;
+  endReason?: 'fired' | 'until' | 'max_fires' | 'cancelled';
+}
+
+/** GET /api/timers/<orchestrator id>. */
+export interface TimersAnswer {
+  timers: TimerInfo[];
+  deliveredToday: number;
+  limits: { activePerOwner: number; deliveriesPerDay: number; minEveryMinutes: number };
 }
 
 /** Pushed over the WebSocket at /ws. */
@@ -1269,6 +1364,8 @@ export interface StartSessionRequest {
 export interface SendMessageRequest {
   text: string;
   images?: ImageInput[];
+  /** Ids of files uploaded first (POST /api/attachments, docs/attachments.md). */
+  attachments?: string[];
 }
 
 export interface PermissionDecisionRequest {

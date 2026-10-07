@@ -14,6 +14,7 @@ import { Store } from './store.ts';
 import { buildAccounts, sessionSource, tokenKey } from './usage.ts';
 import { redactSecrets } from './secrets.ts';
 import { fakeQuery } from '../e2e/fakeAgent.ts';
+import { resumeMessage } from './restart.ts';
 import type { Config } from './config.ts';
 import type { Requester, Sandbox, SessionInfo, TranscriptEvent, UserInfo } from '../shared/types.ts';
 
@@ -167,13 +168,50 @@ test('set_app_config: a person\'s own Claude token is write-only, per user, and 
   assert.throws(() => setAppConfig(file, cfg, 'systemPayer', 'not a login!'), /user id/);
 });
 
-test("prompts: the shared orchestrator chat names each person; a worker hears whom the orchestrator's message is for", () => {
+test("prompts: every person's message names its sender, in every kind of session; the orchestrator's names whom it is for", () => {
   assert.equal(promptText('orchestrator', 'start spec 98', 'human', r(LOTH)), '[from Lothsahn]\nstart spec 98');
-  assert.equal(promptText('orchestrator', 'start spec 98', 'human'), 'start spec 98', 'nobody known: as before');
   assert.equal(promptText('orchestrator', '[worker update] …', 'system', r(LOTH)), '[worker update] …', 'harness text is never dressed as a person');
   assert.equal(promptText('worker', 'fix it', 'orchestrator', r(LOTH)), '[from the orchestrator, for Lothsahn]\nfix it');
-  assert.equal(promptText('worker', 'fix it', 'orchestrator'), '[from the orchestrator]\nfix it');
-  assert.equal(promptText('worker', 'fix it', 'human', r(LOTH)), 'fix it', 'a person typing to a worker: plain');
+  // w389: Lothsahn typed "Undo the release hold" in a worker's chat; it arrived bare, and the worker wrote Ben's name on it.
+  assert.equal(promptText('worker', 'Undo the release hold', 'human', r(LOTH)), '[from Lothsahn]\nUndo the release hold', 'a person typing to a worker: named');
+  assert.equal(promptText('standing', 'run now', 'human', r(LOTH)), '[from Lothsahn]\nrun now');
+  // Nobody known: said so, never left bare (a bare message reads as the portal owner's).
+  assert.equal(promptText('worker', 'fix it', 'orchestrator'), '[from the orchestrator, for no named person]\nfix it');
+  assert.equal(promptText('worker', 'fix it', 'human'), '[from a person the portal did not name]\nfix it');
+  assert.equal(promptText('orchestrator', 'start spec 98', 'human'), '[from a person the portal did not name]\nstart spec 98');
+});
+
+test('w389: a worker reads who sent each message, typed in its chat, from an orchestrator, queued behind busy slots, or listed after a restart', async (t) => {
+  setQueryForTesting(fakeQuery({ stepMs: 1 }) as never);
+  const dir = tmpDir(t, 'ffsb-ident-', async () => {
+    sessions.stopAll();
+    await new Promise((res) => setTimeout(res, 50));
+    store.flush();
+  });
+  const store = new Store(dir);
+  const sessions = new SessionManager({ limits: { maxSessions: 1 } } as Config, store);
+  const make = () => sessions.create({ kind: 'worker', title: 'w', permissionMode: 'bypassPermissions', options: () => ({}), requestedBy: r(BEN) });
+  const said = (id: string) => store.readTranscript(id).filter((e) => e.kind === 'assistant').map((e) => (e as { text?: string }).text ?? JSON.stringify(e)).join('\n');
+  const until = async (what: string, ok: () => boolean) => {
+    for (const end = Date.now() + 15_000; !ok(); ) {
+      if (Date.now() > end) throw new Error(`timed out: ${what}`);
+      await new Promise((res) => setTimeout(res, 20));
+    }
+  };
+  const w = make();
+  // Typed by Lothsahn in the worker's chat (POST /api/sessions/:id/message: 'human', requestedBy the login).
+  sessions.send(w.info.id, 'Undo the release hold #whoami', 'human', undefined, { requestedBy: r(LOTH) });
+  await until('answered', () => /Sender: \[from Lothsahn\]/.test(said(w.info.id)));
+  sessions.send(w.info.id, 'status? #whoami', 'orchestrator', undefined, { requestedBy: r(LOTH) });
+  await until('answered', () => /Sender: \[from the orchestrator, for Lothsahn\]/.test(said(w.info.id)));
+  // Queued while the only slot is busy (w384's send queue), then delivered: the sender rides along.
+  const busy = make();
+  sessions.send(busy.info.id, '#slow busy', 'human', undefined, { requestedBy: r(BEN) });
+  const uuid = sessions.send(w.info.id, 'hold it #whoami', 'human', undefined, { requestedBy: r(LOTH) });
+  assert.equal(sessions.isQueued(uuid), true, 'queued');
+  await until('delivered later', () => (said(w.info.id).match(/Sender: \[from Lothsahn\]/g) ?? []).length === 2);
+  // After a restart, the unanswered list names whose each message was.
+  assert.match(resumeMessage({ id: 'a', kind: 'worker', title: 'a', why: 'mid-turn', unanswered: [{ text: 'Undo the release hold', from: 'human', requestedBy: r(LOTH) }], lastFrom: 'human' }, { reason: 'restart', at: '2026-10-04T18:00:00Z' }), /^- \(from Lothsahn\) Undo the release hold$/m);
 });
 
 test('sessions: each message records its person; a person (not the harness) sets whom the session last worked for', async (t) => {

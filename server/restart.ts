@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { DrainStatus, SessionInfo, SessionKind } from '../shared/types.ts';
+import type { DrainStatus, Requester, SessionInfo, SessionKind } from '../shared/types.ts';
 import { writeJsonDurable } from './durable.ts';
 
 /**
@@ -13,6 +13,19 @@ import { writeJsonDurable } from './durable.ts';
 export interface Unanswered {
   text: string;
   from: 'human' | 'orchestrator' | 'system';
+  /** The person it came from or was sent for (w389: the resume says whose it was). */
+  requestedBy?: Requester;
+}
+
+/**
+ * Who a message is from, as an agent reads it (w389). A person's message names them, the orchestrator's names the
+ * person it is for, and one whose person the portal does not know says so: an agent attributes an approval or a
+ * decision only to a person a message names, never to "the user" by default. Harness messages: undefined.
+ */
+export function senderOf(from: 'human' | 'orchestrator' | 'system', requestedBy?: Requester): string | undefined {
+  if (from === 'orchestrator') return `the orchestrator, for ${requestedBy ? requestedBy.displayName : 'no named person'}`;
+  if (from === 'human') return requestedBy ? requestedBy.displayName : 'a person the portal did not name';
+  return undefined;
 }
 
 /** What collectResume needs to know about one session at shutdown. */
@@ -127,7 +140,7 @@ export function resumeMessage(e: ResumeEntry, f: Pick<ResumeFile, 'reason' | 'at
   const pending = e.unanswered.filter((u) => u.text.trim());
   if (pending.length) {
     lines.push('', 'Messages you had not answered yet, oldest first:');
-    for (const u of pending) lines.push(`- (${u.from}) ${clip(u.text.replace(/\s+/g, ' ').trim(), 600)}`);
+    for (const u of pending) lines.push(`- (from ${senderOf(u.from, u.requestedBy) ?? 'FF Factory'}) ${clip(u.text.replace(/\s+/g, ' ').trim(), 600)}`);
   }
   return lines.join('\n');
 }
@@ -188,6 +201,29 @@ export function restartSummary(f: ResumeFile, outcomes: ResumeOutcome[], update:
   parts.push(...notes);
   parts.push('Tell the user in a line if anything needs them; otherwise carry on.');
   return parts.join(' ');
+}
+
+/**
+ * The workers a restart did not resume because they were not working: idle, waiting on a wake_me the restart kept
+ * (Waker.restore). Without this line a worker between turns looks stopped and forgotten (w311: f6b32781 on
+ * lothdesktop/pr-fix ended its turn at 21:46:53 with a 21-minute wake, the restart came at 22:04:30, and the wake
+ * fired on time at 22:07:36, but the report named it nowhere). `resumed`: ids the report already lists.
+ */
+export function waitingOnWakeLine(
+  wakes: { sessionId: string; at: number }[],
+  info: (id: string) => { title: string; kind: string; sandboxId?: string; machineId?: string; machineSandbox?: string } | undefined,
+  resumed: Set<string>,
+  nowMs: number,
+): string | undefined {
+  const items = wakes.flatMap((w) => {
+    const i = info(w.sessionId);
+    if (!i || i.kind !== 'worker' || resumed.has(w.sessionId)) return [];
+    const where = i.sandboxId ? ` in ${i.sandboxId}` : i.machineId ? ` on ${i.machineId}${i.machineSandbox ? `/${i.machineSandbox}` : ''}` : '';
+    const mins = Math.round((w.at - nowMs) / 60_000);
+    const when = mins <= 0 ? 'now (it was due while FF Factory was down)' : `at ${new Date(w.at).toLocaleTimeString()} (in ${mins} min)`;
+    return [`"${i.title}" (${w.sessionId}${where}) ${when}`];
+  });
+  return items.length ? `Between turns, waiting on their wake_me (kept across the restart; it wakes them, nothing to resume): ${items.join(', ')}.` : undefined;
 }
 
 // ---------------------------------------------------------------- files

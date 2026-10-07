@@ -344,7 +344,9 @@ test("fleet: BEAST's own daemon holds its sandboxes: they stay under BEAST, and 
   await fixedFleet(page, '#/', migratedFleet());
   const sidebar = await openSidebar(page);
   const groups = sidebar.locator('.fl-group');
-  // No group of its own for the daemon: the same four computers as before the migration.
+  // No group of its own for the daemon: the same four computers as before the migration. Counted first, as above: the
+  // machines' groups render a moment after the sidebar, and a read before that failed about half the time.
+  await expect(groups).toHaveCount(4);
   expect(await groups.evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))).toEqual(['fl-group-host', 'fl-group-lothdesktop', 'fl-group-m5', 'fl-group-m3']);
   await expect(sidebar.locator('.section-head', { hasText: 'Computers' }).locator('.count')).toHaveText('4');
   const beast = sidebar.getByTestId('fl-group-host');

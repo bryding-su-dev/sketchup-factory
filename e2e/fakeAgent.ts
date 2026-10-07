@@ -11,10 +11,17 @@
  *   "#fail"        ends the turn with an error result
  *   "#die"         the agent process ends mid-turn (as when the server's process tree is stopped)
  *   "#bg"          starts a background task (a background command, a watcher) and ends the turn
+ *   "#whoami"      says the sender line the message came with: "Sender: [from …]", or "Sender: none" (w389)
+ *   "/compact [focus]"  Claude Code's /compact, as the CLI answers it when the message is the command itself (w518):
+ *                  "compacting", a compact_boundary with the context before and the summary's size, a result of no
+ *                  turns; getContextUsage() then says the smaller context. With "#fail" in the focus the compaction
+ *                  fails (a status with compact_result "failed").
+ *   "#ctx <tokens>"  sets the context to that many tokens before it answers; "#spend <usd>" makes the turn cost that
+ *                  much more (w535: the automatic compaction's triggers). Every assistant message reports the context in
+ *                  its usage, as the SDK does (cache reads).
  *   "#tool <name> <json>"  (one per line) calls that tool of the session's in-process MCP server (an orchestrator's
  *                  belt) with those arguments, and says what it answered: "Called <name>: <answer>". Only in a
- *                  person's own message to an orchestrator (the "[from <name>]" line), so a notice quoting the tag
- *                  never sets it off.
+ *                  person's own message (the "[from <name>]" line), so a notice quoting the tag never sets it off.
  *   anything else  "Echo: <text>" (and how many images came with it)
  */
 import type { McpServerConfig, Options, PermissionResult, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -41,9 +48,14 @@ export function fakeQuery(fake: FakeOptions = {}) {
     const abort = options?.abortController ?? new AbortController();
     let interrupted = false;
     let msgId = 0;
+    // The context in use, as getContextUsage() reports it: every message adds to it, a /compact shrinks it.
+    let context = 20_000;
+    // What "#spend" added to the session's spend, on top of the scripted cost.
+    let extra = 0;
+    const usage = () => ({ input_tokens: 0, cache_read_input_tokens: context, cache_creation_input_tokens: 0, output_tokens: 0 });
 
     const text = (t: string): SDKMessage =>
-      ({ type: 'assistant', parent_tool_use_id: null, uuid: `a${++msgId}`, session_id: sessionId, message: { id: `m${msgId}`, role: 'assistant', content: [{ type: 'text', text: t }] } }) as never;
+      ({ type: 'assistant', parent_tool_use_id: null, uuid: `a${++msgId}`, session_id: sessionId, message: { id: `m${msgId}`, role: 'assistant', content: [{ type: 'text', text: t }], usage: usage() } }) as never;
     const delta = (t: string): SDKMessage =>
       ({ type: 'stream_event', parent_tool_use_id: null, uuid: `d${++msgId}`, session_id: sessionId, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } } }) as never;
     const state = (s: 'running' | 'idle' | 'requires_action'): SDKMessage => ({ type: 'system', subtype: 'session_state_changed', state: s, session_id: sessionId, uuid: `s${++msgId}` }) as never;
@@ -57,7 +69,7 @@ export function fakeQuery(fake: FakeOptions = {}) {
         subtype: ok ? 'success' : 'error_during_execution',
         is_error: !ok,
         result: t,
-        total_cost_usd: 0.01 * msgId,
+        total_cost_usd: 0.01 * msgId + extra,
         num_turns: 1,
         duration_ms: 1234,
         user_message_uuids: [uuid],
@@ -99,10 +111,29 @@ export function fakeQuery(fake: FakeOptions = {}) {
       for await (const m of prompt) {
         if (abort.signal.aborted) return;
         const content = m.message.content;
-        const said = typeof content === 'string' ? content : content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
+        const said = (typeof content === 'string' ? content : content.map((b) => (b.type === 'text' ? b.text : '')).join(' ')).trimStart();
         const images = typeof content === 'string' ? 0 : content.filter((b) => b.type === 'image').length;
         const uuid = m.uuid ?? '';
         yield state('running');
+        if (/^\/compact\b/.test(said)) {
+          yield { type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId, uuid: `c${++msgId}` } as never;
+          await sleep(step);
+          if (/#fail\b/.test(said)) {
+            yield { type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'the summary request failed', session_id: sessionId, uuid: `c${++msgId}` } as never;
+          } else {
+            const pre = context;
+            context = 18_000;
+            yield { type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: pre, post_tokens: 2_000, duration_ms: 1_500 }, session_id: sessionId, uuid: `c${++msgId}` } as never;
+          }
+          yield { type: 'result', subtype: 'success', is_error: false, result: '', total_cost_usd: 0.01 * msgId + extra, num_turns: 0, duration_ms: 1500, user_message_uuids: [uuid], session_id: sessionId, uuid: `x${++msgId}` } as never;
+          yield state('idle');
+          continue;
+        }
+        context += 5_000;
+        const setCtx = /#ctx\s+(\d+)/.exec(said);
+        if (setCtx) context = Number(setCtx[1]);
+        const spend = /#spend\s+([\d.]+)/.exec(said);
+        if (spend) extra += Number(spend[1]);
         // The harness's "[from the orchestrator]" / "[from <person>]" line (server/sessions.ts, promptText) is not the message.
         const words = said.replace(/^\[from [^\]\n]*\]\n/, '');
         const byPerson = /^\[from (?!the orchestrator)[^\]\n]*\]\n/.test(said);
@@ -155,6 +186,10 @@ export function fakeQuery(fake: FakeOptions = {}) {
         } else if (/#die\b/i.test(words)) {
           yield text('Working on it...');
           throw new Error('Claude Code process exited with code 1');
+        } else if (/#whoami\b/i.test(words)) {
+          const line = /^\[from [^\]\n]*\]/.exec(said)?.[0] ?? 'none';
+          yield text(`Sender: ${line}`);
+          yield result(uuid, true, `Sender: ${line}`);
         } else if (/#bg\b/i.test(words)) {
           yield { type: 'system', subtype: 'background_tasks_changed', tasks: [{ id: `bg-${++msgId}`, ambient: false }], session_id: sessionId, uuid: `b${msgId}` } as never;
           yield text('Started the build in the background; it will wake me.');
@@ -189,6 +224,9 @@ export function fakeQuery(fake: FakeOptions = {}) {
         interrupted = true;
       },
       async setPermissionMode() {},
+      async getContextUsage() {
+        return { categories: [], totalTokens: context, maxTokens: 200_000, settings: {} };
+      },
       async setModel() {},
       close() {
         abort.abort();

@@ -35,7 +35,7 @@ import {
 import { autoApproveProblem, identityKeys, parseMarkers, sourceTag } from './intakeRules.ts';
 import { readDiscordConfig } from './discordConfig.ts';
 import { displayName } from '../shared/labels.ts';
-import type { Machine, ProviderConversation, Requester, Sandbox, SessionInfo, WorkFfbox, WorkItem, WorkOverlap, WorkPriority, WorkSource, WorkSourceKind, WorkTriage } from '../shared/types.ts';
+import type { AttachmentRef, Machine, ProviderConversation, Requester, Sandbox, SessionInfo, WorkFfbox, WorkItem, WorkOverlap, WorkPriority, WorkSource, WorkSourceKind, WorkTriage } from '../shared/types.ts';
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
@@ -125,6 +125,8 @@ export interface WorkInput {
   priority?: WorkPriority;
   constraints?: string;
   related_ids?: string[];
+  /** Files its person attached (docs/attachments.md), already looked up in the store. */
+  attachments?: AttachmentRef[];
 }
 
 export class Orchestrators {
@@ -557,6 +559,7 @@ export class Orchestrators {
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
       sessionIds: [],
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       overlaps: [],
       asks: 0,
       log: [],
@@ -590,7 +593,7 @@ export class Orchestrators {
       const done = input.approve ? this.approveIntake(w.id, owner) : this.declineIntake(w.id, owner, input.note);
       return input.approve ? `${done.id} approved by ${owner.displayName}: the dispatcher decides it now.` : `${done.id} declined by ${owner.displayName}.`;
     }
-    if (!isFor(w, owner.userId)) throw new Error(`${w.id} is ${names(w.requesters)}'s request, not ${owner.displayName}'s`);
+    if (!isFor(w, owner.userId)) return this.closeForOther(chat, owner, w, input);
     const note = input.note?.trim();
     if (!note && !input.priority && !input.close && !input.reopen) throw new Error('give a note, a priority, close or reopen');
     const problem = updateProblem(w, input, this.now().getTime());
@@ -616,6 +619,8 @@ export class Orchestrators {
     }
     if (note) {
       what.push(`note: ${note}`);
+      // Kept whole for the workers' briefs (w496); the log line is clipped.
+      w.notes = [...(w.notes ?? []), { at: this.now().toISOString(), by: owner.displayName, text: note.slice(0, 2000) }].slice(-20);
       if (w.status === 'question') w.status = 'new';
       if (w.flag) {
         what.push(`answers the design question "${clip(w.flag.text, 120)}"`);
@@ -639,6 +644,45 @@ export class Orchestrators {
       this.gatherForDispatcher(owner, updateNotice(w, owner, `${what.join('; ')}.${hint}`));
     }
     return `${w.id} is ${w.status}: ${what.join('; ')}.`;
+  }
+
+  /**
+   * An owner closes or reopens another person's request (w402: "ben and I can close each other's requests if we
+   * explicitly ask"). Only a login with the owner role, only in a turn its person started with their own message (the
+   * guard approve and decline use: never for a harness, worker, standing-agent or relayed FFBox/Discord text), only
+   * close or reopen, and only with a note saying why. A note alone or a priority change on someone else's request stays
+   * theirs. The request's people hear who did it and why; the dispatcher hears a cancel or a reopen, as for their own.
+   */
+  private closeForOther(chat: SessionHandle, by: Requester, w: WorkItem, input: { note?: string; priority?: WorkPriority; close?: 'done' | 'cancelled'; reopen?: boolean }): string {
+    const whose = `${names(w.requesters)}'s`;
+    const refused = `${w.id} is ${whose} request, not ${by.displayName}'s`;
+    if (this.d.identity.get(by.userId)?.role !== 'owner') throw new Error(`${refused}; only an owner closes or reopens another person's request`);
+    if (!input.close && !input.reopen) throw new Error(`${refused}: another owner may close or reopen it (with a note saying why), not add notes or change its priority`);
+    if (input.close && input.reopen) throw new Error('close or reopen, not both');
+    if (input.priority) throw new Error(`${refused}: its priority stays its people's to change`);
+    if ((chat.turnFrom ?? chat.lastFrom) !== 'human') throw new Error(`only ${by.displayName}, in their own words in this turn, closes or reopens ${whose} request ${w.id}: ask them`);
+    const note = input.note?.trim();
+    if (!note) throw new Error(`say why in a note: ${names(w.requesters)} will be told who ${input.close ? 'closed' : 'reopened'} ${w.id} and why`);
+    const problem = updateProblem(w, input, this.now().getTime());
+    if (problem) throw new Error(problem);
+    this.spend(chat.info.id, by);
+    const verb = input.reopen ? 'reopened' : input.close === 'done' ? 'closed as done' : 'cancelled';
+    if (input.reopen) {
+      w.status = 'new';
+    } else {
+      w.status = input.close!;
+      w.outcome = clip(note, 300);
+    }
+    // humanAsked stays as its own people left it: another owner's word does not make it theirs.
+    this.stamp(w, `${verb} by ${by.displayName} (${whose} request), in ${by.displayName}'s own turn: ${note}`);
+    this.store.putWork(w);
+    this.toPeople(w.requesters, dispatchNotice(w, `${verb} by ${by.displayName}, who asked for it in their own words (it is your request)`, note));
+    if (input.close !== 'done') {
+      const live = w.sessionIds.filter((sid) => BUSY.includes(this.store.sessions.get(sid)?.status ?? 'stopped'));
+      const hint = input.close === 'cancelled' && live.length ? ` Its workers ${live.join(', ')} are still working: stop or redirect them.` : '';
+      this.gatherForDispatcher(by, updateNotice(w, by, `${verb} for ${names(w.requesters)} (an owner's close or reopen of another person's request): ${note}.${hint}`));
+    }
+    return `${w.id} (${whose} request) is ${w.status}: ${verb} by ${by.displayName}. ${names(w.requesters)}'s orchestrator is told who and why.`;
   }
 
   /** The dispatcher decides about a request (decide_work); the requesters' orchestrators get the reply. */

@@ -103,9 +103,12 @@ fs.writeFileSync(
       models: ['opus', 'sonnet'],
       defaultModel: 'opus',
       // Worker updates reach people's own orchestrators (docs/orchestrators.md; e2e/orchestrators.spec.ts).
-      orchestrator: { model: 'opus', effort: 'low', notifyOnWorkerEvents: true },
+      // Automatic compaction (w535) only when a test asks for it ("#ctx 950000"): the fake's context grows 5k a message.
+      orchestrator: { model: 'opus', effort: 'low', notifyOnWorkerEvents: true, compactAtTokens: 900_000, compactAtTurnUsd: 0 },
       worker: { permissionMode: 'bypassPermissions', effort: 'low' },
       voice: { enabled: false, autoInstall: false, tts: false },
+      // A 20 MB cap: e2e/attachments.spec.ts sends a 9 MB file (two chunks) and is refused a 21 MB one.
+      attachments: { maxMB: 20 },
       max: { eventsFile: path.join(base, 'max-events.jsonl'), ffboxConfigDir: path.join(base, 'ffbox'), discordApi: `http://127.0.0.1:${discordPort}/api/v10`, inbound: { pollMinutes: 60 } },
       ...(withIntake ? { intake: { discord: { enabled: true, bugChannels: ['beta_bugs', 'bug_reports'], trusted: { [INTAKE_TRUSTED]: 'tester' }, pollMinutes: 120 }, reviewers: ['tester'] } } : {}),
       // The provider projects also take FFBox's ledger check and its fix branches (docs/intake.md; e2e/provider.spec.ts).

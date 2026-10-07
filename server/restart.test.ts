@@ -86,7 +86,7 @@ test('resume message: what happened, what to check, and the unanswered messages'
   assert.match(m, /git status/);
   assert.match(m, /re-pin your Unity instance/);
   assert.match(m, /cut off/);
-  assert.match(m, /- \(orchestrator\) build it$/m);
+  assert.match(m, /- \(from the orchestrator, for no named person\) build it$/m);
   const d = resumeMessage({ id: 'a', kind: 'worker', title: 'a', why: 'drained', unanswered: [], lastFrom: 'human' }, f);
   assert.match(d, /asked to pause/);
   assert.doesNotMatch(d, /not answered/);

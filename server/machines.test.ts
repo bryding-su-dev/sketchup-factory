@@ -7,7 +7,7 @@ import http from 'node:http';
 import type { EventEmitter } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { Store } from './store.ts';
-import { SessionManager, snapshotOf, type SessionHandle, type SessionSink } from './sessions.ts';
+import { QUEUE_HOLD_MS, SessionManager, snapshotOf, type SessionHandle, type SessionSink } from './sessions.ts';
 import { collectResume } from './restart.ts';
 import { MachineManager, RESUME_DELAY_MS, RemoteSession, cutOffMidTurn, daemonMismatch } from './machines.ts';
 import { PROTOCOL_VERSION } from './machineProtocol.ts';
@@ -208,12 +208,10 @@ test('machine: a daemon connects, runs a session, and everything it records land
   assert.equal(sessions.liveAgents(), 0, "a machine's agents do not count toward this host's limit");
   assert.equal(mm.liveCount('mx'), 1);
 
-  // The machine's own limit (1): a second session cannot start while the first is live.
+  // The machine's own limit (1) counts mid-turn agents only (w384): the first is idle, so a second starts at once.
   const s2 = mm.createSession('mx', { kind: 'worker', title: 'w2', permissionMode: 'default' });
-  assert.throws(() => sessions.send(s2.info.id, 'x'), /already 1 agents running in mx's main clone/);
-  s.stop();
-  await until('stopped', () => !s.live);
-  sessions.send(s2.info.id, 'second');
+  assert.equal(mm.placeFull(s2), undefined, 'an idle agent takes no slot');
+  assert.equal(sessions.isQueued(sessions.send(s2.info.id, 'second')), false);
   await until('second turn', () => turnEnds.length === 2);
 });
 
@@ -919,4 +917,59 @@ test('machine: agents finished days ago and stopped again and again are not resu
   await new Promise((r) => setTimeout(r, 300));
   for (const h of old) assert.equal(users(h.info.id), 0, `${h.info.title} is not resumed`);
   assert.ok(!reports.some((r) => /resume/.test(r)), reports.join('\n'));
+});
+
+// ---------------------------------------------------------------- w496: a brief is never lost to an outdated daemon
+
+test("w496: a worker started while its machine's daemon is outdated gets its brief first, once the daemon is current; a later message waits behind it", async (t) => {
+  const { store, sessions, mm, daemon, cleanup } = await setup();
+  t.after(cleanup);
+  mm.deployMachine = ((o: { id: string }) => store.machines.get(o.id)!) as typeof mm.deployMachine;
+  daemon();
+  await until('online', () => mm.isOnline('mx') && !!store.machines.get('mx')?.info);
+  // 02:31 UTC on 2026-10-06: LothDesktop's daemon still spoke protocol 7 after the deploy.
+  mm.portalHead = '5b181de0123456789abcdef0123456789abcdef0';
+  const hello = (daemonVersion: string) =>
+    (mm as unknown as { onMessage(id: string, msg: unknown): void }).onMessage('mx', { type: 'hello', protocol: PROTOCOL_VERSION, home: '', live: [], info: { ...store.machines.get('mx')!.info, daemon: daemonVersion } });
+  hello('dd72bd0');
+  assert.ok(mm.outdated('mx'));
+  const s = mm.createSession('mx', { kind: 'worker', title: 'lag-lead', permissionMode: 'default' });
+  const BRIEF = 'BRIEF for w455: find the lag lead on the client.\n\nThe request as filed (w455) ...';
+  // start_agent's first prompt: held, not refused, not written only to the transcript.
+  const uuid = sessions.send(s.info.id, BRIEF, 'orchestrator', undefined, { hold: true });
+  assert.equal(sessions.isQueued(uuid), true, 'held in the send queue');
+  assert.match(sessions.queued()[0].why, /mx's daemon is outdated/);
+  assert.equal(store.readTranscript(s.info.id).filter((e) => e.kind === 'user').length, 0, 'not delivered yet');
+  // The dispatcher's nudge before the daemon is back: queued behind the brief, never in its place.
+  const nudge = sessions.send(s.info.id, "Start your brief now. LothDesktop's daemon is back.", 'orchestrator');
+  assert.equal(sessions.isQueued(nudge), true);
+  // A pass while it is still outdated: both stay, in order.
+  assert.equal(sessions.drain(), 0);
+  assert.deepEqual(sessions.queued().map((q) => q.uuid), [uuid, nudge]);
+  assert.match(store.readTranscript(s.info.id).at(-1)?.kind === 'system' ? (store.readTranscript(s.info.id).at(-1) as { text: string }).text : '', /could not be delivered yet \(mx's daemon is outdated/);
+  // Redeployed and current: the next pass delivers the brief first.
+  hello('5b181de');
+  assert.equal(mm.outdated('mx'), undefined);
+  assert.ok(sessions.drain() >= 1);
+  await until('both delivered', () => (sessions.drain(), store.readTranscript(s.info.id).filter((e) => e.kind === 'user').length === 2), 8000);
+  const said = store.readTranscript(s.info.id).filter((e) => e.kind === 'user').map((e) => (e as { text: string }).text);
+  assert.equal(said[0], BRIEF, 'the first message the worker got is its brief');
+  assert.match(said[1] ?? '', /Start your brief now/);
+});
+
+test('w496: a queued message that cannot be delivered for a day is given up, with an error naming it; never silently', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ffsb-hold-'));
+  const store = new Store(tmp);
+  const sessions = new SessionManager({ dataDir: tmp, limits: { maxSessions: 6 } } as unknown as Config, store);
+  const failing = { info: { id: 'gone1', kind: 'worker', status: 'idle', machineId: 'mx', title: 'x', lastActivityAt: new Date().toISOString() }, live: false, send: () => { throw new Error("mx's daemon is outdated"); } };
+  (sessions.sessions as Map<string, unknown>).set('gone1', failing);
+  const uuid = sessions.send('gone1', 'BRIEF', 'orchestrator', undefined, { hold: true });
+  assert.equal(sessions.isQueued(uuid), true);
+  assert.equal(sessions.drain(), 0);
+  assert.equal(sessions.isQueued(uuid), true, 'kept while it is young');
+  assert.equal(sessions.drain(Date.now() + QUEUE_HOLD_MS + 1000), 0);
+  assert.equal(sessions.isQueued(uuid), false, 'given up after a day');
+  assert.match((store.readTranscript('gone1').at(-1) as { text: string }).text, /could not be delivered within 24 hours and was given up: mx's daemon is outdated\. It began: BRIEF/);
+  store.flush();
+  fs.rmSync(tmp, { recursive: true, force: true });
 });

@@ -1,3 +1,4 @@
+import type { AttachmentConfig } from './attachments.ts';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -193,6 +194,12 @@ export interface Config {
    */
   claudeAccounts?: Partial<Record<HostRole, ClaudeAccount>>;
   /**
+   * Whether each role's agents get the claude.ai connectors of the Claude account they run on: Gmail, Google Drive,
+   * Google Calendar, Claude Docs and any other connected on claude.ai. Default: off for `orchestrator`, on for `workers`
+   * (which then load only worker.claudeAiConnectors) and `standing` (claudeAiConnectorsFor). docs/accounts.md.
+   */
+  claudeAiConnectors?: Partial<Record<HostRole, boolean>>;
+  /**
    * Providers (docs/ffbox-integration.md): FFBox, whose connector dials out to /provider. `enabled` (default
    * false) lets it connect; `tokenSha256` is the SHA-256 of its connector token (ffpv1_…), set with
    * `node server/providerToken.ts` or set_app_config providers.ffbox.token; the token itself is never kept.
@@ -304,11 +311,19 @@ export interface Config {
   };
   /** Folders (relative to a sandbox or a machine's clone; `*` = any one folder) the Screenshots gallery lists. See server/images.ts. */
   screenshotDirs?: string[];
+  /**
+   * Files people attach to chat messages (docs/attachments.md): the largest one in MB (default 200) and how many days
+   * one nobody sent on is kept (default 30). Settable with set_app_config.
+   */
+  attachments?: Partial<AttachmentConfig>;
   /** Paths no sandbox agent may write to or mention in a shell command (e.g. the live co-op checkout). */
   protectedPaths: string[];
   limits: {
     maxUnity: number;
+    /** Agents mid-turn at once on this host (w384: idle ones do not count; a message past it is queued). */
     maxSessions: number;
+    /** Idle agent processes kept besides the running ones before the oldest idle one is stopped (default 6). */
+    maxIdleAgents?: number;
     /** Sandboxes that may exist at once (each holds a worktree plus a ~70 GB Library). */
     maxSandboxes: number;
     /** Provisioning refuses to leave less than this many GB free on the sandbox volume. */
@@ -325,9 +340,22 @@ export interface Config {
     notifyOnWorkerEvents: boolean;
     /**
      * Where each orchestrator's own memory folder is made (docs/orchestrators.md, "Memory"): <memoryRoot>/dispatcher
-     * and <memoryRoot>/person-<user id>. Default <dataDir>/orchestrator-memory, which workers cannot write.
+     * and <memoryRoot>/person-<user id>. Default <dataDir>/orchestrator-memory, which workers cannot write. When the
+     * root is a git repository of its own, the app commits what changes there and pushes it, to a private remote only
+     * (server/memoryGit.ts).
      */
     memoryRoot?: string;
+    /**
+     * Automatic compaction (w535, server/autoCompact.ts, docs/orchestrators.md "Compacting a conversation"): an
+     * orchestrator, the dispatcher included, compacts its conversation between turns once its context reaches this many
+     * tokens. Default 200,000; 0 turns this trigger off. Settable live (set_app_config).
+     */
+    compactAtTokens?: number;
+    /**
+     * Automatic compaction's cost trigger (w535): a turn that cost at least this many USD, with the context at
+     * 100,000 tokens or more, compacts the conversation after it. Default 1; 0 turns this trigger off.
+     */
+    compactAtTurnUsd?: number;
   };
   worker: {
     permissionMode: PermissionMode;
@@ -590,6 +618,7 @@ export function loadConfig(): Config {
     if (cfg.project[key]) cfg.project[key] = path.resolve(ROOT, cfg.project[key]!);
   }
   checkConnectorConfig(cfg);
+  checkRoleConnectorConfig(cfg);
   cfg.dataDir = path.resolve(ROOT, cfg.dataDir);
   cfg.sandboxRoot = path.resolve(cfg.sandboxRoot);
   cfg.standingRoot = path.resolve(raw.standingRoot ?? path.join(cfg.sandboxRoot, '_agents'));
@@ -607,6 +636,29 @@ export function loadConfig(): Config {
  * Throws when config claudeAccounts or machines.useHostClaudeEnv is malformed: a typo there would otherwise
  * quietly run agents on another account than the one meant.
  */
+/**
+ * Whether a role's agents get the claude.ai connectors (config claudeAiConnectors). Off by default for the orchestrators:
+ * upstream measured their connector tools (Gmail 30, Google Drive 11, Google Calendar 9, Claude Docs 8) and Claude Docs'
+ * instructions at about 41,300 input tokens in every request, and orchestration never uses them.
+ */
+export const CLAUDE_AI_CONNECTORS_DEFAULT: Readonly<Record<HostRole, boolean>> = { orchestrator: false, workers: true, standing: true };
+
+export function claudeAiConnectorsFor(cfg: Pick<Config, 'claudeAiConnectors'>, role: HostRole): boolean {
+  const v = cfg.claudeAiConnectors?.[role];
+  return typeof v === 'boolean' ? v : CLAUDE_AI_CONNECTORS_DEFAULT[role];
+}
+
+/** Throws when config claudeAiConnectors is malformed: an object of role → true or false. */
+export function checkRoleConnectorConfig(cfg: Pick<Config, 'claudeAiConnectors'>) {
+  const c: unknown = cfg.claudeAiConnectors;
+  if (c === undefined) return;
+  if (typeof c !== 'object' || c === null || Array.isArray(c)) throw new Error('config claudeAiConnectors is an object, e.g. { "orchestrator": false, "workers": true }');
+  for (const [role, v] of Object.entries(c)) {
+    if (!HOST_ROLES.includes(role as HostRole)) throw new Error(`config claudeAiConnectors.${role}: no such role (${HOST_ROLES.join(', ')})`);
+    if (typeof v !== 'boolean') throw new Error(`config claudeAiConnectors.${role} is true or false`);
+  }
+}
+
 export function checkConnectorConfig(cfg: Pick<Config, 'worker'>) {
   const list: unknown = cfg.worker.claudeAiConnectors;
   if (!Array.isArray(list) || list.some((u) => typeof u !== 'string' || !/^https:\/\/[^/\s]+/.test(u))) {
@@ -631,10 +683,17 @@ export function checkAccountConfig(cfg: Pick<Config, 'claudeAccounts' | 'machine
   }
 }
 
-/** The line agents' prompts add when config ownerName is set ("" when it is not). */
+/** Whose a message is, said in every agent's prompt (w389): the first line of each message, never the portal's owner by default. */
+export const SENDER_RULE =
+  'Each message names its sender on its first line: "[from <name>]" when a person wrote it, "[from the orchestrator, for <name>]" when an orchestrator sent it on their behalf. Attribute an approval, a hold, an override or a decision only to the person a message names (or the ledger records as asking), in PR descriptions, release notes, ledger notes and reports. When a message names nobody, write "unconfirmed" and ask; never write a name.';
+
+/**
+ * The lines agents' prompts add about who runs the portal and whose a message is. Several people use the portal, so
+ * the owner is named as the one who runs it, never as the one speaking (w389).
+ */
 export function ownerLine(cfg: Pick<Config, 'ownerName'>): string {
   const n = cfg.ownerName?.replace(/\s+/g, ' ').trim();
-  return n ? `\nThe user (the person who runs this portal) is ${n}.\n` : '';
+  return n ? `\nThe person who runs this portal is ${n}; others use it too, so that does not make ${n} the sender of a message. ${SENDER_RULE}\n` : `\n${SENDER_RULE}\n`;
 }
 
 let appOrigin: string | undefined | null = null;

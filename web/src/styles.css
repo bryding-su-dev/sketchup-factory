@@ -2377,6 +2377,21 @@ select.input {
   touch-action: manipulation;
 }
 
+/* The paperclip's menu on Android (w528): a sheet along the bottom of the screen, as Android's own choosers are (the
+   composer clips anything that would stick out of it, see overflow below). */
+.composer-attach .menu-pop {
+  position: fixed;
+  top: auto;
+  left: var(--s-3);
+  right: var(--s-3);
+  bottom: calc(var(--s-3) + env(safe-area-inset-bottom, 0px));
+  width: auto;
+}
+
+.composer-attach .menu-item {
+  min-height: 52px;
+}
+
 .composer-spacer {
   flex: 1;
   min-width: 0;
@@ -2461,6 +2476,114 @@ select.input {
 
 .composer .dictation-bar {
   margin: 0 var(--s-2) 2px 0;
+}
+
+/* ---------- attachments (docs/attachments.md): files on their way in the composer, and with sent messages ---------- */
+
+.composer-files,
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.composer-files {
+  padding: 2px 0 6px;
+}
+
+.attach-list {
+  justify-content: flex-end;
+  margin: 2px 0 4px;
+}
+
+.brief .attach-list {
+  justify-content: flex-start;
+  margin: 6px 0 0;
+}
+
+.composer-file,
+.attach-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(100%, 320px);
+  min-height: 32px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+}
+
+.attach-chip {
+  padding-right: 8px;
+  text-decoration: none;
+}
+
+.attach-chip:hover {
+  border-color: var(--accent);
+}
+
+.composer-file.failed,
+.attach-chip.failed {
+  border-color: var(--red);
+}
+
+.composer-file-name,
+.attach-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-file-size,
+.attach-size {
+  flex: none;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-file.failed .composer-file-size,
+.attach-chip.failed .attach-size {
+  color: var(--red);
+}
+
+.composer-file-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--border);
+}
+
+.composer-file-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.composer-file-btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.composer-file-btn:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
 /* ---------- permission-mode pill (details) ---------- */
@@ -4567,6 +4690,7 @@ select.input {
   }
 
   .composer-images,
+  .composer-files,
   .composer .dictation-bar {
     flex: 0 0 100%;
   }
@@ -5274,3 +5398,13 @@ button.board-head-link:hover {
     min-height: 32px;
   }
 }
+
+/* Orchestrator timers (Timers.tsx) */
+.timers-btn { gap: 4px; width: auto; min-width: 34px; padding: 0 8px; }
+.timers-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.timers-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.timer-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line, rgba(127,127,127,.25)); border-radius: 8px; }
+.timer-row.timer-ended { opacity: .6; }
+.timer-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
+.timer-note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.timer-actions { display: flex; flex-wrap: wrap; gap: 4px; flex-shrink: 0; margin-left: auto; }

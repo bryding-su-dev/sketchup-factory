@@ -62,6 +62,11 @@ export class Waker {
     return t ? { at: new Date(t.at).toISOString(), note: t.note } : undefined;
   }
 
+  /** Every pending wake, soonest first (the restart report names the idle workers that wait on one). */
+  all(): { sessionId: string; at: number; note: string }[] {
+    return [...this.timers].map(([sessionId, t]) => ({ sessionId, at: t.at, note: t.note })).sort((a, b) => a.at - b.at);
+  }
+
   /**
    * After a restart: arm the wakes the last server left in the file. One whose time passed while the server
    * was down fires at once, saying how late it is; one for a session that no longer exists is dropped.

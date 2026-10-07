@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { COMPILE_DONE, COMPILE_FAILED, readSince, Waker } from './wake.ts';
+import { collectResume, waitingOnWakeLine, type SessionSnapshot } from './restart.ts';
 import { Store } from './store.ts';
 import type { SessionManager } from './sessions.ts';
 import type { SessionInfo } from '../shared/types.ts';
@@ -194,4 +195,49 @@ test("heartbeat per person: each orchestrator hears only its person's busy worke
   );
   assert.match(sent[2].text, /- w2 running/);
   assert.doesNotMatch(sent[2].text, /w1/);
+});
+
+// w311 (2026-10-03): f6b32781 on lothdesktop/pr-fix ended its turn at 21:46:53 with a 21-minute wake (due 22:07:36). The
+// d60dcf1b deploy stopped the portal at 22:04:30. It was on neither list of the [app restarted] report: idle, it was
+// rightly not resumed, and its wake fired on time, but nothing said so and it looked stopped and forgotten.
+test('w311: an idle machine worker waiting on a wake_me is not resumed, is named in the restart report, and its wake fires', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffsb-w311-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'wakes.json');
+  const store = new Store(dir);
+  const sent: { id: string; text: string }[] = [];
+  const worker = info('f6b32781', { machineId: 'lothdesktop', machineSandbox: 'pr-fix', sandboxId: undefined, title: 'Enemy attacks deep dive (w283)', status: 'stopped' });
+  const sessions = {
+    sessions: new Map([['f6b32781', { info: worker }]]),
+    get: () => ({}),
+    send: (id: string, text: string) => {
+      sent.push({ id, text });
+      return 'u';
+    },
+  } as unknown as SessionManager;
+  let now = Date.parse('2026-10-03T21:46:36Z');
+  const before = new Waker(sessions, store, file);
+  before.now = () => now;
+  before.schedule('f6b32781', 21, 'w283: run2 should be near 20 game min');
+  // The restart: the old server's timers die, the new one restores from wakes.json.
+  t.mock.timers.reset();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  now = Date.parse('2026-10-03T22:05:30Z');
+  const after = new Waker(sessions, store, file);
+  after.now = () => now;
+  assert.equal(after.restore(), 1);
+  // Not resumed: between turns, no marks, no unanswered message, no drain.
+  const snap: SessionSnapshot = { id: 'f6b32781', kind: 'worker', title: worker.title, machineId: 'lothdesktop', status: 'stopped', unanswered: [], lastFrom: 'orchestrator' };
+  assert.deepEqual(collectResume([snap], new Set()), []);
+  // But the report names it, with where and when.
+  const line = waitingOnWakeLine(after.all(), (id) => sessions.sessions.get(id)?.info, new Set(), now);
+  assert.match(line ?? '', /^Between turns, waiting on their wake_me \(kept across the restart; it wakes them, nothing to resume\): "Enemy attacks deep dive \(w283\)" \(f6b32781 on lothdesktop\/pr-fix\) at .+ \(in 2 min\)\.$/);
+  // A worker the report already lists as resumed, an orchestrator or an unknown session is left out.
+  assert.equal(waitingOnWakeLine(after.all(), (id) => sessions.sessions.get(id)?.info, new Set(['f6b32781']), now), undefined);
+  assert.equal(waitingOnWakeLine([{ sessionId: 'x', at: now }], () => ({ title: 'd', kind: 'orchestrator' }), new Set(), now), undefined);
+  // And the wake fires on time.
+  t.mock.timers.tick(2 * 60_000 + 6_000);
+  assert.deepEqual(sent, [{ id: 'f6b32781', text: '[wake_me] Time is up. Your note: w283: run2 should be near 20 game min' }]);
+  store.flush();
 });

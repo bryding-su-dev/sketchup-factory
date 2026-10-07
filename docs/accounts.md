@@ -87,6 +87,8 @@ Claude Code keep both out of an SDK session by default:
 
 | Config | Default | Meaning |
 |---|---|---|
+| `claudeAiConnectors.orchestrator` | `false` | Whether orchestrators get the claude.ai connectors at all (Claude Code's `disableClaudeAiConnectors` when off). Off by default: upstream measured their connector tools at about 41,300 input tokens in every turn, and orchestration does not use them. |
+| `claudeAiConnectors.workers` | `true` | `false`: sandbox workers load no connector, whatever `worker.claudeAiConnectors` lists, and keep strict MCP config. |
 | `worker.claudeAiConnectors` | `["https://api.anthropic.com/v1/pages/mcp"]` (Claude Docs) | Upstream URLs (`*` wildcards) of the claude.ai connectors sandbox workers on this host load. `[]`: none, and strict MCP config as before. |
 
 Find a connector's URL in a session's MCP status (`mcpServerStatus()`, `config.url`). Allow only what

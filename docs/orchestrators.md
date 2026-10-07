@@ -14,7 +14,8 @@ person. It runs on their own Claude token when config `userClaudeEnv` has one, o
 
 - read everything: `list_sandboxes`, `list_machines`, `list_branches`, `agent_transcript`, `search_transcripts`,
   `system_status`, `ffbox_activity`, `max_activity`, `list_standing_agents`, `list_delegation_requests`;
-- its own `wake_me`, and its person's heartbeat (`set_heartbeat`);
+- its own `wake_me`, its own timers (`set_timer`, `list_timers`, `update_timer`, `cancel_timer`; [Timers](#timers)), and
+  its person's heartbeat (`set_heartbeat`);
 - `message_agent`, only to its person's own workers (they started it, or one of their requests is on it);
 - the ledger: `request_work`, `list_work`, `update_work`;
 - `message_person`, to another person's own orchestrator ([People to people](#people-to-people)).
@@ -39,7 +40,9 @@ write to.
 
 ## Requests and the ledger
 
-`request_work {title, brief, priority, constraints, related_ids}` files a request (`w12`). Before the dispatcher sees it,
+`request_work {title, brief, priority, constraints, related_ids, attachments}` files a request (`w12`). `attachments`
+are ids of files the person attached to their message (saves, bug-report zips, logs): the request keeps them, and every
+worker started for it gets a copy in its `Inbox/` ([attachments.md](attachments.md)). Before the dispatcher sees it,
 the server (`server/work.ts`) does three things:
 
 1. **Repeats.** An open request of the same person with the same title (ignoring case and punctuation) is returned
@@ -74,6 +77,24 @@ live worker, unless `override_duplicate` says what is different. `work_id` is th
 for a request runs for the person who filed it, on their account. The requester's orchestrator can add a note (which
 answers a question), change the priority, close the request, or reopen it within 7 days (`update_work`). Closing is the
 filer's: the others still on the request hear it. Someone whose request was merged into it only leaves it.
+
+**Owners close each other's requests when asked** (w402, Lothsahn: "ben and I can close each other's requests if we
+explicitly ask"). A person with the `owner` role (docs/identity.md; Ben and Lothsahn today) may have their own
+orchestrator close (done or cancelled) or reopen **another person's** request with `update_work`
+(`Orchestrators.closeForOther`, `server/orchestrators.ts`), under the guard approving an intake request uses:
+
+- only in a turn the owner started with their own message; a turn a harness notice, a worker, a standing agent or
+  relayed FFBox or Discord text started is refused ("only Lothsahn, in their own words in this turn, closes or reopens
+  Ben's request w234: ask them");
+- only close or reopen, and only with a note saying why. A note alone or a priority change on someone else's request
+  stays refused: those are its people's to give (a note can answer the dispatcher's question for them);
+- the request's log says `closed as done by Lothsahn (Ben's request), in Lothsahn's own turn: <note>` (or cancelled,
+  reopened), and its people's orchestrators get a `[dispatch]` line naming who did it and why. A cancel or a reopen
+  reaches the dispatcher as a `[work update]`, as their own would. It does not change whose request it is, or
+  `humanAsked`: another owner's word is not its people's own.
+
+A member keeps the rule above: their own requests only ("w234 is Ben's request, not X's; only an owner closes or
+reopens another person's request").
 
 The ledger is `data/work.json`: every open request and the newest 300 closed ones. The page gets the open ones and those
 closed in the last 3 days.
@@ -124,9 +145,169 @@ decides every write, and a hook's refusal holds in every permission mode:
   chat). Orchestrators read text agents wrote (`[worker update]`, relayed Discord and FFBox reports); a harness turn
   must not be able to plant an instruction that every later conversation loads.
 
+### Memory in a private repository
+
+The memory holds one person's preferences, in their words, so it does not belong in a public repository; and a folder
+in the app's data on one machine is not versioned. So when the memory root is itself a git repository, the app commits
+what changed there and pushes it (`server/memoryGit.ts`, on every backup pass: at startup and every 10 minutes).
+
+- **Private only.** It pushes only to an `origin` GitHub reports as private (`gh api repos/<owner>/<name>`, with the
+  machine's own `gh` login). To a public remote, to one that is not on GitHub, or when GitHub cannot be asked, it
+  commits here and does not push, and the log says why once. What waited goes out on a later pass.
+- **Never into another repository.** The root must be the top of its own repository. The default root is a folder of
+  the app's checkout, and the app's repository never gets memory commits.
+- **No secrets.** The write guard already refuses them; a Markdown file that holds one anyway is left out of the commit
+  and named in the log. Only `.md` files are committed.
+- **Whose commits.** The repository's own `user.name` and `user.email` when it has them, else the app's public identity
+  (`publicGitIdentity`), never this machine's global identity.
+- It never pulls, merges or force-pushes. One machine owns a memory root; a push that is refused stays local and says so.
+
+To switch it on (the owner does this once; nothing in config changes):
+
+```sh
+cd <data>/orchestrator-memory          # or wherever orchestrator.memoryRoot points
+git init -b main
+git remote add origin https://github.com/<owner>/<a private repository>.git
+```
+
+The next backup pass makes the first commit and pushes it. The crash backup beside it (`<root>.backup`) keeps working
+and leaves `.git` out. General rules about how to work do not belong in this repository either: they go to the harness
+repositories by pull request, where workers and forks can read them.
+
 The folder sits in `data/`, which workers' guard already protects (`server/guard.ts`), so no worker can write an
 orchestrator's memory either. Workers and standing agents are unchanged. Reading stays as before: an orchestrator can
 read any file, other orchestrators' memory included.
+
+## Timers
+
+Lothsahn (w362): "give yourself the ability to set timers in the FF Factory harness itself, so you don't have to keep
+reminding yourself to do things in the chat." `wake_me` is one pending, one-off check-in that a person's message cancels.
+A timer is a standing job (`server/timers.ts`):
+
+- **Tools**, for each personal orchestrator and the dispatcher (a remote client's go to its person's own orchestrator):
+  `set_timer {title, note, schedule, jitter_minutes?, until?, max_fires?, skip_if_busy?}` answers its id;
+  `list_timers`; `update_timer {id, …}` (any field, or `enabled` false to pause and true to resume, counting on from now
+  with nothing owed for the pause); `cancel_timer {id}`. `schedule` is one of `at` (once, an ISO time), `every_minutes`
+  (at least 5) or `daily` ("HH:MM", with an optional IANA `tz`, default the server's).
+- **Kept** in `data/timers.json` through the crash-safe writer (`server/durable.ts`), so a restart loses none. A person's
+  message does not touch a timer (it still cancels `wake_me`); a timer stops only by `cancel_timer`, a pause, its `until`,
+  its `max_fires`, its one fire, or its person in the UI. "New conversation" keeps them: they move to the new session
+  (`Timers.rehome`).
+- **Firing.** A tick every 30 s marks each due timer and moves it on. The fire is delivered as the harness's message,
+  `[timer <id> "<title>"] <note>`, waking the orchestrator when it is idle; mid-turn, it waits for the turn's end
+  (`turnEnd`) and is never dropped. Timers due together go in one message. A fire that comes while one still waits joins
+  it ("fired 3 times since it was last delivered"). What came due while FF Factory was down goes once at startup, with
+  the count ("5 fire(s) missed while FF Factory was down"), and the next fire is set from now, not a burst. With
+  `skip_if_busy`, a fire during a turn is skipped instead.
+- **Caps, and why.** 20 active timers per orchestrator (standing jobs are a handful; more is a loop). Every N minutes
+  at least 5 (anything faster belongs in code, not a model's turn). 96 timer messages per orchestrator in any 24 hours,
+  one every 15 minutes all day: messages are turns, which is what costs tokens, and coalescing means one message per
+  turn whatever is due. Past the budget, fires wait, coalesced, until a message fits the window, and that message says
+  so. A runaway timer costs at most 96 short turns a day. `TIMER_LIMITS` in `server/timers.ts`.
+- **No authority.** The message is `system`, so a turn it starts is not a person's (`turnFrom`): the dispatcher's destructive
+  and admin tools refuse it, as do approvals, and a personal orchestrator's per-message budgets do not reset.
+- **Who sees them.** Only the owning orchestrator (its tools take only its own ids) and, in the UI, its person: the
+  Timers button in your chat's header, and the dispatcher's for owners (`GET /api/timers/<orchestrator id>`, `POST
+  /api/timers/<orchestrator id>/<timer id> {action: pause|resume|cancel}`, guarded like writing to that chat). It lists
+  each timer's schedule, next and last fire, state and note, and the day's messages against the budget.
+
+## Compacting a conversation
+
+A long conversation costs more each turn, because every turn sends all of it again (Lothsahn saw $20.54 on one short
+reply). An orchestrator cannot compact its own conversation, so its person does, as in Claude Code (w518):
+
+- **`/compact`**, or **`/compact <focus>`** ("/compact keep the open requests and their PR numbers"), typed in your own
+  chat, or **Compact conversation** in the chat's menu. It is not sent to the model as text. The server
+  (`POST /api/sessions/<id>/message` catches it with `compactCommand`; `POST /api/sessions/<id>/compact` is the button)
+  calls `SessionManager.compact`, which sends Claude Code's own `/compact [focus]` to the session as a message of its
+  own, without the `[from …]` line that would make it text (`AgentSession.compact`, `server/sessions.ts`). A stopped
+  orchestrator resumes its conversation for it.
+- **The dispatcher**, which nobody chats with, has the same **Compact conversation** in its page's menu, for an owner
+  only (`mayDrive`).
+- **What you see:** "Compacting this conversation (asked by …)" in the chat at once, the session's state says
+  "compacting the conversation", and when it is done one line with the size measured before and after: "Compacted: the
+  context went from 412,300 tokens to 41,200 tokens (of 1,000,000 tokens), in 48 s". Before is Claude Code's own count
+  of what it compacted (`compact_boundary`'s `pre_tokens`); after is `getContextUsage()` once it is done. If that cannot
+  answer within 20 s, the line gives the summary's size instead (`post_tokens`, which leaves out the system prompt and
+  tools) and says so. A compaction that fails says why, as an error line. The turn's end (your device's notification)
+  says it compacted, and the last report stays the last real reply. Claude Code's own automatic compactions leave a
+  line too.
+- **Nothing in flight is lost.** Mid-turn (working, starting, or waiting for a permission answer) `/compact` is
+  refused with why ("Not compacted: it is mid-turn …; send it again once this turn has ended, or stop the turn first"),
+  nothing is sent, and the text stays in the box. Unlike a message, `/compact` does not cancel the orchestrator's
+  `wake_me` check-in or reset its budgets, and timers are untouched. A wake, a timer or a worker's report that arrives
+  while it compacts waits behind it and is answered afterwards, with the compacted history.
+- **`/clear`** (or `/new`) in your own chat opens the menu's "Start a new conversation?" dialog; it starts nothing
+  without that confirmation. A new conversation keeps your requests, workers and timers ([Timers](#timers)).
+
+How it was settled (measured 2026-10-06 with the Agent SDK 0.3.284 this repo pins, in three short runs on Haiku in
+streaming-input mode, the way orchestrators run): `/compact <focus>` sent as a user message compacted (`status`
+"compacting", then `compact_boundary` with `trigger: 'manual'`), also as the first message after a `resume`; a message
+queued behind it was answered after it and still knew what the focus kept; `getContextUsage({ detail: 'full' })` went
+from 35,471 tokens before to 18,824 at the boundary, while `pre_tokens` said 35,535 and `post_tokens` 2,561 (the
+summary alone). `detail: 'summary'` did not move after a compaction, so it is not used. The /compact's own `result`
+(no turns) came in one run and not in another, so nothing waits for it.
+
+### Automatic compaction
+
+Nobody has to type `/compact` (w535, Ben: "can you just compact yourself when youre starting to get full?"). FF Factory
+compacts every orchestrator of this portal, the dispatcher included, by itself (`server/autoCompact.ts`):
+
+- **When.** After a turn, once its context reaches `orchestrator.compactAtTokens` (default 200,000 tokens), or a turn
+  cost at least `orchestrator.compactAtTurnUsd` (default $1) with the context at 100,000 tokens or more. Both are set
+  live with `set_app_config` (an owner's ask); 0 turns either off. The context is the last model call's input, cached
+  and uncached, plus its output, from the SDK's own `usage` (`SessionInfo.contextTokens`); a turn's cost is the spend
+  between the turn's first message and its result (`lastTurnCostUsd`). Claude Code's own compaction near its 1M limit
+  still applies behind it.
+- **Only between turns.** It runs 2 s after a turn ends, and only if the orchestrator is idle with its process up: not
+  mid-turn, no permission prompt open, no message unanswered or waiting in the send queue (`compactBlocker`). A message
+  that arrives in those 2 s goes first, and the check runs again after that turn. One that arrives while it compacts
+  (it took 54 s at 525k tokens) waits behind it and is answered after it, as with `/compact`. It waits 3 turns after any
+  compaction, and the token trigger waits until the context has grown by half the threshold past what the last one left,
+  so a conversation a summary cannot bring under the threshold is not compacted over and over. One that does not finish
+  holds the next automatic one for 30 minutes.
+- **What it keeps.** Claude Code's `/compact` with a focus: for a person's orchestrator, every open request with its id,
+  state, worker, sandbox or machine, PRs and what it waits on; unanswered questions both ways; decisions, approvals and
+  holds with who gave them; timers and check-ins; promised reports; every id with what it is (`PERSONAL_FOCUS`). The
+  dispatcher's (`DISPATCHER_FOCUS`) also keeps queued requests, priorities, deploy checks and capacity facts. Its memory
+  folder is not touched, and `list_work` still has the ledger.
+- **What you see.** One line when it is done, "Compacted: 525,115 → 57,292 tokens (automatically: the context passed
+  200,000 tokens), in 54 s"; nothing when it starts, and no push notification (`TurnEndMeta.compaction`; a person's
+  `/compact` still notifies). A failure is an error line. The orchestrator's header shows **Context 182k**, and its
+  tooltip, the chat menu's footer and the sidebar rows' hints say the context and the last compaction: "context 182k
+  tokens · compacted 2h ago (525k → 57k, automatically, past its token threshold)" (`SessionInfo.lastCompaction`, set
+  by every compaction, a person's and Claude Code's own included). The dispatcher's page has the same.
+- **Asking for it.** An orchestrator may call `compact_conversation` (optional `focus`) when a long stretch of work is
+  done; it runs once that turn ends, under the same rules, and is refused within 3 turns of the last compaction. A remote
+  client (`/mcp`) does not have it.
+
+How the defaults were settled (measured 2026-10-06, read-only, from Claude Code's own transcripts of the three live
+orchestrators, 6,950 turns: the cost from each call's `usage` at Opus 5.5's prices, $4 input, $20 output, $0.20 cache
+reads, cache writes 1.25x and 2x input, matched the portal's recorded spend within 1%: $467.22 against $467.73 for
+Lothsahn's, $446.52 against $444.75 for Ben's, $910.67 against $905.30 for the dispatcher's):
+
+| context at a turn's start | median cost per turn (Lothsahn / Ben / dispatcher) |
+|---|---|
+| 100k-150k | $0.06 / $0.04 / $0.07 |
+| 200k-300k | $0.07 / $0.07 / $0.13 |
+| 500k-600k | $0.13 / $0.13 / $0.25 |
+| 800k-1M | $0.21 / $0.20 / $0.36 |
+
+A model call costs about $0.20 per million tokens of context (cache reads), and each compacted
+cycle let the context grow 1.3k-2.4k tokens a turn from 30-90k up to Claude Code's own compaction at about 967k, every
+390-750 turns. A compaction cost $0.17 at 276k (Lothsahn's `/compact`) and $0.23 at 525k (below). Treating the context
+as a sawtooth from about 40k to the threshold, the cheapest threshold is about 100k on cost alone, and the average cost
+per turn is $0.039 at 200k against $0.15 at today's 967k (about 4x less); 200k compacts about every 95 turns, half as
+often as 100k for about $0.01 a turn more, because each compaction drops detail. $1 a turn is past the 90th percentile
+at every context size (at most $0.65), so the cost trigger only catches outliers.
+
+Before and after, on a copy of Ben's orchestrator (its 533k-token conversation copied, resumed as a fork in a scratch
+folder with no tools, the live session untouched; `/compact` with `PERSONAL_FOCUS`): a cached turn cost $0.21 at 521k
+and $0.10 at 70k (the context part of each call went from $0.10 to $0.013); the compaction cost $0.23 and went 525,115 →
+57,292 tokens in 54 s. Asked the same question before and after (every open request, unanswered question, decision and
+timer), the two answers after it had, between them, all 23 eight-character ids (workers, a timer, a commit), all 13 PR numbers
+and 61 of the 62 request ids: w478 was missing,
+but the question it labelled ("brighten the lamps after w478?") was kept.
 
 ## Where messages go
 
@@ -141,12 +322,53 @@ read any file, other orchestrators' memory included.
 | `[unity blocked]` | the dispatcher, and the people whose workers are in that sandbox |
 | `[app restarted]`, `[machines]`, `[unity]`, `[host]`, the orchestrator inbox | the dispatcher. A person's orchestrator cut off mid-turn by a restart is told to pick its turn up again |
 | `[heartbeat]` | each person's own orchestrator, with that person's busy workers, when they turned it on |
+| `[timer <id> "<title>"]` | the orchestrator that set the timer ([Timers](#timers)): after its current turn, coalesced |
 | `[person message]` | the recipient's own orchestrator (message_person), and a notification to the recipient alone |
 | `[work request]` marked intake | the dispatcher, once approved (by a reviewer, or an auto-approve rule for an obvious bug), gathered a minute at a time ([intake.md](intake.md)) |
 | `[intake question]` | the reviewers' own orchestrators, when a worker on an intake request stops at a design decision |
 | push notifications and in-page notices | a person's own orchestrator's only to that person; a worker's finished turn to the people it works for; the dispatcher's turns to nobody, its questions and errors to the owner |
 
 `/mcp` `ask_orchestrator` and `orchestrator_transcript` talk to the key's person's own orchestrator.
+
+## Agent limits and idle workers
+
+**The limits count agents mid-turn, nothing else** (w384, 2026-10-04: a follow-up to an idle worker was refused with
+"already 6 agents running" while six idle workers held every slot). `limits.maxSessions` (this host), and a machine's
+`max_agents` (main clone), `max_sandbox_agents` (all its sandboxes) and `max_agents_per_sandbox`, count sessions that are
+running, starting or waiting for a permission answer (`isMidTurn`, `server/sessions.ts`). An idle session, its process up
+or not, takes no slot. Orchestrators never count. The Unity editor limits are unchanged.
+
+- **A message never bounces off a full limit.** When every running slot of its place is busy, `SessionManager.send`
+  queues the message (and `start_agent`'s first prompt) in `data/send-queue.json`, which survives a restart, and delivers
+  it, in order, when a turn ends or a process goes (and every 30 s). A message to a session that is mid-turn joins its turn
+  at once, and a later message to a session with one waiting queues behind it. `message_agent` and `start_agent` say
+  "Queued, not refused: …" with the reason. The host guard (disk, RAM, the sandbox drive) still refuses a new process
+  for a plain message.
+- **A worker's brief is never lost** (w496, 2026-10-06: two workers started while LothDesktop's daemon was outdated got
+  only the dispatcher's later "Start your brief now"). `start_agent`'s first prompt is sent with `hold`: whatever would
+  refuse it now (the host guard, a machine's daemon that is outdated or offline, a sandbox's attachments not fetchable
+  yet) queues it instead, so it goes first once it can, and a later message to that worker waits behind it. Before, the
+  outdated-daemon path wrote the brief to the transcript only and marked the worker failed, so the next message started
+  it without one. A queued message leaves the queue only once delivered: a delivery that throws is tried again on the
+  next pass (the transcript says why it waits), and given up only after 24 hours (`QUEUE_HOLD_MS`), with an error that
+  quotes its start. Before, a throw dropped it.
+- **Every worker gets the request as filed** (w496): after the dispatcher's own brief, `start_agent` (and `message_agent`
+  with a `work_id` the worker is not on yet) adds "The request as filed": its title, brief, constraints, related ids
+  and every `update_work` note (`requestAsFiled`, `server/work.ts`; notes are kept whole in `WorkItem.notes`, older ones
+  are read back from the log), then the intake rules and the `Request:` line. Its attachments go with it as before.
+- **Idle processes are capped by stopping, not refusing.** An idle claude process holds memory: measured on BEAST
+  (2026-10-04), 100-300 MB resident and 450-650 MB committed each. Before a new process starts on this host with
+  `limits.maxSessions` + `limits.maxIdleAgents` (default 6) processes up, the oldest idle one that nothing protects is
+  stopped (`SessionManager.makeRoom`).
+- **Idle finished workers are stopped** (`Agents.reapIdle`, every 5 minutes): an idle worker whose requests are all
+  closed, whose requests moved to another worker, or that has been idle for an hour (`IDLE_REAP_MS`). An hour because a
+  follow-up within it reuses the conversation's cached prompt (the hour-long prompt cache); after that a resumed session
+  costs the same, so the process only holds memory.
+- **What keeps an idle worker's process** (`Agents.keepIdle`, for both): mid-turn, unanswered messages or background
+  tasks, a pending permission, a pending `wake_me`, a queued message, or a sandbox (host or machine) with uncommitted
+  tracked changes. Standing agents and orchestrators are never stopped this way.
+- **Stopped is not lost.** The session keeps its history (`sdkSessionId`); `message_agent` resumes it. Its transcript says
+  why it was stopped.
 
 ## Loops, limits and safety
 
@@ -164,10 +386,26 @@ read any file, other orchestrators' memory included.
 - The dispatcher's destructive and admin tools (`delete_sandbox`, `set_app_config`, `request_app_update`,
   `republish_public`, `add_machine`, `remove_machine`, `create_standing_agent`, `update_standing_agent`,
   `delete_standing_agent`, `approve_delegation`; `server/belts.ts`) run only for a request its person filed or last
-  changed in a turn of their own (`humanAsked`), or in a turn the owner started in the dispatcher's chat. A turn counts as
-  a person's only when every message it answers is theirs: the CLI folds messages sent during a turn into it. Request
+  changed in a turn of their own (`humanAsked`), or in a turn the owner started in the dispatcher's chat. Request
   text is written by a model that may be relaying injected text, so its "the user asked" is not enough. Recovery tools
   (`host_recovery`, `machine_daemon`) stay free.
+- **Whose turn it is** (`SessionHandle.turnFrom`, w607) is decided by the message that opened it: a person's own message
+  makes it theirs; a harness message (a `[worker update]`, `[dispatch]`, `[ledger]`, a timer, a check-in, a relayed
+  FFBox or Discord text, another person's `message_person`) makes it the harness's. A message delivered while the turn
+  runs joins it (the CLI folds it in) and changes nothing either way: a `[worker update]` arriving in the middle of
+  Lothsahn's "Please drain and install on BEAST and m5" does not demote his turn, and his "go" arriving in the middle of
+  a turn a `[worker update]` started lends that turn no authority. When the CLI answers the opening message and then
+  takes up one that waited behind it, the next turn is that message's. Before w607 any harness message among those
+  not yet answered made the turn the harness's, and on 2026-10-07 (07:45-08:00 UTC) `an operations tool refused a person's own
+  request three times because a worker's report arrived mid-turn. Every gate reads this one value:
+  - `ops_worker` `send` opening a job and `deploy` ([ops-worker.md](ops-worker.md));
+  - `approve_delegation` (a personal orchestrator's);
+  - `update_work` approve and decline of an intake request, and close and reopen of another person's request;
+  - `humanAsked` on `request_work` and `update_work`, which the dispatcher's `USER_ASKED_TOOLS` above need
+    (`<request> was last filed or changed outside a turn of <person>'s`);
+  - the dispatcher's own turn (`dispatcherHeardPerson`): `USER_ASKED_TOOLS` without a `work_id`, owner-only
+    `set_app_config` keys, and `for_user` attribution;
+  - memory writes (`memoryGuard`, [Memory](#memory)).
 - Only its person writes to a personal orchestrator, and only an owner to the dispatcher (HTTP 403 otherwise). This
   covers messages, interrupts, permission answers and the permission mode.
 
@@ -184,7 +422,10 @@ read any file, other orchestrators' memory included.
   Could you run the firewall script on BEAST?"); Open goes to their chat. Until you open your chat, the sidebar's
   Orchestrator row has an amber count ("Unread: 1 message from Lothsahn"), and your devices get a "Message from
   Lothsahn" notification.
-- Your heartbeat is your own.
+- `/compact [focus]` in your chat, or Compact conversation in its menu, compacts your orchestrator's conversation; an
+  owner has the same for the dispatcher ([Compacting a conversation](#compacting-a-conversation)).
+- Your heartbeat is your own, and so are your orchestrator's timers: the clock button in your chat's header lists them,
+  with pause, resume and cancel. Owners see the dispatcher's on its page.
 
 ## The first start
 

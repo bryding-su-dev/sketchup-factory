@@ -7,6 +7,7 @@ import { attempt, clearFocusEvent, focusPermission, sessionIndex, useStore } fro
 import { displayName, fmtClock, fmtCost, fmtDivider, fmtDuration, FREE_TEXT, navigate, sameTitle, useNow, type Route } from '../util';
 import { LocalImages, Markdown } from './Markdown';
 import { fileUrl, ImageStrip, MentionedImages, uploadUrl } from './Images';
+import { AttachmentList } from './Attachments';
 import { prettyJson, summarizeToolInput, toolDisplayName, toolLabel, toolsSummary } from './toolSummary';
 import { Icon, type IconName } from './ui';
 
@@ -322,6 +323,7 @@ function UserMessage({ ev, sessionId, owner }: { ev: UserEv; sessionId: string; 
           </span>
         )}
         {ev.images?.length ? <ImageStrip items={ev.images.map((r, i) => ({ src: uploadUrl(sessionId, r), name: `image-${ev.seq}-${i + 1}.${r.mediaType.split('/')[1]}` }))} /> : null}
+        {ev.attachments?.length ? <AttachmentList items={ev.attachments} /> : null}
         {ev.text && (
           <div className="bubble">
             <div className="bubble-text">{ev.text}</div>
@@ -353,6 +355,7 @@ function Brief({ ev }: { ev: UserEv }) {
       <div className="brief-body" ref={body}>
         <Markdown text={ev.text} />
       </div>
+      {ev.attachments?.length ? <AttachmentList items={ev.attachments} /> : null}
       {(long || open) && (
         <button className="link-btn brief-more" onClick={() => setOpen(!open)}>
           {open ? 'Show less' : 'Show all'}

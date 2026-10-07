@@ -4,6 +4,7 @@ import type { FleetComputer } from '../../../shared/fleet';
 import { sessionIndex } from '../store';
 import { useAttention, type AttentionItem } from '../attention';
 import {
+  contextGlance,
   chatOwner,
   dispatcherGlance,
   fmtCost,
@@ -90,6 +91,7 @@ export function Sidebar({
             pulse={orch.status === 'running'}
             title="Orchestrator"
             sub={<span className={`tone-${sessionTone(orch.status)}`}>{sessionLabel[orch.status]}</span>}
+            hint={ctxHint('Your own orchestrator', orch)}
             badge={orch.personMessages?.length ? { count: orch.personMessages.length, hint: `Unread: ${peopleMessagesHint(orch.personMessages)}` } : undefined}
             onClick={() => go({ view: 'home' })}
           />
@@ -110,7 +112,7 @@ export function Sidebar({
                   <span className={`tone-${sessionTone(s.status)}`}>{sessionLabel[s.status]}</span>
                 </>
               }
-              hint={`${who.displayName}’s own orchestrator (read only)`}
+              hint={ctxHint(`${who.displayName}’s own orchestrator (read only)`, s)}
               onClick={() => go({ view: 'chat', userId: who.userId })}
             />
           );
@@ -123,7 +125,7 @@ export function Sidebar({
             pulse={isBusy(dispatcher)}
             title="Dispatcher"
             sub={<span className={`tone-${ledger.tone}`}>{ledger.label}</span>}
-            hint="Everyone’s requests for work and what became of them"
+            hint={ctxHint('Everyone’s requests for work and what became of them', dispatcher)}
             onClick={() => go({ view: 'dispatcher' })}
           />
         )}
@@ -345,6 +347,12 @@ function AttentionList({ items, onPick }: { items: AttentionItem[]; onPick: () =
 }
 
 /** "2 from Lothsahn, 1 from Ben": whose messages wait in your chat. */
+/** A row's hint with the orchestrator's context and last compaction under it (w535). */
+function ctxHint(what: string, s: SessionInfo): string {
+  const c = contextGlance(s, Date.now());
+  return c ? `${what}\n${c.line}` : what;
+}
+
 function peopleMessagesHint(list: NonNullable<SessionInfo['personMessages']>): string {
   const by = new Map<string, number>();
   for (const m of list) by.set(m.from.displayName, (by.get(m.from.displayName) ?? 0) + 1);

@@ -1,12 +1,64 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { query, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Config } from './config.ts';
 import type { Store } from './store.ts';
-import type { EffortLevel, ImageInput, ImageRef, OrchestratorRole, PendingPermission, PermissionMode, Requester, SessionInfo, SessionKind } from '../shared/types.ts';
+import type { CompactionTrigger, DeliveredAttachment, EffortLevel, ImageInput, ImageRef, OrchestratorRole, PendingPermission, PermissionMode, Requester, SessionInfo, SessionKind } from '../shared/types.ts';
+import { attachmentBlock } from '../shared/attachments.ts';
 import { emit } from './store.ts';
 import { accountKeyOf } from './usage.ts';
-import type { SessionSnapshot, Unanswered } from './restart.ts';
+import { senderOf, type SessionSnapshot, type Unanswered } from './restart.ts';
+import { checkObject, readJsonDurable, writeJsonDurable } from './durable.ts';
+
+/** A session is mid-turn: working, starting or waiting for a permission answer. Only these count toward the agent limits (w384). */
+export const MID_TURN: ReadonlySet<SessionInfo['status']> = new Set(['running', 'starting', 'waiting_permission']);
+export const isMidTurn = (i: Pick<SessionInfo, 'status'>) => MID_TURN.has(i.status);
+
+/**
+ * The agents that hold up a branch switch of their place (switch_branch), on the portal and on a machine's daemon (w422):
+ * mid-turn with a process behind them, other than the caller, which is mid-turn by definition since it is in the tool
+ * call. A mid-turn status with no process (left by an agent that stopped or crashed) does not count: those are `stale`,
+ * for the portal to clear. 'starting' counts without one: a machine's agent is 'starting' before its daemon reports it.
+ */
+export function othersMidTurn<T extends { readonly info: SessionInfo; readonly live: boolean }>(handles: Iterable<T | undefined>, callerId?: string) {
+  const busy: T[] = [];
+  const stale: T[] = [];
+  for (const h of handles) {
+    if (!h || h.info.id === callerId || !isMidTurn(h.info)) continue;
+    (h.live || h.info.status === 'starting' ? busy : stale).push(h);
+  }
+  return { busy, stale };
+}
+
+/** switch_branch's refusal while othersMidTurn found agents: who they are, by title. */
+export const midTurnRefusal = (busy: { info: SessionInfo }[], where: string) =>
+  `agent(s) ${busy.map((s) => `"${s.info.title}"`).join(', ')} ${busy.length === 1 ? 'is' : 'are'} mid-turn in ${where}; wait for them (or stop them) first`;
+
+/** A message waiting for a free running slot (w384): delivered in order once one frees. Kept in data/send-queue.json. */
+export interface QueuedSend {
+  uuid: string;
+  id: string;
+  text: string;
+  from: 'human' | 'orchestrator' | 'system';
+  images?: ImageInput[];
+  requestedBy?: Requester;
+  attachments?: DeliveredAttachment[];
+  bypassGate?: boolean;
+  at: string;
+  why: string;
+  /** The last error a delivery attempt threw (w496): it stays queued and is tried again, up to QUEUE_HOLD_MS. */
+  lastError?: string;
+}
+
+/**
+ * How long a queued message that cannot be delivered yet (its machine's daemon outdated or offline, the host guard) is
+ * tried again before it is given up, with an error in its transcript (w496).
+ */
+export const QUEUE_HOLD_MS = 24 * 3_600_000;
+
+/** Idle agent processes kept on this host besides the running ones (limits.maxIdleAgents); the oldest idle one goes first. */
+export const DEFAULT_MAX_IDLE_AGENTS = 6;
 
 /** The prompt stream for one query(): messages pushed here become user turns, in order. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
@@ -76,14 +128,25 @@ export interface SessionHandle {
   readonly live: boolean;
   lastFrom: 'human' | 'orchestrator' | 'system';
   /**
-   * Who the current turn is answering: 'human' only when every message it has not answered yet is a person's (the CLI
-   * folds messages sent during a turn into it, so harness text can share a person's turn); else the first sender that
-   * is not a person. Without any, the last sender. What decides whether a turn is a person's (docs/orchestrators.md).
+   * Who started the current turn (w607): the sender of the message that opened it, or, once the CLI moves on to a
+   * message that waited behind it, that message's sender. A message delivered while the turn runs (a [worker update],
+   * a [dispatch], a timer) never changes it: it neither demotes a turn a person started nor lends a person's authority
+   * to a turn the harness started. Without a turn, the last sender. What decides whether a turn is a person's
+   * (docs/orchestrators.md, "Loops, limits and safety").
    */
   readonly turnFrom?: 'human' | 'orchestrator' | 'system';
-  /** `requestedBy`: the person who wrote it, or for whom the orchestrator or the harness sends it (docs/identity.md). */
-  send(text: string, from?: 'human' | 'orchestrator' | 'system', uuid?: string, images?: ImageInput[], requestedBy?: Requester): string;
+  /**
+   * `requestedBy`: the person who wrote it, or for whom the orchestrator or the harness sends it (docs/identity.md).
+   * `attachments` (docs/attachments.md): files that come with it, with where this agent's copy is; on a machine, the
+   * daemon fetches the copies first and fills that in.
+   */
+  send(text: string, from?: 'human' | 'orchestrator' | 'system', uuid?: string, images?: ImageInput[], requestedBy?: Requester, attachments?: DeliveredAttachment[]): string;
   interrupt(): Promise<void>;
+  /**
+   * Compact the conversation now (w518, a person's `/compact [focus]`): Claude Code's own /compact, between turns only.
+   * Returns what to tell the person; throws why it cannot. Only sessions in this process have it.
+   */
+  compact?(instructions?: string, by?: Requester, auto?: AutoCompaction): string;
   setMode(mode: PermissionMode): Promise<void>;
   /** `onPurpose` false: the server is stopping, not a person or the orchestrator; the restart marks stay. */
   stop(onPurpose?: boolean): void;
@@ -105,6 +168,24 @@ export function snapshotOf(h: SessionHandle): SessionSnapshot {
 
 const MAX_TOOL_RESULT = 6000;
 
+/** A session's statusDetail while its /compact runs (w518). */
+export const COMPACTING = 'compacting the conversation';
+
+/**
+ * A compaction FF Factory starts itself (w535, server/autoCompact.ts): why, as the chat line says it ("the context
+ * passed 200,000 tokens"). No line in the chat when it starts and no push notification when it ends: one line when it
+ * is done, "Compacted: N → M tokens (…)".
+ */
+export interface AutoCompaction {
+  trigger: Exclude<CompactionTrigger, 'person' | 'claude'>;
+  reason: string;
+}
+
+/** What 'turnEnd' carries besides the session and its text (w535): set when the turn was a compaction, and whose. */
+export interface TurnEndMeta {
+  compaction?: CompactionTrigger;
+}
+
 function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -116,16 +197,46 @@ function textOf(content: unknown): string {
 }
 
 /**
- * What the model reads for a message: the orchestrator's briefs are marked as such, and in the orchestrator's
- * chat, which several people share, each person's message starts with who wrote it.
+ * What the model reads for a message: every message from a person, or from the orchestrator on a person's behalf,
+ * starts with whose it is, in every kind of session (w389: a worker read a person's unmarked "Undo the release hold"
+ * as the portal owner's and wrote his name on a release decision he never made). Harness messages carry their own tag.
  */
-export function promptText(kind: SessionKind, text: string, from: 'human' | 'orchestrator' | 'system', requestedBy?: Requester): string {
-  if (from === 'orchestrator') return `[from the orchestrator${requestedBy ? `, for ${requestedBy.displayName}` : ''}]\n${text}`;
-  if (from === 'human' && kind === 'orchestrator' && requestedBy) return `[from ${requestedBy.displayName}]\n${text}`;
-  return text;
+export function promptText(_kind: SessionKind, text: string, from: 'human' | 'orchestrator' | 'system', requestedBy?: Requester): string {
+  const who = senderOf(from, requestedBy);
+  return who ? `[from ${who}]\n${text}` : text;
 }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars)` : s);
+
+/** The longest focus a `/compact <focus>` may carry, in characters. */
+export const COMPACT_FOCUS_CHARS = 2000;
+
+/**
+ * A person's message that is Claude Code's `/compact`, alone or with focus instructions after it (w518): the focus
+ * (empty for none), or undefined for any other message. `/compactly` and a `/compact` inside a sentence are messages.
+ */
+export function compactCommand(text: string): string | undefined {
+  const m = /^\/compact(?:\s+([\s\S]*))?$/.exec(text.trim());
+  return m ? (m[1] ?? '').replace(/\s+/g, ' ').trim() : undefined;
+}
+
+const tokens = (n: number) => `${n.toLocaleString('en-US')} tokens`;
+
+/**
+ * The transcript line a finished /compact leaves (w518). `before` is Claude Code's own count of the context it compacted
+ * (compact_boundary pre_tokens); `after` the context measured once it was done (getContextUsage), or, when that could not
+ * be measured, the summary that replaced the conversation (post_tokens), which leaves out the system prompt and tools.
+ */
+export function compactedLine(before: number, after: { total: number; max?: number } | undefined, summary: number | undefined, ms: number | undefined, auto?: AutoCompaction): string {
+  const took = ms ? `, in ${Math.max(1, Math.round(ms / 1000))} s` : '';
+  // An automatic one (w535): the one line the chat gets, "Compacted: N → M tokens (why)".
+  if (auto) {
+    const to = after ? tokens(after.total) : `${summary !== undefined ? tokens(summary) : 'an unknown number of tokens'} (the summary alone: the context after it could not be measured)`;
+    return `Compacted: ${before.toLocaleString('en-US')} → ${to} (automatically: ${auto.reason})${took}.`;
+  }
+  if (after) return `Compacted: the context went from ${tokens(before)} to ${tokens(after.total)}${after.max ? ` (of ${tokens(after.max)})` : ''}${took}, as Claude Code measured it before and after.`;
+  return `Compacted: the context was ${tokens(before)}; the summary that replaces it is ${summary !== undefined ? tokens(summary) : 'of unknown size'} (the context after it could not be measured)${took}.`;
+}
 
 /**
  * One Claude Code conversation, driven through the Agent SDK in streaming-input mode so a person
@@ -149,9 +260,19 @@ export class AgentSession implements SessionHandle {
   private firstResult = true;
   /** Messages sent but not yet answered by a finished turn, by uuid: what a restart would cut off. */
   private readonly outstanding = new Map<string, Unanswered>();
+  /** The message the current turn answers first (w607): its sender is turnFrom. Cleared when the turn ends. */
+  private turnStarter?: { uuid: string; from: 'human' | 'orchestrator' | 'system' };
   /** Stopped or interrupted by a person or the orchestrator since its last message: a restart leaves it alone. */
   private stoppedOnPurpose = false;
   private graceTimer?: NodeJS.Timeout;
+  /** The /compact in progress (w518): the uuid of its message, when it was sent, and FF Factory's reason when it started it (w535). */
+  private compacting?: { uuid: string; at: number; auto?: AutoCompaction };
+  /** The last compaction's trigger until a message comes after it (w535): its end is no turn of a person's. */
+  private compactTurn?: CompactionTrigger;
+  /** The session's spend when its current turn opened (w535): what the turn's cost is measured from. */
+  private costAtTurnOpen = 0;
+  /** The uuids of /compact messages not answered yet: their results are no turn a person reads. */
+  private readonly compactUuids = new Set<string>();
   private readonly store: SessionSink;
   private readonly makeOptions: OptionsFactory;
   private readonly events: EventEmitter;
@@ -167,10 +288,19 @@ export class AgentSession implements SessionHandle {
     return !!this.q;
   }
 
+  /** A compaction is running (w518, w535). */
+  get compactingNow() {
+    return !!this.compacting;
+  }
+
   get turnFrom(): 'human' | 'orchestrator' | 'system' {
-    const froms = [...this.outstanding.values()].map((u) => u.from);
-    if (!froms.length) return this.lastFrom;
-    return froms.find((f) => f !== 'human') ?? 'human';
+    return this.turnStarter?.from ?? this.lastFrom;
+  }
+
+  /** The turn is over: nothing is waiting for an answer, and the next message starts a turn of its own. */
+  private clearOutstanding() {
+    this.outstanding.clear();
+    this.turnStarter = undefined;
   }
 
   private update(patch: Partial<SessionInfo>) {
@@ -179,23 +309,80 @@ export class AgentSession implements SessionHandle {
   }
 
   /** Queue a user message; returns its uuid, which the answering turn's result lists in `answers`. */
-  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester): string {
+  send(text: string, from: 'human' | 'orchestrator' | 'system' = 'human', uuid: string = randomUUID(), images: ImageInput[] = [], requestedBy?: Requester, attachments: DeliveredAttachment[] = []): string {
     // A person's message (or the orchestrator's on a person's behalf) says who this session now works for; the
     // harness's own messages carry the person they are about, but do not change that.
     if (requestedBy && from !== 'system') this.info.lastRequestedBy = requestedBy;
     if (!this.q) this.start();
+    // The message that opens a turn decides whose it is (w607); one sent while it runs joins it without changing that.
+    if (!this.info.turnOpenSince || !this.turnStarter) this.turnStarter = { uuid, from };
     this.lastFrom = from;
     this.stoppedOnPurpose = false;
     clearTimeout(this.graceTimer);
-    this.outstanding.set(uuid, { text, from });
+    this.outstanding.set(uuid, { text, from, ...(requestedBy ? { requestedBy } : {}) });
     // Images arrive stored already (with an id) or are kept here, so the transcript can show them.
     const refs = images.map((i) => ({ id: i.id ?? this.store.saveImage(this.info.id, i.mediaType, i.data), mediaType: i.mediaType }));
-    this.store.append(this.info.id, { kind: 'user', text, from, uuid, ...(refs.length ? { images: refs } : {}), ...(requestedBy ? { requestedBy } : {}) });
-    this.input!.push(promptText(this.info.kind, text, from, requestedBy), uuid, images);
+    this.store.append(this.info.id, { kind: 'user', text, from, uuid, ...(refs.length ? { images: refs } : {}), ...(attachments.length ? { attachments } : {}), ...(requestedBy ? { requestedBy } : {}) });
+    // The files come after the text, as a block the agent reads as data (shared/attachments.ts).
+    const files = attachmentBlock(attachments, this.info.kind === 'orchestrator' ? 'orchestrator' : 'worker');
+    this.input!.push(promptText(this.info.kind, files ? (text ? `${text}\n\n${files}` : files) : text, from, requestedBy), uuid, images);
     const opens = !this.info.turnOpenSince;
+    // A message after a compaction: the turn that ends next is this message's, not the compaction's (w535).
+    this.compactTurn = undefined;
+    if (opens) this.costAtTurnOpen = this.info.costUsd;
     this.update({ status: 'running', statusDetail: undefined, ...(opens ? { turnOpenSince: new Date().toISOString() } : {}) });
     if (opens) this.store.flush?.();
     return uuid;
+  }
+
+  /**
+   * Compact the conversation now (w518): Claude Code's own `/compact [focus]`, sent as a message of its own (without
+   * the sender line, which would make it text). Between turns only: mid-turn it throws, and nothing is sent. A stopped
+   * session resumes for it. Messages that arrive meanwhile (a wake_me, a timer, a worker's report) wait in the input
+   * and are answered after it, with the compacted history. Progress goes to the transcript as system lines.
+   */
+  compact(instructions = '', by?: Requester, auto?: AutoCompaction): string {
+    if (this.compacting) throw new Error('it is compacting already');
+    if (isMidTurn(this.info)) throw new Error(`it is mid-turn (${this.info.status.replace('_', ' ')}); /compact runs between turns, so send it again once this turn has ended, or stop the turn first`);
+    if (!this.info.sdkSessionId) throw new Error('there is no conversation to compact yet');
+    const focus = instructions.replace(/\s+/g, ' ').trim();
+    if (focus.length > COMPACT_FOCUS_CHARS) throw new Error(`the focus is ${focus.length} characters; keep it to ${COMPACT_FOCUS_CHARS}`);
+    if (!this.q) this.start();
+    const uuid = randomUUID();
+    this.compacting = { uuid, at: Date.now(), ...(auto ? { auto } : {}) };
+    this.compactTurn = auto?.trigger ?? 'person';
+    this.compactUuids.add(uuid);
+    // An automatic one (w535) leaves one line, when it is done; a person's says at once that it started.
+    if (!auto) this.store.append(this.info.id, { kind: 'system', text: `Compacting this conversation${by ? ` (asked by ${by.displayName})` : ''}${focus ? `, with the focus: ${focus}` : ''}. Messages that arrive meanwhile are answered after it.` });
+    this.input!.push(`/compact${focus ? ` ${focus}` : ''}`, uuid);
+    this.update({ status: 'running', statusDetail: COMPACTING });
+    return 'Compacting the conversation; the chat says when it is done.';
+  }
+
+  /** The /compact ended without a boundary (it failed, or the process went): say so, and the turn's end says it too. */
+  private compactFailed(why: string) {
+    if (!this.compacting) return;
+    const auto = this.compacting.auto;
+    this.compacting = undefined;
+    const line = `The ${auto ? 'automatic ' : ''}compaction failed: ${why}.`;
+    // An automatic one's failure is no reply a person waits for: the last turn's text stays (w535).
+    if (!auto) this.lastTurnText = line;
+    this.store.append(this.info.id, { kind: 'error', text: line });
+    if (this.info.statusDetail === COMPACTING) this.update({ statusDetail: undefined });
+  }
+
+  /** The context in use now, as Claude Code measures it (getContextUsage), or undefined when it cannot say within 20 s. */
+  private async contextNow(q: Query): Promise<{ total: number; max: number } | undefined> {
+    if (typeof q.getContextUsage !== 'function') return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const u = await Promise.race([q.getContextUsage({ detail: 'full' }), new Promise<undefined>((r) => (timer = setTimeout(() => r(undefined), 20_000)))]);
+      return u && Number.isFinite(u.totalTokens) ? { total: u.totalTokens, max: u.maxTokens } : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private start() {
@@ -246,6 +433,7 @@ export class AgentSession implements SessionHandle {
         this.q = undefined;
         this.input = undefined;
         this.denyAllPending('session ended');
+        this.compactFailed('the agent process ended first');
         this.keepMarksBriefly();
         this.events.emit('ended', this);
       }
@@ -264,10 +452,37 @@ export class AgentSession implements SessionHandle {
           else if (m.state === 'requires_action') this.update({ status: 'waiting_permission' });
           else if (m.state === 'idle') {
             // Idle means the input queue is drained: everything sent has been answered.
-            this.outstanding.clear();
+            this.clearOutstanding();
             this.update({ status: this.pending.size ? 'waiting_permission' : 'idle', turnOpenSince: undefined });
             this.store.flush?.();
-            this.events.emit('turnEnd', this, this.lastTurnText);
+            this.emitTurnEnd(this.lastTurnText);
+          }
+        } else if (m.subtype === 'status') {
+          // A /compact (w518): Claude Code says whether it failed.
+          if (m.compact_result === 'failed') this.compactFailed(m.compact_error || 'Claude Code gave no reason');
+        } else if (m.subtype === 'compact_boundary') {
+          const meta = m.compact_metadata;
+          if (meta.trigger === 'manual' && this.compacting) {
+            const c = this.compacting;
+            this.compacting = undefined;
+            // What the turn's end says when nothing else was asked meanwhile (the notification); the transcript line
+            // follows once the context after it is measured. An automatic one keeps the last reply's text (w535).
+            if (!c.auto) this.lastTurnText = `Compacted the conversation (the context was ${tokens(meta.pre_tokens)}).`;
+            const turns = this.info.turns;
+            // Until it is measured, the context is at least the summary (w535): the automatic trigger must not read the old size.
+            this.info.contextTokens = meta.post_tokens;
+            const q = this.q;
+            void (q ? this.contextNow(q) : Promise.resolve(undefined)).then((after) => {
+              this.store.append(id, { kind: 'system', text: compactedLine(meta.pre_tokens, after, meta.post_tokens, meta.duration_ms ?? Date.now() - c.at, c.auto) });
+              const record = { at: new Date().toISOString(), trigger: c.auto?.trigger ?? 'person', before: meta.pre_tokens, ...(after ? { after: after.total } : {}), turns } as const;
+              // A call answered meanwhile has measured the context since; this measurement is the older one then.
+              const measured = after && this.info.contextTokens === meta.post_tokens ? { contextTokens: after.total } : {};
+              this.update({ lastCompaction: record, ...measured, ...(this.info.statusDetail === COMPACTING ? { statusDetail: undefined } : {}) });
+            });
+          } else if (meta.trigger === 'auto') {
+            this.store.append(id, { kind: 'system', text: `Claude Code compacted this conversation by itself: the context was ${tokens(meta.pre_tokens)}.` });
+            this.info.contextTokens = meta.post_tokens;
+            this.update({ lastCompaction: { at: new Date().toISOString(), trigger: 'claude', before: meta.pre_tokens, turns: this.info.turns } });
           }
         } else if (m.subtype === 'background_tasks_changed') {
           this.backgroundTasks = m.tasks.filter((t) => !t.ambient).length;
@@ -285,6 +500,13 @@ export class AgentSession implements SessionHandle {
       }
       case 'assistant': {
         const sub = m.parent_tool_use_id;
+        // The context the next call reads (w535): this call's input, cached or not, and its output. Kept in memory here;
+        // the next update (the turn's end at the latest) saves it.
+        const u = sub ? undefined : (m.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; output_tokens?: number } }).usage;
+        if (u) {
+          const n = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0);
+          if (n > 0) this.info.contextTokens = n;
+        }
         for (const b of m.message.content) {
           if (b.type === 'text' && !sub && b.text.trim()) this.store.append(id, { kind: 'assistant', text: b.text });
           else if (b.type === 'thinking' && !sub && b.thinking.trim()) this.store.append(id, { kind: 'thinking', text: b.thinking });
@@ -313,8 +535,27 @@ export class AgentSession implements SessionHandle {
         // A resumed session's first result may already carry the earlier spend; do not count it twice.
         if (this.firstResult && total >= this.costBase) this.costBase = 0;
         this.firstResult = false;
+        const answered = m.user_message_uuids ?? (m.user_message_uuid ? [m.user_message_uuid] : []);
+        // A /compact's own result (w518) is no turn: its cost counts, but it leaves no reply and keeps the last report.
+        if (answered.length && answered.every((u) => this.compactUuids.has(u))) {
+          for (const u of answered) this.compactUuids.delete(u);
+          if (m.subtype !== 'success' || m.is_error) this.compactFailed(m.subtype === 'success' ? m.result || 'an error result' : m.subtype);
+          this.update({ costUsd: this.costBase + total });
+          if (!this.stateEvents) {
+            this.update({ status: this.pending.size ? 'waiting_permission' : 'idle', turnOpenSince: undefined });
+            this.emitTurnEnd(this.lastTurnText);
+          }
+          return;
+        }
+        for (const u of answered) this.compactUuids.delete(u);
         const text = m.subtype === 'success' ? m.result : `stopped: ${m.subtype}`;
-        for (const u of m.user_message_uuids ?? (m.user_message_uuid ? [m.user_message_uuid] : [])) this.outstanding.delete(u);
+        for (const u of answered) this.outstanding.delete(u);
+        // The CLI goes on with a message that waited behind the one that started this turn: the next turn is that
+        // message's (a [worker update] queued behind a person's message starts a turn of the harness's, w607).
+        if (this.turnStarter && answered.includes(this.turnStarter.uuid)) {
+          const next = this.outstanding.entries().next();
+          if (!next.done) this.turnStarter = { uuid: next.value[0], from: next.value[1].from };
+        }
         this.store.append(id, {
           kind: 'result',
           ok: m.subtype === 'success' && !m.is_error,
@@ -325,20 +566,28 @@ export class AgentSession implements SessionHandle {
           answers: m.user_message_uuids ?? (m.user_message_uuid ? [m.user_message_uuid] : undefined),
         });
         this.lastTurnText = text;
-        this.update({ turns: this.info.turns + 1, costUsd: this.costBase + total, lastResult: clip(text, 1200) });
+        const spent = this.costBase + total;
+        this.update({ turns: this.info.turns + 1, costUsd: spent, lastResult: clip(text, 1200), lastTurnCostUsd: Math.max(0, spent - this.costAtTurnOpen) });
         this.events.emit('result', this, m.subtype);
         if (!this.stateEvents) {
           // Older CLI without state events: best effort from the result itself.
           const queued = (m as { queued_turn_count?: number }).queued_turn_count ?? 0;
-          if (!queued) this.outstanding.clear();
+          if (!queued) this.clearOutstanding();
           this.update({ status: queued > 0 ? 'running' : this.pending.size ? 'waiting_permission' : 'idle', ...(queued > 0 ? {} : { turnOpenSince: undefined }) });
-          this.events.emit('turnEnd', this, text);
+          this.emitTurnEnd(text);
         }
         return;
       }
       default:
         return;
     }
+  }
+
+  /** The turn ended: 'turnEnd' with its text, and whose compaction it was when it was one (w535). */
+  private emitTurnEnd(text: string) {
+    const meta: TurnEndMeta = this.compactTurn ? { compaction: this.compactTurn } : {};
+    this.compactTurn = undefined;
+    this.events.emit('turnEnd', this, text, meta);
   }
 
   /** Keep the images in a tool result (a screenshot, a Read of a PNG) so the transcript can show them. */
@@ -397,7 +646,8 @@ export class AgentSession implements SessionHandle {
     if (!this.q) return;
     this.denyAllPending('interrupted');
     await this.q.interrupt();
-    this.outstanding.clear();
+    this.compactFailed('it was interrupted');
+    this.clearOutstanding();
     this.stoppedOnPurpose = true;
     this.store.append(this.info.id, { kind: 'system', text: 'Interrupted.' });
     this.update({ status: 'idle', turnOpenSince: undefined });
@@ -434,7 +684,7 @@ export class AgentSession implements SessionHandle {
   stop(onPurpose = true) {
     if (onPurpose) {
       this.stoppedOnPurpose = true;
-      this.outstanding.clear();
+      this.clearOutstanding();
       this.clearRestartMarks();
     }
     if (!this.q) return;
@@ -443,6 +693,7 @@ export class AgentSession implements SessionHandle {
     this.q = undefined;
     this.input = undefined;
     this.denyAllPending('session stopped');
+    this.compactFailed('the session was stopped');
     this.update({ status: 'stopped', statusDetail: undefined });
     this.events.emit('ended', this);
   }
@@ -462,7 +713,7 @@ export class AgentSession implements SessionHandle {
     this.graceTimer = setTimeout(() => {
       if (this.q) return;
       // It ended on its own: what it had not answered is for a person to pick up, not for a later restart.
-      this.outstanding.clear();
+      this.clearOutstanding();
       this.clearRestartMarks();
     }, restartMarks.graceMs);
     this.graceTimer.unref?.();
@@ -472,7 +723,7 @@ export class AgentSession implements SessionHandle {
 export class SessionManager {
   readonly sessions = new Map<string, SessionHandle>();
   /**
-   * 'turnEnd' (session, text) and 'permission' (session, pending) — the orchestrator listens;
+   * 'turnEnd' (session, text, TurnEndMeta) and 'permission' (session, pending) — the orchestrator listens;
    * 'result' (session, subtype) after every turn result and 'ended' (session) when the process
    * goes away — standing agents track their runs with these.
    */
@@ -480,10 +731,35 @@ export class SessionManager {
   private readonly cfg: Config;
   private readonly store: Store;
   private readonly factories = new Map<string, OptionsFactory>();
+  /** Messages waiting for a free running slot, oldest first (w384). */
+  private queue: QueuedSend[] = [];
+  private readonly queueFile?: string;
+  private drainTimer?: NodeJS.Timeout;
+  /**
+   * A machine session's place is full of mid-turn agents (its sandbox, its sandboxes, its main clone): why, or undefined.
+   * Set by MachineManager; a session on a machine is never counted against this host's limits.maxSessions.
+   */
+  placeFull?: (s: SessionHandle) => string | undefined;
+  /** Why this idle session must not be stopped to make room (a pending wake_me, a dirty sandbox, …), or undefined. Set by Agents. */
+  keepIdle?: (s: SessionHandle) => string | undefined;
 
   constructor(cfg: Config, store: Store) {
     this.cfg = cfg;
     this.store = store;
+    const dir = (cfg as { dataDir?: string }).dataDir;
+    if (dir) {
+      this.queueFile = path.join(dir, 'send-queue.json');
+      try {
+        this.queue = readJsonDurable<{ queue: QueuedSend[] }>(this.queueFile, { check: checkObject })?.queue ?? [];
+      } catch {
+        this.queue = [];
+      }
+    }
+    // A slot frees when a turn ends or a process goes: deliver what waits then, and every half minute in case.
+    this.events.on('turnEnd', () => this.drainSoon());
+    this.events.on('ended', () => this.drainSoon());
+    this.drainTimer = setInterval(() => this.drain(), 30_000);
+    this.drainTimer.unref?.();
   }
 
   /**
@@ -565,11 +841,135 @@ export class SessionManager {
   }
 
   /**
-   * Live agent processes on THIS host that count toward limits.maxSessions: workers and running
-   * standing agents. Sessions on a machine count toward that machine's own limit instead.
+   * Agent processes on THIS host (workers and standing agents, idle or mid-turn): what holds memory. Sessions on a machine
+   * live there instead.
    */
   liveAgents() {
     return [...this.sessions.values()].filter((s) => s.info.kind !== 'orchestrator' && !s.info.machineId && s.live).length;
+  }
+
+  /**
+   * Agents on THIS host that are mid-turn: what limits.maxSessions counts (w384). An idle agent, its process up or not,
+   * takes no slot: on 2026-10-04 a follow-up to an idle worker was refused because six idle ones held all the slots.
+   */
+  runningAgents() {
+    return [...this.sessions.values()].filter((s) => s.info.kind !== 'orchestrator' && !s.info.machineId && isMidTurn(s.info)).length;
+  }
+
+  /** The most idle agent processes kept on this host besides the running ones. */
+  get maxIdleAgents() {
+    const n = (this.cfg.limits as { maxIdleAgents?: number }).maxIdleAgents;
+    return typeof n === 'number' && n >= 0 ? n : DEFAULT_MAX_IDLE_AGENTS;
+  }
+
+  /** Why a message to this session must wait for a free running slot, or undefined (it may go now). */
+  private fullFor(s: SessionHandle): string | undefined {
+    if (s.info.kind === 'orchestrator' || isMidTurn(s.info)) return undefined;
+    if (s.info.machineId) return this.placeFull?.(s);
+    const n = this.runningAgents();
+    return n >= this.cfg.limits.maxSessions ? `${n} of ${this.cfg.limits.maxSessions} agents on this host are mid-turn (limits.maxSessions)` : undefined;
+  }
+
+  /** The messages waiting for a slot (oldest first): for the status views and tests. */
+  queued(): readonly QueuedSend[] {
+    return this.queue;
+  }
+
+  /** Whether the message with this uuid is waiting for a slot. */
+  isQueued(uuid: string) {
+    return this.queue.some((q) => q.uuid === uuid);
+  }
+
+  private saveQueue() {
+    if (!this.queueFile) return;
+    try {
+      writeJsonDurable(this.queueFile, { queue: this.queue }, { indent: 1 });
+    } catch (e) {
+      console.warn('send queue: could not save it:', (e as Error).message);
+    }
+  }
+
+  private enqueue(q: QueuedSend) {
+    this.queue.push(q);
+    this.saveQueue();
+    this.store.append(q.id, { kind: 'system', text: `A message is waiting for a free agent slot (${q.why}); it is delivered as soon as one frees.` });
+    console.log(`sessions: queued a message for ${q.id}: ${q.why}`);
+    return q.uuid;
+  }
+
+  private drainSoon() {
+    setImmediate(() => this.drain());
+  }
+
+  /** Deliver the queued messages that may go now, in order. Returns how many went. */
+  drain(now = Date.now()): number {
+    let sent = 0;
+    // A session whose first waiting message cannot go keeps the rest waiting too, so its messages go in order (w496).
+    const held = new Set<string>();
+    for (const q of [...this.queue]) {
+      if (held.has(q.id)) continue;
+      const s = this.sessions.get(q.id);
+      const drop = () => {
+        this.queue = this.queue.filter((x) => x !== q);
+        this.saveQueue();
+      };
+      if (!s) {
+        drop();
+        continue;
+      }
+      if (this.fullFor(s)) {
+        held.add(q.id);
+        continue;
+      }
+      const startsHere = !s.live && s.info.kind !== 'orchestrator' && !s.info.machineId;
+      if (startsHere && !q.bypassGate && this.startGate?.()) {
+        held.add(q.id);
+        continue;
+      }
+      try {
+        if (startsHere) this.makeRoom(s);
+        s.send(q.text, q.from, q.uuid, q.images, q.requestedBy, q.attachments);
+        drop();
+        sent++;
+      } catch (e) {
+        // Removed only once delivered (w496: a worker's brief was dropped when LothDesktop's daemon was outdated):
+        // tried again on the next pass, given up only after QUEUE_HOLD_MS.
+        const why = (e as Error).message;
+        if (now - (Date.parse(q.at) || now) >= QUEUE_HOLD_MS) {
+          drop();
+          this.store.append(q.id, { kind: 'error', text: `A queued message could not be delivered within ${QUEUE_HOLD_MS / 3_600_000} hours and was given up: ${why}. It began: ${q.text.replace(/\s+/g, ' ').slice(0, 200)}` });
+          continue;
+        }
+        held.add(q.id);
+        if (q.lastError !== why) {
+          q.lastError = why;
+          this.saveQueue();
+          this.store.append(q.id, { kind: 'system', text: `A waiting message could not be delivered yet (${why}); it is tried again shortly.` });
+        }
+      }
+    }
+    return sent;
+  }
+
+  /**
+   * Before a new process starts on this host: with limits.maxSessions + limits.maxIdleAgents processes up already, stop
+   * the oldest idle ones nothing protects (keepIdle) until there is room. Stopped, not lost: a message resumes them with
+   * their history. Returns the ids stopped.
+   */
+  makeRoom(s: SessionHandle): string[] {
+    const cap = this.cfg.limits.maxSessions + this.maxIdleAgents;
+    const stopped: string[] = [];
+    const idle = [...this.sessions.values()]
+      .filter((x) => x !== s && x.live && x.info.kind !== 'orchestrator' && !x.info.machineId && !isMidTurn(x.info) && !this.keepIdle?.(x))
+      .sort((a, b) => a.info.lastActivityAt.localeCompare(b.info.lastActivityAt));
+    while (this.liveAgents() >= cap && idle.length) {
+      const x = idle.shift()!;
+      this.store.append(x.info.id, { kind: 'system', text: `Stopped while idle to make room for another agent (${cap} agent processes on this host at most). Its history is kept: a message resumes it.` });
+      x.stop(true);
+      stopped.push(x.info.id);
+      console.log(`sessions: stopped idle ${x.info.id} to make room (limits.maxSessions + limits.maxIdleAgents = ${cap})`);
+    }
+    return stopped;
   }
 
   /** The host guard's gate (server/hostHealth.ts): why a new agent process on this host must wait. */
@@ -579,15 +979,55 @@ export class SessionManager {
    * Send, enforcing the concurrent-agent ceiling and the host guard when this send would start a process.
    * `bypassGate`: the host guard's own messages (resume after recovery, checkpoint requests).
    */
-  send(id: string, text: string, from: 'human' | 'orchestrator' | 'system' = 'human', images?: ImageInput[], opts: { bypassGate?: boolean; requestedBy?: Requester } = {}): string {
+  /**
+   * `hold` (w496: a worker's first prompt, its brief): what would refuse it now (the host guard, a machine's daemon that
+   * is outdated or offline) queues it instead, and it goes as soon as it can, before any later message to the session.
+   */
+  send(id: string, text: string, from: 'human' | 'orchestrator' | 'system' = 'human', images?: ImageInput[], opts: { bypassGate?: boolean; requestedBy?: Requester; attachments?: DeliveredAttachment[]; hold?: boolean } = {}): string {
+    const s = this.get(id);
+    const queue = (why: string) =>
+      this.enqueue({ uuid: randomUUID(), id, text, from, ...(images?.length ? { images } : {}), ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}), ...(opts.attachments?.length ? { attachments: opts.attachments } : {}), ...(opts.bypassGate ? { bypassGate: true } : {}), at: new Date().toISOString(), why });
+    // ALL RUNNING SLOTS BUSY (w384): the message waits and goes when a turn ends, instead of being refused. So does any
+    // later message to a session that already has one waiting, so its messages keep their order.
+    const full = this.fullFor(s) ?? (this.queue.some((q) => q.id === id) && !isMidTurn(s.info) ? 'an earlier message to it is still waiting' : undefined);
+    if (full) return queue(full);
+    if (opts.hold) {
+      try {
+        this.checkStart(id, opts.bypassGate);
+      } catch (e) {
+        return queue((e as Error).message);
+      }
+    } else this.checkStart(id, opts.bypassGate);
+    if (!s.live && s.info.kind !== 'orchestrator' && !s.info.machineId) this.makeRoom(s);
+    if (!opts.hold) return s.send(text, from, undefined, images, opts.requestedBy, opts.attachments);
+    try {
+      return s.send(text, from, undefined, images, opts.requestedBy, opts.attachments);
+    } catch (e) {
+      return queue((e as Error).message);
+    }
+  }
+
+  /**
+   * Throws when a message to this session would start a process on this host that the host guard refuses now; returns
+   * the session. For a caller that copies files before sending. The agent limits never refuse: send() queues instead.
+   */
+  checkStart(id: string, bypassGate?: boolean): SessionHandle {
     const s = this.get(id);
     const startsHere = !s.live && s.info.kind !== 'orchestrator' && !s.info.machineId;
-    if (startsHere && this.liveAgents() >= this.cfg.limits.maxSessions) {
-      throw new Error(`already ${this.cfg.limits.maxSessions} agents running (limits.maxSessions); stop one first`);
-    }
-    const gate = startsHere && !opts.bypassGate ? this.startGate?.() : undefined;
+    const gate = startsHere && !bypassGate ? this.startGate?.() : undefined;
     if (gate) throw new Error(`not started: ${gate}`);
-    return s.send(text, from, undefined, images, opts.requestedBy);
+    return s;
+  }
+
+  /**
+   * Compact an orchestrator's conversation now (w518: a person's `/compact [focus]`, or the dispatcher's button): what
+   * to tell the person; throws why it cannot (mid-turn, compacting already, nothing to compact yet).
+   */
+  compact(id: string, instructions = '', by?: Requester, auto?: AutoCompaction): string {
+    const s = this.get(id);
+    if (s.info.kind !== 'orchestrator') throw new Error('/compact is for the orchestrators\' chats');
+    if (!s.compact) throw new Error('this session cannot be compacted from here');
+    return s.compact(instructions, by, auto);
   }
 
   /** Rename a session: one line, at most 80 characters. Returns the stored title. */

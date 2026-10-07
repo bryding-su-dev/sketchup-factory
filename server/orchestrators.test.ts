@@ -12,7 +12,8 @@ import { Identity } from './identity.ts';
 import { PERSONAL_TOOLS, beltFor } from './belts.ts';
 import { FILINGS_PER_MESSAGE, FOLLOW_UPS_PER_MESSAGE, MESSAGES_PER_PERSON, PERSON_MESSAGE_CHARS } from './orchestrators.ts';
 import type { Config } from './config.ts';
-import type { Requester, SessionInfo, TranscriptEvent, UserInfo } from '../shared/types.ts';
+import { requestAsFiled } from './work.ts';
+import type { Requester, SessionInfo, TranscriptEvent, UserInfo, WorkItem } from '../shared/types.ts';
 import { fakeQuery } from '../e2e/fakeAgent.ts';
 
 /**
@@ -39,7 +40,7 @@ async function until(what: string, cond: () => boolean, ms = 5000) {
   }
 }
 
-function setup(t: { after: (fn: () => void | Promise<void>) => void }, opts: { legacy?: boolean; notify?: boolean } = {}) {
+function setup(t: { after: (fn: () => void | Promise<void>) => void }, opts: { legacy?: boolean; notify?: boolean; people?: UserInfo[] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffsb-orch-'));
   const cfg = {
     dataDir: dir,
@@ -66,7 +67,7 @@ function setup(t: { after: (fn: () => void | Promise<void>) => void }, opts: { l
   const sessions = new SessionManager(cfg, store);
   const sandboxes = new SandboxManager(cfg, store);
   const machines = new MachineManager(cfg, store, sessions);
-  const agents = new Agents(cfg, store, sandboxes, sessions, machines, new Identity(cfg, () => PEOPLE));
+  const agents = new Agents(cfg, store, sandboxes, sessions, machines, new Identity(cfg, () => opts.people ?? PEOPLE));
   // Workers start without the sandbox machinery (git identity, guard, Unity MCP): the fake agent needs none of it.
   Object.defineProperty(agents, 'workerOptions', { value: () => ({ model: 'opus' }) });
   store.putSandbox({ id: 'alpha', name: 'alpha', branch: 'sandbox/alpha', base: 'origin/develop', path: path.join(dir, 'alpha'), purpose: 'unused', status: 'ready', createdAt: T0, unity: { state: 'stopped' }, sessionIds: [] });
@@ -129,6 +130,21 @@ test("tool belts: a person's orchestrator sees and files; the dispatcher acts; a
   const remote = names(beltFor('remote', agents.toolSpecs('human', agents.fixedActor(BEN), { role: 'remote', owner: BEN })));
   for (const x of ['start_agent', 'list_work', 'set_heartbeat']) assert.ok(remote.has(x), `remote has ${x}`);
   for (const x of ['request_work', 'update_work', 'decide_work', 'message_person']) assert.ok(!remote.has(x), `remote has no ${x}`);
+  // An orchestrator's own conversation (w535): both roles may ask to compact it; a remote client has none.
+  assert.ok(personal.has('compact_conversation') && d.has('compact_conversation'));
+  assert.ok(!remote.has('compact_conversation'));
+});
+
+test('compact_conversation (w535): an orchestrator asks for it in a turn, and its conversation is compacted once that turn ends', async (t) => {
+  const { store, chat, sessions } = setup(t);
+  const ben = chat(BEN);
+  sessions.send(ben.info.id, 'hello', 'human', undefined, { requestedBy: BEN });
+  await until('the first turn', () => ben.info.status === 'idle');
+  sessions.send(ben.info.id, '#tool compact_conversation {"focus":"keep the w530 numbers"}', 'human', undefined, { requestedBy: BEN });
+  await until('the compaction', () => ben.info.lastCompaction?.trigger === 'self');
+  const texts = store.readTranscript(ben.info.id).map((e) => ('text' in e ? e.text : ''));
+  assert.ok(texts.some((l) => /^Called compact_conversation: Your conversation is compacted once this turn ends/.test(l)), 'the tool answered in the turn');
+  assert.ok(texts.some((l) => /^Compacted: [\d,]+ → 18,000 tokens \(automatically: the orchestrator asked for it\)/.test(l)), 'one line when it is done');
 });
 
 test('filing and dedupe: the overlap is found at once, a repeat is the same request, the dispatcher must merge or say why not', async (t) => {
@@ -347,12 +363,37 @@ test('humanAsked follows the latest word: a harness-turn update clears it, a per
   await until('the dispatcher hears the confirmation', () => heard(dispatcher().info.id, '[work update]').some((e) => e.text.includes('asked for it again in their own words')));
 });
 
-test('turnFrom: a turn is a person’s only when every message it answers is', (t) => {
+test('turnFrom (w607): the message that opened the turn decides; one delivered while it runs changes nothing', (t) => {
   const { sessions, chat } = setup(t);
-  const c = chat(BEN);
-  sessions.send(c.info.id, 'hello', 'human', undefined, { requestedBy: BEN });
-  sessions.send(c.info.id, '[worker update] folded into the same turn', 'system');
-  assert.equal(c.turnFrom, 'system');
+  // A person's turn with a [worker update] delivered into it: still the person's.
+  const ben = chat(BEN);
+  sessions.send(ben.info.id, 'please drain and install on BEAST and m5 #slow', 'human', undefined, { requestedBy: BEN });
+  sessions.send(ben.info.id, '[worker update] w602 finished a turn', 'system');
+  sessions.send(ben.info.id, '[dispatch] w596: started', 'system');
+  assert.equal(ben.turnFrom, 'human');
+  // A turn the harness started, with a person's words (or anything relayed) arriving later: still the harness's.
+  const loth = chat(LOTH);
+  sessions.send(loth.info.id, '[worker update] w596 finished a turn #slow', 'system');
+  sessions.send(loth.info.id, 'go', 'human', undefined, { requestedBy: LOTH });
+  assert.equal(loth.turnFrom, 'system');
+});
+
+test('the person-turn gate (w607): a harness message injected into a person\'s turn does not take its authority; a harness-started turn gets none', async (t) => {
+  const { store, sessions, chat, call } = setup(t);
+  // Lothsahn's own turn, with a [worker update] delivered mid-turn.
+  const loth = chat(LOTH);
+  sessions.send(loth.info.id, 'Please reinstall the tools #slow', 'human', undefined, { requestedBy: LOTH });
+  sessions.send(loth.info.id, '[worker update] "w602: ..." (1ffa84cf) finished a turn', 'system');
+  const filed = await call(loth.info, 'request_work', { title: 'Reinstall the tools', brief: 'Lothsahn asks for it.' });
+  assert.equal(filed.isError, false, filed.text);
+  assert.equal([...store.work.values()].find((w) => w.title === 'Reinstall the tools')!.humanAsked, true, 'filed in his own turn, a worker update notwithstanding');
+  // Ben's orchestrator in a turn the harness started: his "go" folded into it lends it nothing.
+  const ben = chat(BEN);
+  sessions.send(ben.info.id, '[worker update] "w596: ..." (82b7ab62) finished a turn #slow', 'system');
+  sessions.send(ben.info.id, 'go', 'human', undefined, { requestedBy: BEN });
+  const relayed = await call(ben.info, 'request_work', { title: 'Delete sandbox alpha', brief: 'relayed' });
+  assert.equal(relayed.isError, false, relayed.text);
+  assert.equal([...store.work.values()].find((w) => w.title === 'Delete sandbox alpha')!.humanAsked, false, 'not asked for in a turn of his');
 });
 
 test('the dispatcher is reminded of undecided requests; a failed worker is news for it; only recent workers make people "at" a place', async (t) => {
@@ -442,4 +483,204 @@ test('message_person: a message to an orchestrator mid-turn waits for that turn,
   await until('Ben’s turn is running', () => ben.info.status === 'running');
   assert.equal((await call(chat(LOTH).info, 'message_person', { to: 'ben', text: 'The portal deploy: now or tonight?' })).isError, false);
   await until('both answered', () => store.readTranscript(ben.info.id).some((e) => e.kind === 'assistant' && e.text.includes('The portal deploy: now or tonight?')), 15_000);
+});
+
+// ---------------------------------------------------------------- w362: timers
+
+test('w362: set_timer, list_timers, update_timer, cancel_timer are each orchestrator\'s own; a person writing cancels wake_me, never a timer', async (t) => {
+  const { agents, o, chat, call, dispatcher } = setup(t);
+  const ben = chat(BEN);
+  const set = await call(ben.info, 'set_timer', { title: 'FFBox desync scan', note: 'Check FFBox for new desync PRs and tell Ben.', schedule: { every_minutes: 60 } });
+  assert.equal(set.isError, false, set.text);
+  const id = /Timer (t-[0-9a-f]{8})/.exec(set.text)![1];
+  assert.match(set.text, /every 1 h, next at /);
+  const wake = await call(ben.info, 'wake_me', { minutes: 30, note: 'check the belt fix' });
+  assert.equal(wake.isError, false, wake.text);
+  // Ben writes to his orchestrator (the remote path; the message route does the same: waker.cancel, personWrote, send).
+  await agents.askOrchestrator('How is it going?', 1, 'test', BEN);
+  assert.equal(agents.waker.pending(ben.info.id), undefined, 'wake_me: cancelled by a person writing, as before');
+  const listed = await call(ben.info, 'list_timers', {});
+  assert.match(listed.text, new RegExp(`${id} "FFBox desync scan" \\[active\\] every 1 h, next `), 'the timer is untouched');
+  // Lothsahn's orchestrator neither sees nor touches it.
+  const loth = chat(LOTH);
+  assert.match((await call(loth.info, 'list_timers', {})).text, /^No timers/);
+  const theirs = await call(loth.info, 'cancel_timer', { id });
+  assert.equal(theirs.isError, true);
+  assert.match(theirs.text, /no timer .* of yours/);
+  // Pause, change, cancel: Ben's own.
+  assert.match((await call(ben.info, 'update_timer', { id, enabled: false })).text, /paused/);
+  assert.match((await call(ben.info, 'update_timer', { id, enabled: true, schedule: { daily: '09:30', tz: 'Europe/Berlin' } })).text, /daily at 09:30 \(Europe\/Berlin\), next at /);
+  assert.match((await call(ben.info, 'cancel_timer', { id })).text, /cancelled/);
+  assert.match((await call(ben.info, 'list_timers', {})).text, /\[ended\].*\(cancelled\)/s);
+  // The dispatcher has timers of its own.
+  const ds = await call(dispatcher().info, 'set_timer', { title: 'ledger sweep', note: 'n', schedule: { every_minutes: 30 } });
+  assert.equal(ds.isError, false, ds.text);
+  assert.equal(agents.timers.list(dispatcher().info.id).length, 1);
+  assert.equal(agents.timers.list(o.personalFor(BEN).info.id).length, 1, 'still only Ben\'s own (ended) one');
+});
+
+test('w362: a timer\'s turn carries no one\'s authority: a person-only tool refuses it', async (t) => {
+  const { agents, store, dispatcher, call } = setup(t);
+  const d = dispatcher();
+  agents.timers.create(d.info.id, { title: 'cleanup', note: 'Delete sandbox alpha.', schedule: { every_minutes: 5 } }, 'ben');
+  const real = agents.timers.now;
+  agents.timers.now = () => Date.now() + 6 * 60_000;
+  agents.timers.tick();
+  agents.timers.now = real;
+  const got = store.readTranscript(d.info.id).filter((e) => e.kind === 'user' && e.from === 'system' && e.text.startsWith('[timer '));
+  assert.equal(got.length, 1, 'delivered as the harness\'s message');
+  const r = await call(d.info, 'delete_sandbox', { sandbox: 'alpha' });
+  assert.equal(r.isError, true, 'refused on a timer turn');
+  assert.match(r.text, /own words/);
+  assert.ok(store.sandboxes.get('alpha'), 'nothing deleted');
+});
+
+// ---------------------------------------------------------------- w384: idle workers
+
+test('w384: the reaper stops idle workers whose request closed, moved on, or that sat an hour, resumably; never a protected one', async (t) => {
+  const { store, sessions, agents } = setup(t);
+  const now = Date.now();
+  const make = async (id: string, over: Partial<SessionInfo> = {}) => {
+    const h = sessions.create({ kind: 'worker', title: id, permissionMode: 'bypassPermissions', options: () => ({ model: 'opus' }) });
+    Object.assign(h.info, over);
+    sessions.send(h.info.id, 'hello');
+    await until(`${id} idle`, () => h.info.status === 'idle');
+    return h;
+  };
+  const request = (id: string, status: WorkItem['status'], sessionIds: string[]) =>
+    store.putWork({ id, title: id, brief: 'x', priority: 'normal', keys: [], requestedBy: BEN, requesters: [BEN], humanAsked: true, status, createdAt: T0, updatedAt: T0, sessionIds, overlaps: [], asks: 0, log: [] });
+  const done = await make('done');
+  request('w1', 'done', [done.info.id]);
+  const handed = await make('handed');
+  const other = await make('other');
+  request('w2', 'active', [handed.info.id, other.info.id]);
+  const quiet = await make('quiet');
+  request('w3', 'active', [quiet.info.id]);
+  quiet.info.lastActivityAt = new Date(now - 61 * 60_000).toISOString();
+  const fresh = await make('fresh');
+  request('w4', 'active', [fresh.info.id]);
+  // Protected: a pending wake_me; a sandbox with uncommitted changes (mp-r2's 4b35b8c1 held uncommitted work).
+  const waking = await make('waking');
+  request('w5', 'done', [waking.info.id]);
+  agents.waker.schedule(waking.info.id, 30, 'check CI');
+  const dirty = await make('dirty', { sandboxId: 'alpha' });
+  request('w6', 'done', [dirty.info.id]);
+  const sb = store.sandboxes.get('alpha')!;
+  store.putSandbox({ ...sb, git: { branch: 'x', dirty: 2, untracked: 0, at: T0 } });
+  // other is the newest worker on w2 and idle a moment: kept.
+  const stopped = agents.reapIdle(now).sort();
+  assert.deepEqual(stopped, [done.info.id, handed.info.id, quiet.info.id].sort());
+  for (const h of [done, handed, quiet]) assert.equal(h.live, false);
+  for (const h of [fresh, other, waking, dirty]) assert.equal(h.live, true, h.info.title);
+  assert.match(agents.keepIdle(waking) ?? '', /wake_me is pending/);
+  assert.match(agents.keepIdle(dirty) ?? '', /2 uncommitted change/);
+  assert.match(store.readTranscript(done.info.id).at(-1)!.kind === 'system' ? (store.readTranscript(done.info.id).at(-1) as { text: string }).text : '', /Stopped by FF Factory while idle: its request is closed \(w1 done\)\. Its history is kept/);
+  // Resumable: a message resumes the stopped one with its history.
+  const sdk = done.info.sdkSessionId;
+  sessions.send(done.info.id, 'one more thing');
+  await until('resumed', () => done.info.status === 'idle' && done.live);
+  assert.equal(done.info.sdkSessionId === sdk || !!done.info.sdkSessionId, true);
+});
+
+
+// ---------------------------------------------------------------- w402: owners close each other's requests
+
+test("w402: an owner closes or reopens another person's request in their own turn, with a reason; logged, its person told", async (t) => {
+  const { store, dispatcher, chat, call, heard } = setup(t, { people: [{ ...BEN, role: 'owner' }, { ...LOTH, role: 'owner' }] });
+  const ben = chat(BEN);
+  const loth = chat(LOTH);
+  ben.lastFrom = 'human';
+  await call(ben.info, 'request_work', { title: 'Tidy the ledger page', brief: 'Sort the closed requests newest first.' });
+  const w = () => store.work.get('w1')!;
+  // Not in a turn Lothsahn started with his own message (a harness notice, a worker, a relayed FFBox/Discord text): refused.
+  loth.lastFrom = 'system';
+  const outside = await call(loth.info, 'update_work', { id: 'w1', close: 'done', note: 'the cleanup says it shipped' });
+  assert.match(outside.text, /only Lothsahn, in their own words in this turn, closes or reopens Ben's request w1: ask them/);
+  assert.equal(w().status, 'new');
+  loth.lastFrom = 'human';
+  // In his own turn, still only a close or a reopen, and only with a reason.
+  assert.match((await call(loth.info, 'update_work', { id: 'w1', note: 'add dark mode too' })).text, /w1 is Ben's request, not Lothsahn's: another owner may close or reopen it/);
+  assert.match((await call(loth.info, 'update_work', { id: 'w1', close: 'done', priority: 'high', note: 'x' })).text, /its priority stays its people's to change/);
+  assert.match((await call(loth.info, 'update_work', { id: 'w1', close: 'done' })).text, /say why in a note: Ben will be told who closed w1 and why/);
+  assert.equal(w().status, 'new', 'nothing changed yet');
+  const r = await call(loth.info, 'update_work', { id: 'w1', close: 'done', note: 'Ben asked me to close it: shipped in #1040.' });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /^w1 \(Ben's request\) is done: closed as done by Lothsahn\. Ben's orchestrator is told who and why\.$/);
+  assert.deepEqual([w().status, w().outcome, w().requestedBy.userId], ['done', 'Ben asked me to close it: shipped in #1040.', 'ben']);
+  assert.match(w().log.at(-1)!, /closed as done by Lothsahn \(Ben's request\), in Lothsahn's own turn: Ben asked me to close it: shipped in #1040\.$/);
+  await until("Ben's orchestrator hears who closed it and why", () => heard(ben.info.id, '[dispatch]').some((e) => /w1 "Tidy the ledger page": closed as done by Lothsahn, who asked for it in their own words \(it is your request\)\.\nBen asked me to close it/.test(e.text)));
+  // Reopened the same way; the dispatcher hears a reopen, as for the person's own.
+  const back = await call(loth.info, 'update_work', { id: 'w1', reopen: true, note: 'Closed by mistake: the sort is not in yet.' });
+  assert.match(back.text, /^w1 \(Ben's request\) is new: reopened by Lothsahn\./);
+  assert.equal(w().status, 'new');
+  assert.match(w().log.at(-1)!, /reopened by Lothsahn \(Ben's request\), in Lothsahn's own turn: Closed by mistake/);
+  await until('Ben hears the reopen', () => heard(ben.info.id, '[dispatch]').some((e) => /reopened by Lothsahn/.test(e.text)));
+  await until('the dispatcher hears the reopen', () => heard(dispatcher().info.id, '[work update]').some((e) => /w1 "Tidy the ledger page" \(new\) from Lothsahn: reopened for Ben/.test(e.text)), 5000);
+  // And Ben, an owner too, closes Lothsahn's.
+  await call(loth.info, 'request_work', { title: 'Profile the belts', brief: 'Where does the tick go?' });
+  ben.lastFrom = 'human';
+  assert.match((await call(ben.info, 'update_work', { id: 'w2', close: 'cancelled', note: 'Lothsahn dropped it this morning.' })).text, /^w2 \(Lothsahn's request\) is cancelled: cancelled by Ben\./);
+});
+
+test("w402: a member cannot close or reopen another person's request, even in their own turn", async (t) => {
+  const { store, chat, call } = setup(t);
+  const ben = chat(BEN);
+  const loth = chat(LOTH);
+  ben.lastFrom = 'human';
+  await call(ben.info, 'request_work', { title: 'Tidy the ledger page', brief: 'Sort the closed requests newest first.' });
+  loth.lastFrom = 'human';
+  const r = await call(loth.info, 'update_work', { id: 'w1', close: 'done', note: 'looks done to me' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /^ERROR: w1 is Ben's request, not Lothsahn's; only an owner closes or reopens another person's request$/);
+  assert.equal(store.work.get('w1')!.status, 'new');
+  assert.equal(store.work.get('w1')!.log.some((l) => /Lothsahn/.test(l)), false, 'nothing logged');
+});
+
+// ---------------------------------------------------------------- w496: every dispatched worker's first message is its brief
+
+test('w496: a worker started for a request gets the request as filed and its notes in its first message, at once or queued at the cap', async (t) => {
+  const { cfg, store, sessions, dispatcher, chat, call } = setup(t);
+  const ben = chat(BEN);
+  ben.lastFrom = 'human';
+  await call(ben.info, 'request_work', { title: 'Ghosts fly over the station', brief: 'Remote players float 2 m above the deck after a resync. Reproduce with the attached save.', constraints: 'No save-layout change.', related_ids: ['w445'] });
+  await call(ben.info, 'update_work', { id: 'w1', note: 'It also happens after a host migration, not only a resync: check both.' });
+  const first = (id: string) => store.readTranscript(id).find((e) => e.kind === 'user') as { text: string } | undefined;
+  const checkBrief = (text: string) => {
+    assert.match(text, /^Fix the ghosts \(the dispatcher's brief\)/, 'the dispatcher’s brief first');
+    assert.match(text, /The request as filed \(w1, added by the harness/);
+    assert.match(text, /Title: Ghosts fly over the station/);
+    assert.match(text, /Remote players float 2 m above the deck after a resync/);
+    assert.match(text, /Constraints: No save-layout change\./);
+    assert.match(text, /Related: w445/);
+    assert.match(text, /Notes since it was filed \(1\):\n- .* UTC, Ben: It also happens after a host migration, not only a resync: check both\./);
+  };
+  // The normal path: the brief is the first message.
+  const started = await call(dispatcher().info, 'start_agent', { sandbox: 'alpha', prompt: "Fix the ghosts (the dispatcher's brief).", title: 'Ghosts', work_id: 'w1' });
+  assert.equal(started.isError, false, started.text);
+  const a = /Started agent (\w+)/.exec(started.text)![1];
+  checkBrief(first(a)!.text);
+
+  // Queued at the cap (w384): the first message waits, and is still the brief when it goes, before a later nudge.
+  await call(ben.info, 'request_work', { title: 'Lag lead on the client', brief: 'The client leads the host by 3 heartbeats.' });
+  cfg.limits.maxSessions = 1;
+  sessions.send(a, '#slow keep busy', 'orchestrator');
+  store.putSandbox({ id: 'beta', name: 'beta', branch: 'sandbox/beta', base: 'origin/develop', path: path.join(cfg.sandboxRoot, 'beta'), purpose: 'unused', status: 'ready', createdAt: T0, unity: { state: 'stopped' }, sessionIds: [] });
+  const queued = await call(dispatcher().info, 'start_agent', { sandbox: 'beta', prompt: 'Find the lag lead.', title: 'Lag lead', work_id: 'w2', override_duplicate: 'another request' });
+  assert.match(queued.text, /Queued, not refused: 1 of 1 agents on this host are mid-turn/);
+  const b = /Started agent (\w+)/.exec(queued.text)![1];
+  assert.equal(first(b), undefined, 'nothing delivered yet');
+  sessions.send(b, 'Start your brief now.', 'orchestrator');
+  await until('the brief went', () => !!first(b), 20_000);
+  assert.match(first(b)!.text, /^Find the lag lead\.[\s\S]*The request as filed \(w2[\s\S]*The client leads the host by 3 heartbeats/);
+  await until('the nudge went after it', () => store.readTranscript(b).filter((e) => e.kind === 'user').length === 2, 20_000);
+  assert.match((store.readTranscript(b).filter((e) => e.kind === 'user')[1] as { text: string }).text, /Start your brief now/);
+  await until('the workers answered', () => [...sessions.sessions.values()].filter((s) => s.info.kind === 'worker').every((s) => s.info.status === 'idle'), 20_000);
+});
+
+test('w496: the request as filed: whole notes from WorkItem.notes, older ones from the log; an intake request gets only its notes', () => {
+  const base = { id: 'w9', title: 'T', brief: 'B', requesters: [BEN], log: [] as string[] };
+  assert.match(requestAsFiled({ ...base, notes: [{ at: '2026-10-06T02:30:00.000Z', by: 'Ben', text: 'x'.repeat(1500) }] }), new RegExp(`2026-10-06 02:30 UTC, Ben: ${'x'.repeat(1500)}$`));
+  assert.match(requestAsFiled({ ...base, log: ['01:02 filed by Ben', '01:05 Ben: priority normal → high; note: use the m5 save'] }), /- 01:05, Ben: use the m5 save$/);
+  assert.equal(requestAsFiled({ ...base, source: { kind: 'discord-bug' } as never }), '', 'an intake request without notes: its text is in workerRules');
+  assert.match(requestAsFiled({ ...base, source: { kind: 'discord-bug' } as never, notes: [{ at: '2026-10-06T02:30:00.000Z', by: 'Lothsahn', text: 'Yes, alternate evenly.' }] }), /Notes since it was filed \(1\):\n- .*Lothsahn: Yes, alternate evenly\.$/);
 });

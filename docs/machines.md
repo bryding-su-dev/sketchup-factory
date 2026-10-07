@@ -25,6 +25,10 @@ OpenSSH Server: its owner's checklist is in [Setting up a Windows PC](#setting-u
 
 The portal can listen on `127.0.0.1` only. The Macs reach it through its public URL, not a tailnet IP.
 
+Files people attach to messages reach a machine's agents through its daemon, which fetches each one from the portal
+with its machine token into `Inbox/` of the agent's working folder before the message goes on (protocol 7,
+[attachments.md](attachments.md#machines)).
+
 ## Design: a daemon that connects out
 
 Each Mac runs `machine/daemon.ts` as a **LaunchAgent** (`com.fffactory.daemon`, in the user's GUI
@@ -94,7 +98,10 @@ before redeploying by hand.
   orchestrator's and this host's workers': [accounts.md](accounts.md).
 - **Limits.** Machine agents run on the Mac, so they do not count toward this host's
   `limits.maxSessions`; each machine has its own limit for its main clone and standing agents (`max_agents`,
-  default 3), and each of its sandboxes its own (`max_agents_per_sandbox`, below).
+  default 3), and each of its sandboxes its own (`max_agents_per_sandbox`, below). Like the host's, they count agents
+  mid-turn only, and a message that finds them full waits in the portal's queue instead of being refused; the daemon's
+  own start check counts the same way, and idle finished workers are stopped by the portal's reaper
+  ([orchestrators.md](orchestrators.md#agent-limits-and-idle-workers), w384).
 - **Awake.** While any agent process is live the daemon holds `caffeinate -i`.
 - **Clean-up.** The daemon cleans its machine's disk by itself (the continuous clean-up,
   [self-recovery.md](self-recovery.md#5-continuous-clean-up)): a pass every hour, every 15 minutes while
@@ -168,9 +175,10 @@ redeploy of outdated daemons updates it.
 it, with the protocol number and the tools it can serve. A daemon from another commit or protocol is
 outdated (`MachineManager.outdated`): after an app update that is every Mac. The portal redeploys an
 outdated daemon by itself as soon as no agent runs there (checked on its hello and every 30 s, at most
-every 10 minutes per machine) and tells the orchestrator. Meanwhile a new agent there is refused with
-"<id>'s daemon is outdated (...); redeploying it now. Try again in a few minutes." Agents already
-running carry on. After an app update, agents on a Mac are resumed only once its daemon is connected and
+every 10 minutes per machine) and tells the orchestrator. Meanwhile a plain message that would start a new agent there
+is refused with "<id>'s daemon is outdated (...); redeploying it now. Try again in a few minutes.", but a worker's
+first prompt from `start_agent` (its brief) waits in the send queue and goes as soon as the daemon is current (w496,
+[orchestrators.md](orchestrators.md#agent-limits-and-idle-workers)). Agents already running carry on. After an app update, agents on a Mac are resumed only once its daemon is connected and
 current (`whenCurrent`, up to 12 minutes); the orchestrator gets a `[machines]` line saying which ones
 resumed. The daemon also leaves out any MCP tool its own code does not know, so a newer portal cannot
 crash an older daemon's launch.
@@ -348,7 +356,7 @@ change applies on the next reconnect; omitted on a redeploy: kept):
 |---|---|---|
 | `sandbox_root` | Absolute folder for the sandboxes, e.g. `D:\work\ffsb`; unset: no sandboxes. Moving it is refused while sandboxes exist. | none |
 | `max_sandboxes` | Sandboxes that may exist at once | 3 |
-| `max_agents_per_sandbox` | Agents that may run at once in one sandbox (apart from `max_agents`, the main clone's) | 2 |
+| `max_agents_per_sandbox` | Agents that may be mid-turn at once in one sandbox (apart from `max_agents`, the main clone's); idle ones take no slot, and a message past it is queued | 2 |
 | `max_unity` | Sandbox editors that may run at once (the main clone's editor is not counted) | 2 |
 | `disk_warn_gb` | Below this many GB free on the sandbox volume: no new sandboxes, no new sandbox editors | 50 |
 | `disk_critical_gb` | Below this: idle sandbox editors stop, and agents mid-turn in sandboxes are asked to commit, push and end their turn | 20 |
@@ -367,7 +375,10 @@ sandbox agents in all), `max_unity: 2`.
   (stops its agents and editor, removes the Library, the worktree and the folder; the branch stays),
   `unity {sandbox: "lothdesktop/sb1", action}` (status, start, stop, restart, log), `start_agent {sandbox:
   "lothdesktop/sb1", prompt, ...}`, `switch_branch {sandbox: "lothdesktop/sb1", branch}` (refused while its editor
-  runs: stop it first, or Unity stops on "The open scene(s) have been modified externally").
+  runs: stop it first, or Unity stops on "The open scene(s) have been modified externally"; and while another agent
+  in it is mid-turn, named by title. The portal checks, then the daemon again with what it runs (`othersMidTurn` in
+  `server/sessions.ts`); neither counts the worker calling it, nor a "running" left by an agent whose process is gone,
+  which the portal clears, w422).
 - `list_sandboxes` shows this host's sandboxes and then each machine's, grouped, with each group's limits and free
   count, one line per sandbox (a **FREE** flag when it is ready, labelled unused and has no live agent) and only
   its live agents. An offline machine's sandboxes show as last reported.

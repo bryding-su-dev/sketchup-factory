@@ -161,7 +161,10 @@ const MEMORY_BACKUPS = 3;
 
 export const memoryBackupRoot = (root: string) => `${root}.backup`;
 
-/** Every file under `dir`, as paths relative to it, sorted. */
+/**
+ * Every file under `dir`, as paths relative to it, sorted. Not a `.git` folder: when the root is a repository
+ * (server/memoryGit.ts) its history is git's to keep, and copying thousands of objects every pass would be the backup.
+ */
 function filesUnder(dir: string, rel = ''): string[] {
   let entries: fs.Dirent[];
   try {
@@ -171,6 +174,7 @@ function filesUnder(dir: string, rel = ''): string[] {
   }
   const out: string[] = [];
   for (const e of entries) {
+    if (e.name === '.git') continue;
     const r = rel ? path.join(rel, e.name) : e.name;
     if (e.isDirectory()) out.push(...filesUnder(dir, r));
     else if (e.isFile()) out.push(r);

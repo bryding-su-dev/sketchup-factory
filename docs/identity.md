@@ -13,7 +13,8 @@ worker then runs on that person's Claude account when FF Factory holds one for t
   account. The display name is what people and prompts see ("Lothsahn").
 - Roles: `owner` (Ben, who runs the portal) and `member` (a teammate). The first login is the owner and
   later ones are members. A `users.json` written before roles existed reads every login as the owner.
-  **Roles are recorded, not enforced yet.** The per-role limits (no M5 for a member, no `add_machine`,
+  **Roles are recorded, and enforced in one place so far:** an owner may close or reopen another person's request
+  when they ask for it in their own turn (w402; docs/orchestrators.md, "Owners close each other's requests"). The other per-role limits (no M5 for a member, no `add_machine`,
   and so on) are phase 6 of the FFBox design, section 7.
 - Manage logins on the host:
 
@@ -49,6 +50,23 @@ worker then runs on that person's Claude account when FF Factory holds one for t
 Each person writes only to their own orchestrator, and its tools act for them. The model still reads each message
 with a first line `[from <display name>]` (`server/sessions.ts`, `promptText`); the transcript keeps the text without
 it. A worker hears an orchestrator's messages as `[from the orchestrator, for <name>]`.
+
+### Every message names its sender (w389)
+
+Every message from a person, or from an orchestrator on a person's behalf, reaches the model with a first line naming
+whose it is, in every kind of session: `[from <name>]` when a person typed it (an orchestrator's chat, a worker's chat
+in the dashboard, a standing agent's), `[from the orchestrator, for <name>]` when an orchestrator sent it. When the
+portal does not know the person, the line says so (`[from a person the portal did not name]`, `[from the orchestrator,
+for no named person]`); a message is never left bare. The line survives the send queue (it is added as the message is
+delivered) and a restart (the resume's list of unanswered messages says `(from <name>)`; `server/restart.ts`,
+`senderOf`). Harness messages carry their own tags (`[wake_me]`, `[worker update]`, …) and no person.
+
+Why: on 2026-10-04 Lothsahn typed "Undo the release hold" in a worker's chat. A person's message to a worker then
+arrived bare, and the worker's prompt said "The user (the person who runs this portal) is Ben", so it wrote "Release hold
+lifted (Ben, 18:38 UTC)" into a PR description: a release decision Ben never made. Agents' prompts now name the owner
+only as the one who runs the portal (`server/config.ts`, `ownerLine`), and say to attribute an approval, a hold, an
+override or a decision only to the person a message names, writing "unconfirmed" and asking when it names nobody
+(`SENDER_RULE`).
 
 The dispatcher's tools (`start_agent`, `message_agent`, `run_standing_agent_now`, `approve_delegation`) act for the
 person who filed the request they serve (`work_id`; `server/orchestrators.ts`, `dispatcherActor`). Without a
