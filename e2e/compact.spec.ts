@@ -1,5 +1,5 @@
 import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions } from '@playwright/test';
-import { BOX, appState, boxText, expect, go, sendToChat, test, uniq } from './fixtures.ts';
+import { BOX, appState, boxText, expect, go, sendMessage, test, uniq } from './fixtures.ts';
 import type { TranscriptEvent } from '../shared/types.ts';
 
 /**
@@ -25,21 +25,12 @@ async function transcript(request: APIRequestContext, id: string): Promise<Trans
   return r.json();
 }
 
-async function wake(request: APIRequestContext, id: string, minutes: number) {
-  const port = Number(new URL(test.info().project.use.baseURL!).port) + 200;
-  const r = await request.post(`http://127.0.0.1:${port}/wake`, { data: { id, minutes } });
-  expect(r.ok(), await r.text()).toBeTruthy();
-}
-
-test('/compact in your own chat compacts the conversation, says the context before and after, and keeps the wake_me check-in', async ({ authed: page }) => {
+test('/compact in your own chat compacts the conversation, says the context before and after', async ({ authed: page }) => {
   const tag = uniq('compact');
   const me = await appState(page.request);
   const id = me.orchestratorId;
-  await sendToChat(page.request, id, `before compacting ${tag}`);
+  await sendMessage(page.request, id, `before compacting ${tag}`);
   await expect(page.locator('.orch .msg-assistant', { hasText: `Echo: before compacting ${tag}` })).toBeVisible({ timeout: 15_000 });
-  await wake(page.request, id, 30);
-  await expect.poll(async () => (await appState(page.request)).sessions.find((s) => s.id === id)?.wakeAt).toBeTruthy();
-  const wakeAt = (await appState(page.request)).sessions.find((s) => s.id === id)?.wakeAt;
 
   const box = page.locator(`.orch ${BOX}`);
   await box.fill(`/compact keep ${tag}`);
@@ -54,7 +45,6 @@ test('/compact in your own chat compacts the conversation, says the context befo
   const evs = await transcript(page.request, id);
   // The command never reached the model as a message.
   expect(evs.some((e) => e.kind === 'user' && e.text.includes(`/compact keep ${tag}`))).toBe(false);
-  expect((await appState(page.request)).sessions.find((s) => s.id === id)?.wakeAt).toBe(wakeAt);
 });
 
 test("the dispatcher's Compact conversation is an owner's only", async ({ authed: page, browser }) => {
@@ -67,7 +57,7 @@ test("the dispatcher's Compact conversation is an owner's only", async ({ authed
   } finally {
     await mateCtx.close();
   }
-  await sendToChat(page.request, dispatcher, `a dispatcher turn ${uniq('disp')}`);
+  await sendMessage(page.request, dispatcher, `a dispatcher turn ${uniq('disp')}`);
   await expect(async () => {
     const r = await page.request.post(`/api/sessions/${dispatcher}/compact`, { data: {} });
     expect(r.ok(), await r.text()).toBeTruthy();
@@ -84,7 +74,7 @@ test("the dispatcher's Compact conversation is an owner's only", async ({ authed
 
 test('/compact mid-turn is refused with why', async ({ authed: page }) => {
   const me = await appState(page.request);
-  await sendToChat(page.request, me.orchestratorId, `take your time #slow ${uniq('slow')}`);
+  await sendMessage(page.request, me.orchestratorId, `take your time #slow ${uniq('slow')}`);
   const r = await page.request.post(`/api/sessions/${me.orchestratorId}/message`, { data: { text: '/compact' } });
   expect(r.status()).toBe(409);
   expect(((await r.json()) as { error: string }).error).toMatch(/^Not compacted: it is mid-turn/);

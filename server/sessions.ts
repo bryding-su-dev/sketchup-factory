@@ -295,8 +295,6 @@ export class AgentSession implements SessionHandle {
     if (this.compacting) throw new Error('it is compacting already');
     if (isMidTurn(this.info)) throw new Error(`it is mid-turn (${this.info.status.replace('_', ' ')}); /compact runs between turns, so send it again once this turn has ended, or stop the turn first`);
     if (!this.info.sdkSessionId) throw new Error('there is no conversation to compact yet');
-    const no = this.q ? undefined : dryRunStartRefusal(this.info, 'human');
-    if (no) throw new Error(`not started: ${no}`);
     const focus = instructions.replace(/\s+/g, ' ').trim();
     if (focus.length > COMPACT_FOCUS_CHARS) throw new Error(`the focus is ${focus.length} characters; keep it to ${COMPACT_FOCUS_CHARS}`);
     if (!this.q) this.start();
