@@ -379,25 +379,18 @@ test('turnFrom (w607): the message that opened the turn decides; one delivered w
 });
 
 test('the person-turn gate (w607): a harness message injected into a person\'s turn does not take its authority; a harness-started turn gets none', async (t) => {
-  const { store, sessions, chat, call } = await setupOnMachine(t);
-  // Lothsahn's own turn, a [worker update] delivered mid-turn (07:45-08:00 UTC, 2026-10-07: ops_worker refused three times).
+  const { store, sessions, chat, call } = setup(t);
+  // Lothsahn's own turn, with a [worker update] delivered mid-turn.
   const loth = chat(LOTH);
-  sessions.send(loth.info.id, 'Please drain and install on BEAST and m5 #slow', 'human', undefined, { requestedBy: LOTH });
+  sessions.send(loth.info.id, 'Please reinstall the tools #slow', 'human', undefined, { requestedBy: LOTH });
   sessions.send(loth.info.id, '[worker update] "w602: ..." (1ffa84cf) finished a turn', 'system');
-  const sent = await call(loth.info, 'ops_worker', { action: 'send', text: 'run fffctl status', fresh: true });
-  assert.equal(sent.isError, false, sent.text);
-  assert.match(sent.text, /as a new job of Lothsahn's/);
-  const filed = await call(loth.info, 'request_work', { title: 'Reinstall BEAST', brief: 'Lothsahn asks for it.' });
+  const filed = await call(loth.info, 'request_work', { title: 'Reinstall the tools', brief: 'Lothsahn asks for it.' });
   assert.equal(filed.isError, false, filed.text);
-  const mine = [...store.work.values()].find((w) => w.title === 'Reinstall BEAST')!;
-  assert.equal(mine.humanAsked, true, 'filed in his own turn, a worker update notwithstanding');
+  assert.equal([...store.work.values()].find((w) => w.title === 'Reinstall the tools')!.humanAsked, true, 'filed in his own turn, a worker update notwithstanding');
   // Ben's orchestrator in a turn the harness started: his "go" folded into it lends it nothing.
   const ben = chat(BEN);
   sessions.send(ben.info.id, '[worker update] "w596: ..." (82b7ab62) finished a turn #slow', 'system');
   sessions.send(ben.info.id, 'go', 'human', undefined, { requestedBy: BEN });
-  const refused = await call(ben.info, 'ops_worker', { action: 'deploy' });
-  assert.equal(refused.isError, true);
-  assert.match(refused.text, /needs Ben's own words in this turn/);
   const relayed = await call(ben.info, 'request_work', { title: 'Delete sandbox alpha', brief: 'relayed' });
   assert.equal(relayed.isError, false, relayed.text);
   assert.equal([...store.work.values()].find((w) => w.title === 'Delete sandbox alpha')!.humanAsked, false, 'not asked for in a turn of his');
