@@ -665,11 +665,8 @@ export class Orchestrators {
     if (problem) throw new Error(problem);
     this.spend(chat.info.id, by);
     const verb = input.reopen ? 'reopened' : input.close === 'done' ? 'closed as done' : 'cancelled';
-    // Like a person's own close or reopen, it is final: no automatic-close mark survives it (w370).
-    settleByHand(w);
     if (input.reopen) {
       w.status = 'new';
-      w.stalled = undefined;
     } else {
       w.status = input.close!;
       w.outcome = clip(note, 300);
