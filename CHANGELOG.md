@@ -15,6 +15,13 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
   (the `FFSB` cookie, `FFSB_CONFIG`, `ffsb.*` localStorage keys, the `ffsb-*` helper tasks) are unchanged.
 
 ### Added
+- Ported from upstream Final Factory (ff-factory, after the fork point `268e18c`): `/compact` in an orchestrator chat
+  and automatic compaction between turns (config `orchestrator.compactAtTokens`, default 200,000, and
+  `orchestrator.compactAtTurnUsd`, default 1), orchestrator timers, file attachments on chat messages (also from
+  Android's camera and photos), a request's brief as filed going with every worker, idle-worker reaping and queuing at
+  the agent limit, the sender named on every message, owners closing each other's requests, the person-turn rule,
+  open tabs reloading a new web UI, versioned orchestrator memory, and `claudeAiConnectors` per role (orchestrators get
+  no claude.ai connectors by default). See docs/orchestrators.md, docs/attachments.md and docs/accounts.md.
 - `project` config: the project's name, description, how finished work lands (`push` to the integration branch, or
   `pull-request` into it), whether the Discord/FFBox/Max rules apply (`community`) and two Markdown brief files appended to the workers' and orchestrators' prompts, so another
   project (here: the SketchUp Assistant frontend, `project/sketchup/`) needs no code change. Final Factory's own text
