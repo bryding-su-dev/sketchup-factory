@@ -68,16 +68,25 @@ test('store: saves never lose to a steady stream of updates (7,000 sessions)', a
   for (let i = 0; i < 7000; i++) s.sessions.set(`z${i}`, session(`z${i}`, `agent ${i}`));
   const t0 = Date.now();
   let n = 0;
-  // Busy agents: a session update every 30 ms for 2.5 s. The old debounce restarted its 200 ms timer on each one.
-  while (Date.now() - t0 < 2500) {
+  const file = path.join(dir, 'state.json');
+  const look = () => {
+    if (!fs.existsSync(file)) return { saved: { sessions: [] as SessionInfo[] }, behind: Infinity };
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as { sessions: SessionInfo[] };
+    const title = saved.sessions.find((x) => x.id === 'busy')?.title ?? '';
+    return { saved, behind: n - Number(title.split(' ')[1]) };
+  };
+  // Busy agents: a session update every 30 ms for 2.5 s, and on while state.json is 60 or more updates behind (at most
+  // 20 s). The old debounce restarted its 200 ms timer on each one, so nothing was written while they went on. A save
+  // starts every second, but writing and fsyncing these 7,000 sessions can take more than a second on a loaded Windows
+  // runner (w636: 60 behind at 2.5 s on CI), so the stream waits for the next save instead of ending at a fixed time.
+  while (Date.now() - t0 < 2500 || (look().behind >= 60 && Date.now() - t0 < 20_000)) {
     s.putSession({ ...session('busy', `update ${++n}`) });
     await new Promise((r) => setTimeout(r, 30));
   }
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')) as { sessions: SessionInfo[] };
-  const title = saved.sessions.find((x) => x.id === 'busy')?.title ?? '';
-  const behind = n - Number(title.split(' ')[1]);
+  const { saved, behind } = look();
   assert.equal(saved.sessions.length, 7001);
   assert.ok(behind < 60, `state.json is at most ~1.5 s behind while busy (${behind} updates behind)`);
+  assert.ok(Date.now() - t0 < 10_000, `and gets there within 10 s of busy updates (${Date.now() - t0} ms), with a save every second`);
   await s.saved();
   s.flush();
 });

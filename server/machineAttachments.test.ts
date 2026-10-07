@@ -36,9 +36,9 @@ const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const refOf = (data: Buffer, id = 'att_aaaaaaaaaaaa', name = 'Battleship.zip'): AttachmentRef => ({ id, name, size: data.length, sha256: sha(data), kind: 'zip', mediaType: 'application/zip' });
 
 /** A portal stand-in that serves one file at /machine/attachments/<id> with Range, as index.ts does, and can misbehave. */
-async function filePortal(t: { after: (fn: () => void) => void }, data: Buffer, opts: { token?: string; cutFirstAt?: number; corrupt?: boolean } = {}) {
+async function filePortal(t: { after: (fn: () => void) => void }, data: Buffer, opts: { token?: string; cutFirst?: { at: number; part: string }; corrupt?: boolean } = {}) {
   const seen: { range?: string; auth?: string }[] = [];
-  let cut = opts.cutFirstAt;
+  let cut = opts.cutFirst;
   const server = http.createServer((req, res) => {
     seen.push({ range: req.headers.range, auth: req.headers.authorization });
     if (req.headers.authorization !== `Bearer ${opts.token ?? 'tok'}`) {
@@ -51,10 +51,14 @@ async function filePortal(t: { after: (fn: () => void) => void }, data: Buffer, 
     if (opts.corrupt) body = Buffer.from(body.map((b) => b ^ 0xff));
     res.writeHead(range ? 206 : 200, { 'content-length': String(body.length), ...(range ? { 'content-range': `bytes ${start}-${end}/${data.length}` } : {}) });
     if (cut !== undefined) {
-      // The link drops part way through the first download.
-      res.write(body.subarray(0, cut));
+      // The link drops part way through the first download, once what came is in the .part file: bytes still on their
+      // way when the link drops are lost, and on a slow runner 30 ms was not always enough to save any (w636).
+      const { at, part } = cut;
+      res.write(body.subarray(0, at));
       cut = undefined;
-      setTimeout(() => res.destroy(), 30);
+      const end = Date.now() + 10_000;
+      const drop = () => ((fs.statSync(part, { throwIfNoEntry: false })?.size ?? 0) >= at || Date.now() > end ? res.destroy() : setTimeout(drop, 5));
+      drop();
       return;
     }
     res.end(body);
@@ -72,8 +76,8 @@ const tmp = (t: { after: (fn: () => void) => void }) => {
 
 test('daemon fetch: a download cut off resumes with a Range request and arrives whole', async (t) => {
   const data = randomBytes(200_000);
-  const { url, seen } = await filePortal(t, data, { cutFirstAt: 70_000 });
   const dir = tmp(t);
+  const { url, seen } = await filePortal(t, data, { cutFirst: { at: 70_000, part: path.join(dir, 'Inbox', 'att_aaaaaaaaaaaa-Battleship.zip.part') } });
   const [got] = await fetchAttachments(url, 'tok', dir, [refOf(data)], { backoffMs: 10 });
   assert.equal(got.error, undefined, got.error ?? "");
   assert.equal(got.path, path.join(dir, 'Inbox', 'att_aaaaaaaaaaaa-Battleship.zip'));

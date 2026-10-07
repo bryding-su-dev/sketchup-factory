@@ -74,6 +74,11 @@ function macWithDialogs() {
     },
     sceneFilesClean: async () => world.clean,
     nodePath: () => '/usr/local/bin/node',
+    // Never the real Mac's session, Accessibility, TCC database or prompt: a locked screen there would pause the watch.
+    sessionState: async () => ({}),
+    axTrusted: async () => false,
+    tccEntry: async () => undefined,
+    axPrompt: async () => undefined,
   });
   return { world, w, reports };
 }
@@ -172,6 +177,8 @@ test('mac dialog watch: a locked screen pauses it (one notice a day), a permissi
     nodePath: () => '/usr/local/bin/node',
     sessionState: async () => ({ locked: world.locked }),
     axTrusted: async () => world.trusted,
+    tccEntry: async () => undefined,
+    axPrompt: async () => undefined,
   });
   const tick = async (min = 1) => {
     await w.tick();
