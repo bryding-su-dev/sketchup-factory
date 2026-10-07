@@ -128,9 +128,11 @@ export interface SessionHandle {
   readonly live: boolean;
   lastFrom: 'human' | 'orchestrator' | 'system';
   /**
-   * Who the current turn is answering: 'human' only when every message it has not answered yet is a person's (the CLI
-   * folds messages sent during a turn into it, so harness text can share a person's turn); else the first sender that
-   * is not a person. Without any, the last sender. What decides whether a turn is a person's (docs/orchestrators.md).
+   * Who started the current turn (w607): the sender of the message that opened it, or, once the CLI moves on to a
+   * message that waited behind it, that message's sender. A message delivered while the turn runs (a [worker update],
+   * a [dispatch], a timer) never changes it: it neither demotes a turn a person started nor lends a person's authority
+   * to a turn the harness started. Without a turn, the last sender. What decides whether a turn is a person's
+   * (docs/orchestrators.md, "Loops, limits and safety").
    */
   readonly turnFrom?: 'human' | 'orchestrator' | 'system';
   /**
@@ -258,6 +260,8 @@ export class AgentSession implements SessionHandle {
   private firstResult = true;
   /** Messages sent but not yet answered by a finished turn, by uuid: what a restart would cut off. */
   private readonly outstanding = new Map<string, Unanswered>();
+  /** The message the current turn answers first (w607): its sender is turnFrom. Cleared when the turn ends. */
+  private turnStarter?: { uuid: string; from: 'human' | 'orchestrator' | 'system' };
   /** Stopped or interrupted by a person or the orchestrator since its last message: a restart leaves it alone. */
   private stoppedOnPurpose = false;
   private graceTimer?: NodeJS.Timeout;
@@ -290,9 +294,13 @@ export class AgentSession implements SessionHandle {
   }
 
   get turnFrom(): 'human' | 'orchestrator' | 'system' {
-    const froms = [...this.outstanding.values()].map((u) => u.from);
-    if (!froms.length) return this.lastFrom;
-    return froms.find((f) => f !== 'human') ?? 'human';
+    return this.turnStarter?.from ?? this.lastFrom;
+  }
+
+  /** The turn is over: nothing is waiting for an answer, and the next message starts a turn of its own. */
+  private clearOutstanding() {
+    this.outstanding.clear();
+    this.turnStarter = undefined;
   }
 
   private update(patch: Partial<SessionInfo>) {
@@ -306,6 +314,8 @@ export class AgentSession implements SessionHandle {
     // harness's own messages carry the person they are about, but do not change that.
     if (requestedBy && from !== 'system') this.info.lastRequestedBy = requestedBy;
     if (!this.q) this.start();
+    // The message that opens a turn decides whose it is (w607); one sent while it runs joins it without changing that.
+    if (!this.info.turnOpenSince || !this.turnStarter) this.turnStarter = { uuid, from };
     this.lastFrom = from;
     this.stoppedOnPurpose = false;
     clearTimeout(this.graceTimer);
@@ -442,7 +452,7 @@ export class AgentSession implements SessionHandle {
           else if (m.state === 'requires_action') this.update({ status: 'waiting_permission' });
           else if (m.state === 'idle') {
             // Idle means the input queue is drained: everything sent has been answered.
-            this.outstanding.clear();
+            this.clearOutstanding();
             this.update({ status: this.pending.size ? 'waiting_permission' : 'idle', turnOpenSince: undefined });
             this.store.flush?.();
             this.emitTurnEnd(this.lastTurnText);
@@ -540,6 +550,12 @@ export class AgentSession implements SessionHandle {
         for (const u of answered) this.compactUuids.delete(u);
         const text = m.subtype === 'success' ? m.result : `stopped: ${m.subtype}`;
         for (const u of answered) this.outstanding.delete(u);
+        // The CLI goes on with a message that waited behind the one that started this turn: the next turn is that
+        // message's (a [worker update] queued behind a person's message starts a turn of the harness's, w607).
+        if (this.turnStarter && answered.includes(this.turnStarter.uuid)) {
+          const next = this.outstanding.entries().next();
+          if (!next.done) this.turnStarter = { uuid: next.value[0], from: next.value[1].from };
+        }
         this.store.append(id, {
           kind: 'result',
           ok: m.subtype === 'success' && !m.is_error,
@@ -556,7 +572,7 @@ export class AgentSession implements SessionHandle {
         if (!this.stateEvents) {
           // Older CLI without state events: best effort from the result itself.
           const queued = (m as { queued_turn_count?: number }).queued_turn_count ?? 0;
-          if (!queued) this.outstanding.clear();
+          if (!queued) this.clearOutstanding();
           this.update({ status: queued > 0 ? 'running' : this.pending.size ? 'waiting_permission' : 'idle', ...(queued > 0 ? {} : { turnOpenSince: undefined }) });
           this.emitTurnEnd(text);
         }
@@ -631,7 +647,7 @@ export class AgentSession implements SessionHandle {
     this.denyAllPending('interrupted');
     await this.q.interrupt();
     this.compactFailed('it was interrupted');
-    this.outstanding.clear();
+    this.clearOutstanding();
     this.stoppedOnPurpose = true;
     this.store.append(this.info.id, { kind: 'system', text: 'Interrupted.' });
     this.update({ status: 'idle', turnOpenSince: undefined });
@@ -668,7 +684,7 @@ export class AgentSession implements SessionHandle {
   stop(onPurpose = true) {
     if (onPurpose) {
       this.stoppedOnPurpose = true;
-      this.outstanding.clear();
+      this.clearOutstanding();
       this.clearRestartMarks();
     }
     if (!this.q) return;
@@ -697,7 +713,7 @@ export class AgentSession implements SessionHandle {
     this.graceTimer = setTimeout(() => {
       if (this.q) return;
       // It ended on its own: what it had not answered is for a person to pick up, not for a later restart.
-      this.outstanding.clear();
+      this.clearOutstanding();
       this.clearRestartMarks();
     }, restartMarks.graceMs);
     this.graceTimer.unref?.();

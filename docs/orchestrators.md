@@ -204,7 +204,7 @@ A timer is a standing job (`server/timers.ts`):
   one every 15 minutes all day: messages are turns, which is what costs tokens, and coalescing means one message per
   turn whatever is due. Past the budget, fires wait, coalesced, until a message fits the window, and that message says
   so. A runaway timer costs at most 96 short turns a day. `TIMER_LIMITS` in `server/timers.ts`.
-- **No authority.** The message is `system`, so the turn is not a person's (`turnFrom`): the dispatcher's destructive
+- **No authority.** The message is `system`, so a turn it starts is not a person's (`turnFrom`): the dispatcher's destructive
   and admin tools refuse it, as do approvals, and a personal orchestrator's per-message budgets do not reset.
 - **Who sees them.** Only the owning orchestrator (its tools take only its own ids) and, in the UI, its person: the
   Timers button in your chat's header, and the dispatcher's for owners (`GET /api/timers/<orchestrator id>`, `POST
@@ -386,10 +386,26 @@ or not, takes no slot. Orchestrators never count. The Unity editor limits are un
 - The dispatcher's destructive and admin tools (`delete_sandbox`, `set_app_config`, `request_app_update`,
   `republish_public`, `add_machine`, `remove_machine`, `create_standing_agent`, `update_standing_agent`,
   `delete_standing_agent`, `approve_delegation`; `server/belts.ts`) run only for a request its person filed or last
-  changed in a turn of their own (`humanAsked`), or in a turn the owner started in the dispatcher's chat. A turn counts as
-  a person's only when every message it answers is theirs: the CLI folds messages sent during a turn into it. Request
+  changed in a turn of their own (`humanAsked`), or in a turn the owner started in the dispatcher's chat. Request
   text is written by a model that may be relaying injected text, so its "the user asked" is not enough. Recovery tools
   (`host_recovery`, `machine_daemon`) stay free.
+- **Whose turn it is** (`SessionHandle.turnFrom`, w607) is decided by the message that opened it: a person's own message
+  makes it theirs; a harness message (a `[worker update]`, `[dispatch]`, `[ledger]`, a timer, a check-in, a relayed
+  FFBox or Discord text, another person's `message_person`) makes it the harness's. A message delivered while the turn
+  runs joins it (the CLI folds it in) and changes nothing either way: a `[worker update]` arriving in the middle of
+  Lothsahn's "Please drain and install on BEAST and m5" does not demote his turn, and his "go" arriving in the middle of
+  a turn a `[worker update]` started lends that turn no authority. When the CLI answers the opening message and then
+  takes up one that waited behind it, the next turn is that message's. Before w607 any harness message among those
+  not yet answered made the turn the harness's, and on 2026-10-07 (07:45-08:00 UTC) `an operations tool refused a person's own
+  request three times because a worker's report arrived mid-turn. Every gate reads this one value:
+  - `ops_worker` `send` opening a job and `deploy` ([ops-worker.md](ops-worker.md));
+  - `approve_delegation` (a personal orchestrator's);
+  - `update_work` approve and decline of an intake request, and close and reopen of another person's request;
+  - `humanAsked` on `request_work` and `update_work`, which the dispatcher's `USER_ASKED_TOOLS` above need
+    (`<request> was last filed or changed outside a turn of <person>'s`);
+  - the dispatcher's own turn (`dispatcherHeardPerson`): `USER_ASKED_TOOLS` without a `work_id`, owner-only
+    `set_app_config` keys, and `for_user` attribution;
+  - memory writes (`memoryGuard`, [Memory](#memory)).
 - Only its person writes to a personal orchestrator, and only an owner to the dispatcher (HTTP 403 otherwise). This
   covers messages, interrupts, permission answers and the permission mode.
 
