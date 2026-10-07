@@ -3,7 +3,7 @@ import type { AppState, IntakeSummary, WorkItem, WorkSource } from '../../../sha
 import { api } from '../api';
 import { isMine, ledgerOrder } from '../../../shared/workOrder';
 import { sessionRoute } from '../attention';
-import { attempt, reloadTranscript, sessionsByIds } from '../store';
+import { attempt, reloadTranscript, sessionsByIds, toast } from '../store';
 import { contextGlance, dispatcherGlance, fmtCost, fmtRelative, isBusy, isOpenWork, navigate, useNow, workLabel, workTone } from '../util';
 import { Markdown } from './Markdown';
 import { SessionView } from './SessionView';
