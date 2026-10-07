@@ -84,3 +84,14 @@ test('machine agents: the launch spec carries the Artifact env through to the SD
     assert.equal(buildOptions(spec, {}, {}).env?.CLAUDE_CODE_ARTIFACT, '1');
   }
 });
+
+test('claudeAiConnectors per role: workers off keeps strict MCP config; orchestrators load none unless turned on', (t) => {
+  const off = harness(t, { claudeAiConnectors: { workers: false } } as Partial<Config>);
+  const w = off.agents.workerOptions(off.info());
+  assert.equal(w.strictMcpConfig, true);
+  assert.equal(w.settings, undefined);
+  const orch = (h: ReturnType<typeof harness>) => h.agents.orchestratorOptions(h.info({ kind: 'orchestrator', sandboxId: undefined }));
+  assert.equal((orch(off).settings as { disableClaudeAiConnectors?: boolean }).disableClaudeAiConnectors, true, 'off by default');
+  const on = harness(t, { claudeAiConnectors: { orchestrator: true } } as Partial<Config>);
+  assert.equal((orch(on).settings as { disableClaudeAiConnectors?: boolean }).disableClaudeAiConnectors, undefined);
+});

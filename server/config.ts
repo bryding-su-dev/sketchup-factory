@@ -194,6 +194,12 @@ export interface Config {
    */
   claudeAccounts?: Partial<Record<HostRole, ClaudeAccount>>;
   /**
+   * Whether each role's agents get the claude.ai connectors of the Claude account they run on: Gmail, Google Drive,
+   * Google Calendar, Claude Docs and any other connected on claude.ai. Default: off for `orchestrator`, on for `workers`
+   * (which then load only worker.claudeAiConnectors) and `standing` (claudeAiConnectorsFor). docs/accounts.md.
+   */
+  claudeAiConnectors?: Partial<Record<HostRole, boolean>>;
+  /**
    * Providers (docs/ffbox-integration.md): FFBox, whose connector dials out to /provider. `enabled` (default
    * false) lets it connect; `tokenSha256` is the SHA-256 of its connector token (ffpv1_…), set with
    * `node server/providerToken.ts` or set_app_config providers.ffbox.token; the token itself is never kept.
@@ -612,6 +618,7 @@ export function loadConfig(): Config {
     if (cfg.project[key]) cfg.project[key] = path.resolve(ROOT, cfg.project[key]!);
   }
   checkConnectorConfig(cfg);
+  checkRoleConnectorConfig(cfg);
   cfg.dataDir = path.resolve(ROOT, cfg.dataDir);
   cfg.sandboxRoot = path.resolve(cfg.sandboxRoot);
   cfg.standingRoot = path.resolve(raw.standingRoot ?? path.join(cfg.sandboxRoot, '_agents'));
@@ -629,6 +636,29 @@ export function loadConfig(): Config {
  * Throws when config claudeAccounts or machines.useHostClaudeEnv is malformed: a typo there would otherwise
  * quietly run agents on another account than the one meant.
  */
+/**
+ * Whether a role's agents get the claude.ai connectors (config claudeAiConnectors). Off by default for the orchestrators:
+ * upstream measured their connector tools (Gmail 30, Google Drive 11, Google Calendar 9, Claude Docs 8) and Claude Docs'
+ * instructions at about 41,300 input tokens in every request, and orchestration never uses them.
+ */
+export const CLAUDE_AI_CONNECTORS_DEFAULT: Readonly<Record<HostRole, boolean>> = { orchestrator: false, workers: true, standing: true };
+
+export function claudeAiConnectorsFor(cfg: Pick<Config, 'claudeAiConnectors'>, role: HostRole): boolean {
+  const v = cfg.claudeAiConnectors?.[role];
+  return typeof v === 'boolean' ? v : CLAUDE_AI_CONNECTORS_DEFAULT[role];
+}
+
+/** Throws when config claudeAiConnectors is malformed: an object of role → true or false. */
+export function checkRoleConnectorConfig(cfg: Pick<Config, 'claudeAiConnectors'>) {
+  const c: unknown = cfg.claudeAiConnectors;
+  if (c === undefined) return;
+  if (typeof c !== 'object' || c === null || Array.isArray(c)) throw new Error('config claudeAiConnectors is an object, e.g. { "orchestrator": false, "workers": true }');
+  for (const [role, v] of Object.entries(c)) {
+    if (!HOST_ROLES.includes(role as HostRole)) throw new Error(`config claudeAiConnectors.${role}: no such role (${HOST_ROLES.join(', ')})`);
+    if (typeof v !== 'boolean') throw new Error(`config claudeAiConnectors.${role} is true or false`);
+  }
+}
+
 export function checkConnectorConfig(cfg: Pick<Config, 'worker'>) {
   const list: unknown = cfg.worker.claudeAiConnectors;
   if (!Array.isArray(list) || list.some((u) => typeof u !== 'string' || !/^https:\/\/[^/\s]+/.test(u))) {

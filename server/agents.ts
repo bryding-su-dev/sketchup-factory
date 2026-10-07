@@ -7,7 +7,7 @@ import type { ProviderManager } from './providers.ts';
 import type { MaxManager } from './max.ts';
 import { eventsFileOf, maxEnv } from './maxEvents.ts';
 import { groupIntake } from '../shared/intake.ts';
-import { PROJECT_DEFAULTS, ROOT, communityConfigured, configPath, editorConfigured, ownerLine, projectBrief, publicIdentityLine, publicIdentityOf, type Config } from './config.ts';
+import { PROJECT_DEFAULTS, claudeAiConnectorsFor, ROOT, communityConfigured, configPath, editorConfigured, ownerLine, projectBrief, publicIdentityLine, publicIdentityOf, type Config } from './config.ts';
 import { SETTABLE_KEYS, setAppConfig } from './appConfig.ts';
 import { bus, type Store } from './store.ts';
 import { branchProblem, slugify, withBaseRepoLock, type SandboxManager } from './sandboxes.ts';
@@ -1146,7 +1146,7 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
       // Confined to this sandbox's editor (server/unityMcp.ts statusDirFor): it cannot find, or fall back to, another.
       ...(this.cfg.unity.mcpServer ? { UnityMCP: { type: 'stdio' as const, ...unityMcpServerFor(this.cfg, sb.id)! } } : {}),
     };
-    const connectors = this.cfg.worker.claudeAiConnectors ?? [];
+    const connectors = claudeAiConnectorsFor(this.cfg, 'workers') ? (this.cfg.worker.claudeAiConnectors ?? []) : [];
     return {
       cwd: sb.path,
       model: info.model,
@@ -2774,7 +2774,9 @@ ${this.worldBrief(false)}
       tools: ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
       allowedTools: ['Read', 'Glob', 'Grep', 'mcp__sandboxes'],
       mcpServers: { sandboxes: this.orchestratorTools(info) },
-      settings: { autoMemoryEnabled: true, autoMemoryDirectory: memory },
+      // No claude.ai connectors unless config claudeAiConnectors.orchestrator turns them on: tens of thousands of input
+      // tokens in every turn, for tools orchestration does not use.
+      settings: { autoMemoryEnabled: true, autoMemoryDirectory: memory, ...(claudeAiConnectorsFor(this.cfg, 'orchestrator') ? {} : { disableClaudeAiConnectors: true }) },
       hooks: { PreToolUse: [{ hooks: [memoryGuard(memory, () => this.personTurn(info.id))] }] },
       // Who pays (docs/orchestrators.md, docs/accounts.md): a person's own orchestrator runs on their own Claude account
       // when they have one here (config userClaudeEnv); the dispatcher on the system payer's. Without one, what config

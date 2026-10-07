@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CLAUDE_DOCS_CONNECTOR, ROOT, SENDER_RULE, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
+import { CLAUDE_DOCS_CONNECTOR, ROOT, checkRoleConnectorConfig, claudeAiConnectorsFor, SENDER_RULE, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
 import { gitIsClean, gitRemotes } from './guard.ts';
 import { appVersion, formatVersion, readSha, readVersion } from './version.ts';
 
@@ -133,4 +133,13 @@ test('guard git lookups: a clean tree, a dirty one, not a repo; push remotes', (
       ['origin', 'git@example.test:game.git'],
     ],
   );
+});
+
+test('claudeAiConnectors: role booleans, off for orchestrators by default; malformed refused', () => {
+  assert.equal(claudeAiConnectorsFor({}, 'orchestrator'), false);
+  assert.equal(claudeAiConnectorsFor({}, 'workers'), true);
+  assert.equal(claudeAiConnectorsFor({ claudeAiConnectors: { orchestrator: true } }, 'orchestrator'), true);
+  assert.throws(() => checkRoleConnectorConfig({ claudeAiConnectors: { dispatcher: true } as never }), /no such role/);
+  assert.throws(() => checkRoleConnectorConfig({ claudeAiConnectors: { workers: 'yes' } as never }), /true or false/);
+  checkRoleConnectorConfig({});
 });
