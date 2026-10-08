@@ -45,7 +45,7 @@
     "haiku",
     "fable"
   ],
-  "defaultModel": "opus",
+  "defaultModel": "sonnet",
   "orchestrator": {
     "model": "opus",
     "effort": "medium",

@@ -278,7 +278,7 @@ function standing(t: { after: (fn: () => void | Promise<void>) => void }) {
     protectedPaths: [],
     repo: { url: 'x', basePath: path.join(tmp, 'sb', '_base') },
     limits: { maxSessions: 6 },
-    models: ['opus'],
+    models: ['opus', 'sonnet'],
     defaultModel: 'opus',
     worker: { permissionMode: 'bypassPermissions', effort: 'high' },
     userClaudeEnv: { lothsahn: { CLAUDE_CODE_OAUTH_TOKEN: TOKEN_LOTH } },

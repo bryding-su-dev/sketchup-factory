@@ -2299,7 +2299,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
         .describe("Start this agent's delegation requests WITHOUT the user's approval, within the auto_* limits (needs the delegate tool group). Only when the user asked for it."),
       auto_max_per_run: z.number().int().min(1).max(20).optional().describe('Auto-approved requests per run (default 3).'),
       auto_max_per_day: z.number().int().min(1).max(20).optional().describe('Auto-approved requests per day (default 3).'),
-      auto_model: z.string().optional().describe('Model for auto-approved workers (default opus).'),
+      auto_model: z.string().optional().describe('Model for auto-approved workers (default sonnet).'),
       auto_effort: z.enum(EFFORT_LEVELS as [EffortLevel, ...EffortLevel[]]).optional().describe('Effort for auto-approved workers (default high).'),
       auto_targets: z.enum(['sandboxes-then-machines', 'sandboxes', 'machines']).optional().describe('Where they may start (default: unused sandboxes, then idle machines).'),
       auto_expiry_hours: z.number().int().min(1).max(48).optional().describe('A request with no free target is retried until this many hours after filing (default 8).'),
