@@ -12,6 +12,18 @@ scripts\restart.ps1 -DrainMinutes 3
 `scripts\update.ps1` is `restart.ps1 -Update`. Without the user at the desktop, the orchestrator's
 `request_app_update` tool takes the same path (drain, update, restart, resume).
 
+On a **macOS host** (`config.example.mac.json`):
+
+```
+scripts/mac/restart.sh                   # drain, restart, resume
+scripts/mac/restart.sh --update          # pull, npm ci, npm run build, health-check, restart; rolls back on failure
+scripts/mac/restart.sh --no-drain
+scripts/mac/restart.sh --drain-minutes 3
+```
+
+`request_app_update` works on both: it picks the supervisor by platform (`supervisorFor`, `server/restart.ts`) and
+refuses with the manual steps when none is running. [macOS](#macos-the-node-supervisor) below says what differs.
+
 ## What happens
 
 1. **Drain.** The script writes a JSON `data\restart.request`. The server sends every busy worker a
@@ -138,6 +150,43 @@ Editors started while the app was elevated stay elevated until they are stopped 
 A non-elevated server recognises them by their window title, and the card says they run with
 administrator rights. It cannot stop them itself; close them on the desktop.
 
+## macOS: the Node supervisor
+
+On a Mac, launchd runs `scripts/supervise.ts` (the LaunchAgent `com.sketchup-factory.server` from
+`scripts/mac/install-autostart.sh`: RunAtLoad, KeepAlive, so it survives logout and reboot), and the supervisor runs
+`node server/index.ts`. launchd restarts only the supervisor, the supervisor only the server, so the two never fight
+over a restart: the server exiting (a restart, an update, a crash) is the supervisor's, with the same back-off as
+`supervise.ps1` (3 s doubling to a minute, reset after five healthy minutes). `launchctl kickstart -k`, `bootout` or a
+logout sends the supervisor SIGTERM: it stops the server cleanly (SIGTERM, which records `resume.json`) and exits;
+launchd waits up to 90 s (`ExitTimeOut`).
+
+Steps 1, 2 and 5 above are the same: `restart.sh` writes the JSON `data/restart.request` and the server drains, stops
+and exits. With `update`, the supervisor runs `scripts/supervisor.ts` before starting it again:
+
+1. **Refuse** (nothing changes) when tracked files are modified (after putting back the package files installs may
+   rewrite), the branch has no upstream, `git fetch` fails, or the upstream is not a fast-forward of `HEAD` (local
+   commits). No republish or rewrite recovery as on Windows: those are Final Factory's, and a refusal says why.
+2. Up to date: nothing is installed or rebuilt.
+3. `git pull --ff-only`, `npm ci`, `npm run build` (which runs `npm ci` and the build in `web/`).
+4. **Health check.** It writes a provisional `update.result.json` (the new server reads it at boot), starts the new
+   server and waits up to 3 minutes for `http://127.0.0.1:<port>/api/health` to report the new commit.
+5. **Roll back** when the pull, an install, the build or the health check fails: stop the new server if it started,
+   `git reset --hard` to the commit it started from (`config.json`, `data/` and other ignored files stay), `npm ci`
+   and build it again, and start it. The resume file the stopping server wrote is kept aside and put back, so the
+   rolled-back server still resumes the workers that were cut off and tells the orchestrator.
+
+The orchestrator's restart summary says which: `Update OK (a → b)`, `already up to date`, `Update REFUSED, nothing
+changed: <why>` or `Update FAILED and was ROLLED BACK: <why>`. Everything is logged in `data/supervisor.log` (with
+the server's output in `data/server.out.log` / `server.err.log` and the supervisor's own in `supervisor.out.log`).
+
+The supervisor uses Node built-ins only (`npm ci` replaces `node_modules` while it runs), and like `update-steps.ps1`
+the copy already running does the update: a change to it takes effect once the supervisor restarts
+(`scripts/mac/install-autostart.sh`, a reboot or `launchctl kickstart -k gui/$(id -u)/com.sketchup-factory.server`).
+
+**First install of the supervisor** (a LaunchAgent from before it runs `server/index.ts` directly, so
+`request_app_update` refuses): `git pull --ff-only && npm ci && npm run build && scripts/mac/install-autostart.sh`.
+`install-autostart.sh` rewrites the plist and reloads it, which restarts the app once.
+
 ## Files in data\
 
 | File | Written by | Meaning |
@@ -146,7 +195,8 @@ administrator rights. It cannot stop them itself; close them on the desktop.
 | `drain.done` | server | the drain finished; `restart.ps1` may stop the supervisor |
 | `resume.json` / `resume.done.json` | server | sessions to resume / the last one used |
 | `update.request` | `restart.ps1 -Update`, server | the next supervisor updates first |
-| `update.result.json` | supervisor | `ok`, `error`, `headBefore`, `headAfter`, `at` |
+| `supervisor.pid`, `server.pid`, `supervisor.log` | supervisor | its process, the server's, and what it did (both OSes) |
+| `update.result.json` | supervisor | `ok`, `error`, `headBefore`, `headAfter`, `at`; on macOS also `refused`, `rolledBack`, `upToDate` |
 | `alive.json` | server, every 30 s | its last heartbeat: dates an unclean stop, and tells a power cut from a crash |
 | `restart.pending.json` | server | an update asked for but not yet handed to the supervisor (retried after an unclean stop) |
 | `unclean-recovery.last` | server | when an unclean stop was last recovered from (the crash-loop guard) |

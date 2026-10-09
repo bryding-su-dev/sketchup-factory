@@ -160,6 +160,32 @@ export interface UpdateResult {
   error?: string;
   headBefore?: string;
   headAfter?: string;
+  /** Nothing was changed: the checkout could not be updated as it was (macOS/Linux supervisor). */
+  refused?: boolean;
+  /** The update failed after changing the checkout and was put back to headBefore (macOS/Linux supervisor). */
+  rolledBack?: boolean;
+  /** Nothing new upstream. */
+  upToDate?: boolean;
+}
+
+/** The process that runs the server and applies updates between runs, per platform (docs/restart.md). */
+export interface Supervisor {
+  /** What its command line contains: data/supervisor.pid is checked against it. */
+  marker: string;
+  /** How the user updates when no supervisor runs. */
+  manual: string;
+}
+
+export function supervisorFor(platform: NodeJS.Platform): Supervisor {
+  if (platform === 'win32') return { marker: 'supervise.ps1', manual: 'the user has to run scripts/restart.ps1 -Update at the desktop' };
+  if (platform === 'darwin') {
+    return {
+      marker: 'scripts/supervise.ts',
+      manual:
+        'the app runs without its supervisor (a LaunchAgent from before it); the user has to update by hand once: git pull --ff-only && npm ci && npm run build && scripts/mac/install-autostart.sh (which installs the supervisor and restarts the app)',
+    };
+  }
+  return { marker: 'scripts/supervise.ts', manual: 'the user has to run the app under node scripts/supervise.ts (from a service manager), or update by hand: git pull --ff-only && npm ci && npm run build, then restart it' };
 }
 
 /** The running app after a restart: its git HEAD and package.json version. */
@@ -175,6 +201,16 @@ export function versionLine(before: string | undefined, after: string | undefine
   return before === after ? `Version ${after} (unchanged).` : `Version ${before} → ${after}.`;
 }
 
+/** The update's outcome in the restart summary. */
+export function updateLine(u: UpdateResult): string {
+  const at = u.headAfter ? ` It runs ${u.headAfter.slice(0, 9)}.` : '';
+  if (u.ok && u.upToDate) return `Update: already up to date${u.headAfter ? ` (${u.headAfter.slice(0, 9)})` : ''}, nothing changed.`;
+  if (u.ok) return `Update OK${u.headBefore && u.headAfter ? ` (${u.headBefore.slice(0, 9)} → ${u.headAfter.slice(0, 9)})` : ''}.`;
+  if (u.refused) return `Update REFUSED, nothing changed: ${clip(u.error ?? 'unknown reason', 400)}.${at}`;
+  if (u.rolledBack) return `Update FAILED and was ROLLED BACK: ${clip(u.error ?? 'unknown error', 400)}.${at}`;
+  return `Update FAILED: ${clip(u.error ?? 'unknown error', 400)}; the server runs whatever code is on disk.${at}`;
+}
+
 /** The one paragraph the orchestrator gets after a restart. */
 export function restartSummary(f: ResumeFile, outcomes: ResumeOutcome[], update: UpdateResult | undefined, now: AppNow, notes: string[] = []): string {
   const head = now.head;
@@ -185,8 +221,7 @@ export function restartSummary(f: ResumeFile, outcomes: ResumeOutcome[], update:
   if (version) parts.push(version);
   if (f.update) {
     if (!update) parts.push('Update result: unknown (no data/update.result.json; see data/supervisor.log).');
-    else if (!update.ok) parts.push(`Update FAILED: ${clip(update.error ?? 'unknown error', 400)}; the server runs whatever code is on disk.`);
-    else parts.push(`Update OK${update.headBefore && update.headAfter ? ` (${update.headBefore.slice(0, 9)} → ${update.headAfter.slice(0, 9)})` : ''}.`);
+    else parts.push(updateLine(update));
   } else if (f.head && head && f.head !== head) {
     parts.push(`Code changed ${f.head.slice(0, 9)} → ${head.slice(0, 9)}.`);
   }

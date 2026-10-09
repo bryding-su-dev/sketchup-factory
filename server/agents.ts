@@ -49,7 +49,7 @@ import { describeTrigger } from './schedule.ts';
 import { describeGit, refreshSandboxGit } from './gitStatus.ts';
 import { displayName } from '../shared/labels.ts';
 import type { StandingAgentInput, StandingTrigger, UnityBlocked } from '../shared/types.ts';
-import { collectResume, orchestratorWasBusy, readUpdateResult, restartSummary, resumeMessage, versionLine, waitingOnWakeLine, type AppNow, type RestartRequest, type ResumeFile, type ResumeOutcome } from './restart.ts';
+import { collectResume, orchestratorWasBusy, readUpdateResult, restartSummary, resumeMessage, supervisorFor, versionLine, waitingOnWakeLine, type AppNow, type RestartRequest, type ResumeFile, type ResumeOutcome } from './restart.ts';
 import { appVersion, formatVersion } from './version.ts';
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
@@ -2010,18 +2010,19 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
         ),
         tool(
           'request_app_update',
-          'Update this app (SketchUp Factory) and restart it without the user at the desktop: busy workers are first asked to commit, push and end their turn (up to drain_minutes), then the supervisor pulls the latest code (fast-forward only), runs npm ci, rebuilds the web UI and starts the new server, as scripts/restart.ps1 -Update does. This STOPS EVERY AGENT PROCESS, the orchestrator (you) and every worker, for a few minutes. Workers that were mid-turn or asked to pause are resumed automatically afterwards, and you get a summary message. Unity editors keep running. Only call it when the user asked for the update.',
+          'Update this app (SketchUp Factory) and restart it without the user at the desktop, on Windows (scripts/supervise.ps1) and macOS (scripts/supervise.ts under the LaunchAgent): busy workers are first asked to commit, push and end their turn (up to drain_minutes), then the supervisor pulls the latest code (fast-forward only), runs npm ci, rebuilds the web UI and starts the new server. On macOS it refuses a checkout with modified tracked files or local commits (nothing changes), and rolls back to the previous commit when the build fails or the new server does not answer /api/health with the new commit. This STOPS EVERY AGENT PROCESS, the orchestrator (you) and every worker, for a few minutes. Workers that were mid-turn or asked to pause are resumed automatically afterwards, and you get a summary message saying whether the update succeeded, was refused or was rolled back, and why. Unity editors keep running. Only call it when the user asked for the update.',
           {
             user_asked: z.literal(true).describe('Must be true: the user asked for this update.'),
             drain_minutes: z.number().int().min(0).max(60).optional().describe('How long to wait for busy workers to wrap up. Default 10; 0 restarts at once (they are resumed afterwards).'),
           },
           wrap(async ({ drain_minutes }) => {
-            if (!(await this.ourProcessRunning('supervisor.pid', 'supervise.ps1'))) {
-              throw new Error('no supervisor (scripts/supervise.ps1) is running, so nothing would run the update or start the server again; the user has to run scripts/restart.ps1 -Update at the desktop');
+            const sup = supervisorFor(process.platform);
+            if (!(await this.ourProcessRunning('supervisor.pid', sup.marker))) {
+              throw new Error(`no supervisor (${sup.marker}) is running, so nothing would run the update or start the server again; ${sup.manual}`);
             }
             if (!this.requestRestart) throw new Error('restarts are not wired up in this server');
             const note = this.requestRestart({ drain: 'auto', drainMinutes: drain_minutes ?? 10, reason: 'update (request_app_update)', update: true, hold: false });
-            return `Update requested: ${note}. Then the server stops every agent process and exits; the supervisor pulls, installs and rebuilds (a few minutes, logged in data/supervisor.log) and starts the new code, which resumes the interrupted workers and messages you with a summary. Unity editors keep running.`;
+            return `Update requested: ${note}. Then the server stops every agent process and exits; the supervisor pulls, installs and rebuilds (a few minutes, logged in data/supervisor.log) and starts the new code (on macOS: health-checked, rolled back if it fails), which resumes the interrupted workers and messages you with a summary saying how the update went. Unity editors keep running.`;
           }),
         ),
         tool(
