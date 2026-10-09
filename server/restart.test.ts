@@ -12,6 +12,8 @@ import {
   parseRestartRequest,
   readUpdateResult,
   restartSummary,
+  supervisorFor,
+  updateLine,
   versionLine,
   resumeMessage,
   takeResumeFile,
@@ -256,4 +258,21 @@ test('drain: -NoDrain restarts at once even with busy agents (they are resumed a
   t.mock.timers.tick(5000);
   assert.equal(h.stops.length, 1);
   assert.match(drainMessage(REQ, new Date()), /commit your work/);
+});
+
+test('supervisorFor: the Windows script, else the Node supervisor; the manual way says what to run', () => {
+  assert.deepEqual(supervisorFor('win32').marker, 'supervise.ps1');
+  assert.match(supervisorFor('win32').manual, /restart\.ps1 -Update/);
+  assert.equal(supervisorFor('darwin').marker, 'scripts/supervise.ts');
+  assert.match(supervisorFor('darwin').manual, /git pull --ff-only && npm ci && npm run build && scripts\/mac\/install-autostart\.sh/);
+  assert.equal(supervisorFor('linux').marker, 'scripts/supervise.ts');
+});
+
+test('updateLine: OK, up to date, refused, rolled back, failed without a rollback', () => {
+  const at = '2026-10-09T00:00:00Z';
+  assert.equal(updateLine({ ok: true, at, headBefore: 'a'.repeat(40), headAfter: 'b'.repeat(40) }), 'Update OK (aaaaaaaaa → bbbbbbbbb).');
+  assert.match(updateLine({ ok: true, at, upToDate: true, headAfter: 'b'.repeat(40) }), /already up to date \(bbbbbbbbb\)/);
+  assert.match(updateLine({ ok: false, at, refused: true, error: 'update refused, nothing changed: tracked files are modified', headAfter: 'a'.repeat(40) }), /^Update REFUSED, nothing changed: .*modified\. It runs aaaaaaaaa\.$/);
+  assert.match(updateLine({ ok: false, at, rolledBack: true, error: 'npm run build failed; rolled back to aaaaaaaaa', headAfter: 'a'.repeat(40) }), /^Update FAILED and was ROLLED BACK: npm run build failed/);
+  assert.match(updateLine({ ok: false, at, error: 'npm ci failed' }), /Update FAILED: npm ci failed; the server runs whatever code is on disk\./);
 });

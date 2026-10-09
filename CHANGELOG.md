@@ -15,6 +15,10 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
   (the `FFSB` cookie, `FFSB_CONFIG`, `ffsb.*` localStorage keys, the `ffsb-*` helper tasks) are unchanged.
 
 ### Added
+- `request_app_update` and `scripts/mac/restart.sh --update` on a macOS host: the LaunchAgent now runs a Node
+  supervisor (`scripts/supervise.ts`) that runs the server and updates it between runs. It refuses a modified or
+  diverged checkout, health-checks the new server (`/api/health` with the new commit), and rolls back to the previous
+  commit when the build or the check fails. Reinstall the LaunchAgent once (docs/restart.md, "macOS").
 - Ported from upstream Final Factory (ff-factory, after the fork point `268e18c`): `/compact` in an orchestrator chat
   and automatic compaction between turns (config `orchestrator.compactAtTokens`, default 200,000, and
   `orchestrator.compactAtTurnUsd`, default 1), orchestrator timers, file attachments on chat messages (also from

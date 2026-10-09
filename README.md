@@ -245,8 +245,10 @@ worktrees, the editor controls disappear from the sandbox panel and from the wor
 nothing about Unity. `project.community: false` takes the Discord, FFBox and Max text out of the briefs too.
 
 A Mac can be the host for such a setup (no editors, no Dev Drive): `config.example.mac.json` is a starting point,
-`scripts/mac/install-autostart.sh` registers the server as a LaunchAgent (starts at login, restarts when it exits),
-`scripts/mac/restart.sh` and `scripts/mac/uninstall-autostart.sh` do what their names say. The remote-machine and
+`scripts/mac/install-autostart.sh` registers the supervisor (`scripts/supervise.ts`) as a LaunchAgent: it starts at
+login, runs the server and restarts it when it exits. `scripts/mac/restart.sh [--update]` restarts or updates it, and
+`request_app_update` works there as on Windows, with a health check and a rollback ([docs/restart.md](docs/restart.md#macos-the-node-supervisor)).
+`scripts/mac/uninstall-autostart.sh` removes it. The remote-machine and
 "host as a machine" features stay Windows-host-only.
 
 **Turn the automatic clean-up off on a developer's own computer** (`"hostGuard": { "cleanup": { "enabled": false } }`),
