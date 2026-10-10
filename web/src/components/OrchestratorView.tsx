@@ -193,7 +193,7 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
           )}
         </Menu>
       </header>
-      <Transcript session={session} size={compact ? 'normal' : 'large'} empty={empty} />
+      <Transcript session={session} size={compact ? 'normal' : 'large'} empty={empty} interactive />
       <div className="orch-composer-wrap">
         <Composer key={session.id} session={session} size={compact ? 'normal' : 'large'} placeholder="Message the orchestrator" prefill={prefill} onPrefillUsed={clearPrefill} autoFocus={!compact} onCommand={clearCommand} />
       </div>

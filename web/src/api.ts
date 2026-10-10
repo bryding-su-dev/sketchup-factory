@@ -101,8 +101,10 @@ export const api = {
   events: (sessionId: string, limit = 500) =>
     request<TranscriptEvent[]>('GET', `/api/sessions/${enc(sessionId)}/events?limit=${limit}`),
   /** `note` is set for a standing agent: what the message did (started a run, joined one, waited). */
-  sendMessage: (sessionId: string, text: string, images?: ImageInput[], attachments?: string[]) =>
-    request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }),
+  sendMessage: (sessionId: string, text: string, images?: ImageInput[], attachments?: string[], replyTo?: number) =>
+    request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}), ...(replyTo !== undefined ? { replyTo } : {}) }),
+  /** React to a message of your orchestrator chat with an emoji (w866), or take the reaction back (on: false). */
+  react: (sessionId: string, seq: number, emoji: string, on = true) => request<{ changed: boolean }>('POST', `/api/sessions/${enc(sessionId)}/react`, { seq, emoji, on }),
   /** Compact an orchestrator's conversation now (w518): what `/compact [focus]` typed in its chat does. */
   compact: (sessionId: string, instructions?: string) => request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/compact`, instructions ? { instructions } : {}),
   // Attachments (docs/attachments.md): an upload starts here; web/src/upload.ts sends the chunks.

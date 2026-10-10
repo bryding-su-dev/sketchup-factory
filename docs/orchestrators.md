@@ -436,9 +436,56 @@ or not, takes no slot. Orchestrators never count. The Unity editor limits are un
 - Only its person writes to a personal orchestrator, and only an owner to the dispatcher (HTTP 403 otherwise). This
   covers messages, interrupts, permission answers and the permission mode.
 
+### Replies and reactions (w866)
+
+Ben, 2026-10-10: "we should be able to reply to a message and include it in the intput as context. also let us give emoji
+reactions to messages and used as responses". In your own orchestrator chat every message has a **Reply** and a **React**
+button: the orchestrator's answers, your own messages and the relayed lines (`[worker update]`, `[dispatch]`, `[person
+message]`, any harness line). A pointer shows them on hover, a touch screen after a tap on the message. Both are in
+`shared/replies.ts` (the text formats, which the page reads back), `Orchestrators.quoteOf` / `replyWords` / `react` and the
+routes `POST /api/sessions/<id>/message` (with `replyTo`) and `POST /api/sessions/<id>/react` (`server/index.ts`). Only a
+person's own personal orchestrator takes them (a worker, a standing agent or the dispatcher answers 400).
+
+- **The server quotes, the page only points.** The page sends the seq of the message (`replyTo`, or `seq` for a reaction);
+  the server reads that event from the transcript and quotes it (`#42 · the orchestrator · 2026-10-10 08:31 UTC`, each line
+  of its own words after `> `, at most 1,200 characters, an earlier quote inside it left out). A page, or a
+  caller of the API, cannot put words in a quote. A seq that is no message (a tool call, a result, nothing) is a 400.
+- **A reply** reaches the orchestrator as `[from Ben]`, their words, then `REPLY_MARK` ("[FF Factory, not your person: the
+  message they are replying to]") and the quote. The words are what comes before the mark; the quote is data, so "close w811", quoted from the
+  orchestrator's own proposal, is never Ben's. A reply is typed by the person, so **it is their turn** like any
+  message of theirs: what needs their own words (approving, deleting, settings, deploys) may be done on it, on the words
+  they typed. A reply is never a command (`/compact` in a reply is a message). The chat shows it with the words in the
+  bubble and a line above it ("↩ Orchestrator · Echo: …") that goes to that message when pressed; the composer says
+  "Replying to …" with a cancel. Sending takes you to the bottom of the chat, so a reply to an old message shows itself.
+- **A reaction** is shown as a chip under the message (pressing yours takes it back) and reaches the orchestrator as one
+  harness message (`from: 'system'`): `[reaction] Ben reacted 👍 to a message in this chat:`, the quote, and how to read it.
+  The page does not show that line as a row: the chip is the record. Taking a reaction back is recorded
+  (`[reaction removed] 👍 #42`) and tells the orchestrator nothing. One per emoji and message; the same again changes
+  nothing. The server takes any single emoji; the page offers 👍 👎 ✅ ❌ ❓ 👀 🎉.
+- **What the emoji mean** is the orchestrator's reading, told in the message itself and in its prompt (`REACTION_MEANINGS`):
+  👍 or ✅ = yes, go ahead, got it; 👎 or ❌ = no, don't; ❓ = I don't follow, explain; 👀 = seen, I'll look; 🎉 or ❤️ = nice,
+  nothing to do; anything else by its usual meaning in that context. A 👍 on its question about something it may do itself
+  (start a worker, send a follow-up, relay an answer) is enough to go ahead.
+- **A reaction is not the person's turn, on purpose.** It is delivered as a harness message, so the turn it opens has
+  `turnFrom === 'system'` (`SessionHandle.turnFrom`): the gates that need the person's own turn refuse it, as they do a timer
+  (approve or decline an intake request, closing a non-owner's request, a delegation
+  approval, memory writes, `set_app_config`, deploys and releases). It also does not start their budgets again
+  (`personWrote`). Why not count it, as w831 counts an FFBox operator's own authenticated message: (1) w831 admits *words*
+  FFBox matched to the person, and a click is not words; (2) it is cheap to do by accident, a tap on a phone, and an emoji's
+  meaning is open ("👍" on a message with three questions); (3) it can sit on a relayed line (a worker's report, a player's
+  text) that carries someone else's words, so the person's authority would reach whatever the orchestrator reads into that
+  text, the thing the gates exist to prevent. A call a gate refuses in a reaction's turn is refused as in a timer's turn: a 👍 on
+  "shall I approve w5?" gets "say it and I will", and their one typed word then does it. To let a reaction pass one gate later, the place
+  is `Orchestrators.react` (send it as `human` for that emoji), and this paragraph.
+- **Tests:** `server/replies.test.ts` (the orchestrator's input for a reply and a reaction, on its own answer, a relayed
+  worker update and the person's own message; the gates after each) and `e2e/replies.spec.ts` (desktop
+  and both phones: the buttons, the composer bar, the quote, the chips, over a reload, the API's refusals).
+
+
 ## What people see
 
 - The home page is your own chat, as before.
+- Each message of your own chat has Reply and React (hover, or a tap on a touch screen); replies show the message they answer, reactions show as chips ([Replies and reactions](#replies-and-reactions-w866)).
 - The sidebar lists, under it, the other people's orchestrators (read only) and the Dispatcher, with its open requests
   ("1 question · 2 active").
 - The Dispatcher page has two tabs. Requests lists everyone's open requests, questions first, with the closed ones behind

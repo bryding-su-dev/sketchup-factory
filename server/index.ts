@@ -26,7 +26,7 @@ import { machineLoadLine, systemStats } from './system.ts';
 import { Auth } from './auth.ts';
 import { Identity, asRequester, userToken } from './identity.ts';
 import { handleMcp } from './mcp.ts';
-import { IMAGE_TYPES, SOCKET_PING_MS, type ImageInput, type NotifyPrefs, type SendMessageRequest } from '../shared/types.ts';
+import { IMAGE_TYPES, SOCKET_PING_MS, type ImageInput, type NotifyPrefs, type ReactRequest, type SendMessageRequest } from '../shared/types.ts';
 import { listImages, MEDIA_TYPE, openVideo, parseRange, readImage, VIDEO_FILE } from './images.ts';
 import { keepMessageImages } from './inlineImages.ts';
 import { AttachmentError, AttachmentStore, downloadDisposition, machineAttachment, publicRef } from './attachments.ts';
@@ -569,7 +569,7 @@ route('GET', '/api/search', async (_r, _p, url) => {
 
 route('POST', '/api/sessions/([\\w-]+)/message', async (req, [id]) => {
   // Images come base64 in the JSON (the UI shrinks them first), so this body may be large.
-  const { text, images, attachments: attachmentIds } = await readJson<SendMessageRequest>(req, 40 * 1024 * 1024);
+  const { text, images, attachments: attachmentIds, replyTo } = await readJson<SendMessageRequest>(req, 40 * 1024 * 1024);
   const imgs = checkImages(images);
   // Other files were uploaded first (POST /api/attachments): the message names them by id (docs/attachments.md).
   const files = attachments.resolve(attachmentIds);
@@ -583,15 +583,27 @@ route('POST', '/api/sessions/([\\w-]+)/message', async (req, [id]) => {
   if (!imgs.length && !files.length) need(text, 'text');
   mayDrive(req, s.info);
   // `/compact [focus]` (w518) is no message: it compacts the conversation. Its wake_me check-in and budgets stay.
-  const focus = s.info.kind === 'orchestrator' && !imgs.length && !files.length ? compactCommand(String(text ?? '')) : undefined;
+  const focus = s.info.kind === 'orchestrator' && !imgs.length && !files.length && replyTo === undefined ? compactCommand(String(text ?? '')) : undefined;
   if (focus !== undefined) return { note: compactNow(id, focus, requesterOf(req)) };
+  // A reply carries the message it answers, quoted by the server from the transcript (w866); refused before anything else changes.
+  const words = agents.orchestrators.replyWords(id, String(text ?? '').trim(), replyTo);
   if (s.info.kind === 'orchestrator') {
     // A person wrote to their orchestrator: its own wake_me check-in is moot, and its budgets start again.
     agents.waker.cancel(id);
     agents.orchestrators.personWrote(id);
   }
-  await agents.sendWithAttachments(id, String(text ?? '').trim(), 'human', { images: imgs, attachments: files, requestedBy: requesterOf(req) });
+  await agents.sendWithAttachments(id, words, 'human', { images: imgs, attachments: files, requestedBy: requesterOf(req) });
   return {};
+});
+
+// An emoji reaction on a message of the person's own orchestrator chat (w866): a short answer the orchestrator reads with the
+// message quoted. Not the person's own words (agents.orchestrators.react), and taken back with on: false.
+route('POST', '/api/sessions/([\\w-]+)/react', async (req, [id]) => {
+  const s = sessions.get(id);
+  if (s.info.kind !== 'orchestrator') throw new HttpError(400, "reactions are for the orchestrators' chats");
+  mayDrive(req, s.info);
+  const { seq, emoji, on } = await readJson<ReactRequest>(req);
+  return { changed: agents.orchestrators.react(id, Number(seq), String(emoji ?? ''), on !== false, requesterOf(req)) };
 });
 
 /** Compact an orchestrator's conversation (w518); a refusal is a 409 the page shows. */

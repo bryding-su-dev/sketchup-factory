@@ -36,6 +36,8 @@ import {
 } from './work.ts';
 import { autoApproveProblem, identityKeys, parseMarkers, sourceTag } from './intakeRules.ts';
 import { readDiscordConfig } from './discordConfig.ts';
+import { excerptOf, isEmoji, reactionRemovedText, reactionsByMessage, reactionText, replyText, type Quoted } from '../shared/replies.ts';
+import { NOTICE_TAG } from '../shared/notices.ts';
 import { displayName } from '../shared/labels.ts';
 import type { AttachmentRef, Machine, ProviderConversation, Requester, Sandbox, SessionInfo, WorkFfbox, WorkItem, WorkOverlap, WorkPriority, WorkSource, WorkSourceKind, WorkTriage } from '../shared/types.ts';
 
@@ -646,6 +648,50 @@ export class Orchestrators {
       this.gatherForDispatcher(owner, updateNotice(w, owner, `${what.join('; ')}.${hint}`));
     }
     return `${w.id} is ${w.status}: ${what.join('; ')}.`;
+  }
+
+  // ---------------------------------------------------------------- replies and reactions (w866)
+
+  /**
+   * The message of a chat a reply or a reaction is on, as it is quoted to the orchestrator: who said it (as a person
+   * reads the chat, not the model's own "I"), when, and its own words clipped. Read from the transcript by seq, never from
+   * what the page says it is, so a quote cannot be made up. Throws for an event that is no message (a tool call, a result).
+   */
+  quoteOf(sessionId: string, seq: number): Quoted {
+    const info = this.sessions.get(sessionId).info;
+    if (info.kind !== 'orchestrator' || this.isDispatcher(info)) throw new Error("replies and reactions are for a person's own orchestrator chat");
+    if (!Number.isInteger(seq) || seq < 0) throw new Error('replyTo: the number of a message in this chat');
+    const ev = this.store.readTranscript(sessionId).find((e) => e.seq === seq);
+    if (!ev || (ev.kind !== 'user' && ev.kind !== 'assistant')) throw new Error(`#${seq} is not a message of this chat (replies and reactions go on the orchestrator's answers, a person's messages and relayed lines)`);
+    let from = 'the orchestrator';
+    if (ev.kind === 'user') {
+      const tag = NOTICE_TAG.exec(ev.text)?.[1];
+      from = ev.from === 'human' ? (ev.requestedBy?.displayName ?? 'your person') : tag ? `a [${tag}] line` : 'a harness line';
+    }
+    return { seq, from, at: ev.t, excerpt: excerptOf(ev.text) };
+  }
+
+  /** A person's words, with the message they reply to quoted after them when `replyTo` is given (w866); throws when it is no message of the chat. */
+  replyWords(sessionId: string, words: string, replyTo?: number): string {
+    return replyTo === undefined ? words : replyText(words, this.quoteOf(sessionId, replyTo));
+  }
+
+  /**
+   * The orchestrator's person reacts to a message (`on`), or takes the reaction back. A reaction goes to the orchestrator as
+   * a harness message (`from: 'system'`): a click is not the person's own words, so the turn it opens is no turn of theirs,
+   * and nothing that needs their words passes on it (docs/orchestrators.md, "Replies and reactions"). It does not start
+   * the person's budgets again (personWrote), as their typing does. Taking one back is only recorded. Returns whether
+   * anything changed (a reaction already there, or not there, changes nothing).
+   */
+  react(sessionId: string, seq: number, emoji: string, on: boolean, by: Requester): boolean {
+    if (!isEmoji(emoji)) throw new Error('emoji: one emoji');
+    const quoted = this.quoteOf(sessionId, seq);
+    const marks = reactionsByMessage(this.store.readTranscript(sessionId).filter((e): e is Extract<typeof e, { kind: 'user' | 'system' }> => e.kind === 'user' || e.kind === 'system'));
+    const there = marks.get(seq)?.includes(emoji) ?? false;
+    if (there === on) return false;
+    if (on) this.sessions.send(sessionId, reactionText(by.displayName, emoji, quoted), 'system', undefined, { requestedBy: by });
+    else this.store.append(sessionId, { kind: 'system', text: reactionRemovedText(emoji, seq) });
+    return true;
   }
 
   /**

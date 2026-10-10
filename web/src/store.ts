@@ -27,6 +27,19 @@ export interface StoreState {
   focusDetails: string | null;
   /** The phone's navigation drawer is open. */
   drawer: boolean;
+  /** The message each orchestrator chat's composer is replying to (w866), by session id. */
+  replying: Record<string, ReplyTarget>;
+  /** Bumped when this page's composer sent a message to the chat: its transcript scrolls to the end (w866). */
+  showLatest: Record<string, number>;
+}
+
+/** A message being replied to: its seq (the server quotes it from the transcript), and how the page labels it. */
+export interface ReplyTarget {
+  seq: number;
+  from: string;
+  excerpt: string;
+  /** Bumped by every Reply press, so the composer takes the focus again. */
+  n: number;
 }
 
 export interface LightboxItem {
@@ -55,6 +68,8 @@ let state: StoreState = {
   focusEvent: null,
   focusDetails: null,
   drawer: false,
+  replying: {},
+  showLatest: {},
 };
 
 const listeners = new Set<() => void>();
@@ -428,6 +443,25 @@ export function focusPermission(requestId: string | null) {
 /** Open the details of this sandbox or machine when its page shows (null: done). */
 export function focusDetails(id: string | null) {
   set({ focusDetails: id });
+}
+
+/** Reply to a message of this chat (w866): the composer shows it and the next send carries it. */
+let replyPresses = 0;
+export function startReply(sessionId: string, target: Omit<ReplyTarget, 'n'>) {
+  set((s) => ({ replying: { ...s.replying, [sessionId]: { ...target, n: ++replyPresses } } }));
+}
+
+/** The composer sent a message: the chat shows its end. */
+export function showLatest(sessionId: string) {
+  set((s) => ({ showLatest: { ...s.showLatest, [sessionId]: (s.showLatest[sessionId] ?? 0) + 1 } }));
+}
+
+export function clearReply(sessionId: string) {
+  set((s) => {
+    if (!s.replying[sessionId]) return {};
+    const { [sessionId]: _gone, ...rest } = s.replying;
+    return { replying: rest };
+  });
 }
 
 export function setDrawer(open: boolean) {

@@ -3,7 +3,7 @@ import type { SessionInfo } from '../../../shared/types';
 import { api } from '../api';
 import { holdReload } from '../freshness';
 import type { ImageInput } from '../../../shared/types';
-import { attempt, toast, useStore } from '../store';
+import { attempt, clearReply, focusEvent, showLatest, toast, useStore } from '../store';
 import { clearPending, removePending, startUpload, usePendingFiles } from '../upload';
 import { enterAction } from '../../../shared/keys';
 import { dropCaret, EDITABLE_MODE, insertPlainText, readText, setCaret, writeText } from '../editable';
@@ -14,6 +14,7 @@ import { DictationBar, MicButton } from './Mic';
 import { onScreenKeyboard } from '../viewport';
 import { VoiceModeButton, VoiceModeOverlay, useVoiceMode } from './VoiceMode';
 import { Icon, Menu } from './ui';
+import { glance } from './MessageActions';
 
 /** Without the app's settings yet: the server's defaults (config attachments). */
 const ATTACH_DEFAULTS = { maxBytes: 200 * 1024 * 1024, retentionDays: 30, maxPerMessage: 10 };
@@ -62,6 +63,8 @@ export const Composer = memo(function Composer({
   const files = usePendingFiles(session.id);
   const limits = useStore((s) => s.app?.config.attachments) ?? ATTACH_DEFAULTS;
   const [dragging, setDragging] = useState(false);
+  // The message this one replies to (w866): an orchestrator chat's Reply action sets it; sending carries it.
+  const reply = useStore((s) => s.replying[session.id]);
   const [reading, setReading] = useState(0);
   // The message box is contenteditable, not a textarea: see web/src/editable.ts.
   const ta = useRef<HTMLDivElement>(null);
@@ -174,6 +177,11 @@ export const Composer = memo(function Composer({
     if (!busy) setStopping(false);
   }, [busy]);
 
+  // Pressing Reply puts the caret in the box, ready to type.
+  useEffect(() => {
+    if (reply) ta.current?.focus({ preventScroll: true });
+  }, [reply?.n]);
+
   useEffect(() => {
     const el = ta.current;
     if (!el || !autoFocus || touch || document.querySelector('.overlay')) return;
@@ -232,10 +240,13 @@ export const Composer = memo(function Composer({
         t,
         images.map(({ mediaType, data }) => ({ mediaType, data })),
         sentFiles.map((f) => f.ref!.id),
+        reply?.seq,
       ),
     );
     setSending(false);
     if (ok !== undefined) {
+      if (reply) clearReply(session.id);
+      showLatest(session.id);
       setText('');
       setImages([]);
       clearPending(session.id, sentFiles);
@@ -288,6 +299,18 @@ export const Composer = memo(function Composer({
           void addFiles(e.dataTransfer.files);
         }}
       >
+        {reply && (
+          <div className="composer-reply" data-testid="composer-reply">
+            <Icon name="reply" size={14} />
+            <button type="button" className="composer-reply-body" title="Go to the message" onClick={() => focusEvent(session.id, reply.seq)}>
+              <span className="composer-reply-to">Replying to {reply.from}</span>
+              <span className="composer-reply-text">{glance(reply.excerpt) || '(no text)'}</span>
+            </button>
+            <button type="button" className="composer-file-btn" title="Cancel the reply" aria-label="Cancel the reply" onClick={() => clearReply(session.id)}>
+              <Icon name="x" size={12} />
+            </button>
+          </div>
+        )}
         {files.length > 0 && (
           <div className="composer-files">
             {files.map((f) => {
