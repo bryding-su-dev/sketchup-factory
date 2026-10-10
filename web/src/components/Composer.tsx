@@ -1,10 +1,10 @@
 import { memo, type ChangeEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SessionInfo } from '../../../shared/types';
-import { api } from '../api';
+import { api, ApiError, UnauthorizedError } from '../api';
 import { holdReload } from '../freshness';
 import type { ImageInput } from '../../../shared/types';
-import { attempt, clearReply, focusEvent, showLatest, toast, useStore } from '../store';
-import { clearPending, removePending, startUpload, usePendingFiles } from '../upload';
+import { attempt, clearReply, focusEvent, showLatest, startReply, toast, useStore } from '../store';
+import { clearPending, removePending, restorePending, startUpload, usePendingFiles, type PendingFile } from '../upload';
 import { enterAction } from '../../../shared/keys';
 import { dropCaret, EDITABLE_MODE, insertPlainText, readText, setCaret, writeText } from '../editable';
 import { fmtBytes, isBusy, lsGet, lsSet, shrinkImage, useMediaQuery } from '../util';
@@ -56,7 +56,12 @@ export const Composer = memo(function Composer({
 }) {
   const key = `ffsb.draft.${session.id}`;
   const [text, setText] = useState(() => lsGet(key) ?? '');
-  const [sending, setSending] = useState(false);
+  // Messages sent and not yet answered. The box empties when a message is sent (w893), not when the server answers.
+  const [inFlight, setInFlight] = useState(0);
+  const sending = inFlight > 0;
+  const alive = useRef(true);
+  // The send that failed: the same message sent again keeps its id, which the server takes once.
+  const failedSend = useRef<{ sig: string; id: string } | null>(null);
   const [stopping, setStopping] = useState(false);
   const [images, setImages] = useState<(ImageInput & { key: number })[]>([]);
   // Files upload outside the composer (web/src/upload.ts), so they go on while this chat is closed.
@@ -65,6 +70,8 @@ export const Composer = memo(function Composer({
   const [dragging, setDragging] = useState(false);
   // The message this one replies to (w866): an orchestrator chat's Reply action sets it; sending carries it.
   const reply = useStore((s) => s.replying[session.id]);
+  const replyNow = useRef(reply);
+  replyNow.current = reply;
   const [reading, setReading] = useState(0);
   // The message box is contenteditable, not a textarea: see web/src/editable.ts.
   const ta = useRef<HTMLDivElement>(null);
@@ -123,6 +130,20 @@ export const Composer = memo(function Composer({
     if (e.target.files) void addFiles(e.target.files);
     e.target.value = '';
   };
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  // A reload that waits for the answer to a message keeps that message from being cancelled midway (an image's body is too big for keepalive).
+  useEffect(() => {
+    const hold = `composer-send:${session.id}`;
+    holdReload(hold, inFlight > 0);
+    return () => holdReload(hold, false);
+  }, [session.id, inFlight > 0]);
 
   // Pictures pasted into a message live only in this page: a new version's reload waits for them to be sent or removed.
   useEffect(() => {
@@ -226,39 +247,79 @@ export const Composer = memo(function Composer({
     return () => box.removeEventListener('touchmove', onMove);
   }, []);
 
-  /** `override`: the text to send instead of the box's (auto-send after dictation, before the state lands). */
-  const send = async (override?: string) => {
+  /**
+   * Put a message that did not go back where it was written: in the box in front of anything typed since, or, when the
+   * chat is closed by now, in its draft (w893).
+   */
+  const putBack = (t: string, sentImages: typeof images, sentFiles: PendingFile[], sentReply: typeof reply) => {
+    restorePending(session.id, sentFiles);
+    if (!alive.current) {
+      const cur = lsGet(key);
+      lsSet(key, cur ? `${t}
+${cur}` : t);
+      return;
+    }
+    setText((cur) => (cur.trim() ? `${t}
+${cur}` : t));
+    if (sentImages.length) setImages((xs) => [...sentImages, ...xs]);
+    if (sentReply && !replyNow.current) startReply(session.id, sentReply);
+  };
+
+  /**
+   * `override`: the text to send instead of the box's (auto-send after dictation, before the state lands).
+   * The box (and its saved draft) empties as soon as the message is on its way (w893): a slow answer, a queued turn or a
+   * reload no longer leaves it filled. If the send fails, the message is put back and the failure said.
+   */
+  const send = (override?: string) => {
     const t = (override ?? text).trim();
-    if ((!t && !images.length && !files.length) || sending || reading || uploading) return;
+    if ((!t && !images.length && !files.length) || reading || uploading) return;
     if (failed) return toast('An attachment did not upload: retry it or remove it', 'error');
     if (!images.length && !files.length && onCommand?.(t)) return setText('');
-    setSending(true);
+    const sentImages = images;
     const sentFiles = files;
-    const ok = await attempt(
-      api.sendMessage(
-        session.id,
-        t,
-        images.map(({ mediaType, data }) => ({ mediaType, data })),
-        sentFiles.map((f) => f.ref!.id),
-        reply?.seq,
-      ),
-    );
-    setSending(false);
-    if (ok !== undefined) {
-      if (reply) clearReply(session.id);
-      showLatest(session.id);
-      setText('');
-      setImages([]);
-      clearPending(session.id, sentFiles);
-    }
-    if (ok?.note) toast(ok.note);
+    const sentReply = reply;
+    // A message sent again after a failure is the same message: the server takes it once.
+    const sig = JSON.stringify([t, sentImages.length, sentFiles.map((f) => f.ref?.id), sentReply?.seq]);
+    const id = failedSend.current?.sig === sig ? failedSend.current.id : (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    setText('');
+    draft.current = '';
+    lsSet(key, null);
+    setImages([]);
+    clearPending(session.id, sentFiles);
+    if (sentReply) clearReply(session.id);
+    showLatest(session.id);
+    setInFlight((n) => n + 1);
+    void (async () => {
+      try {
+        const res = await api.sendMessage(
+          session.id,
+          t,
+          sentImages.map(({ mediaType, data }) => ({ mediaType, data })),
+          sentFiles.map((f) => f.ref!.id),
+          sentReply?.seq,
+          id,
+        );
+        failedSend.current = null;
+        if (res?.note) toast(res.note);
+      } catch (e) {
+        failedSend.current = { sig, id };
+        putBack(t, sentImages, sentFiles, sentReply);
+        if (!(e instanceof UnauthorizedError)) {
+          const why = e instanceof Error ? e.message : String(e);
+          // An answer from the server that refuses the message means it was not taken; no answer, or a proxy's error, may mean it was.
+          toast(e instanceof ApiError && e.status < 500 ? `Not sent: ${why}. Your message is back in the box.` : `Not sent, or no answer came: ${why}. Your message is back in the box; sending it again will not say it twice.`, 'error');
+        }
+      } finally {
+        setInFlight((n) => n - 1);
+      }
+    })();
     ta.current?.focus();
   };
 
   const voiceMode = useVoiceMode(session);
   const hasContent = !!text.trim() || images.length > 0 || files.length > 0;
   const { bargeIn } = useVoicePrefs();
-  const voice = useTextareaDictation({ value: text, setValue: setText, ref: ta, onAutoSend: (t) => void send(t) });
+  const voice = useTextareaDictation({ value: text, setValue: setText, ref: ta, onAutoSend: (t) => send(t) });
 
   const stop = async () => {
     setStopping(true);
@@ -407,7 +468,7 @@ export const Composer = memo(function Composer({
             );
             if (act === 'default') return;
             e.preventDefault();
-            if (act === 'send') void send();
+            if (act === 'send') send();
             // Ctrl/Cmd+Enter: the same line break as Shift+Enter (execCommand keeps undo working).
             if (act === 'newline') insertPlainText('\n');
           }}
@@ -470,12 +531,12 @@ export const Composer = memo(function Composer({
           {hasContent || sending ? (
             <button
               className="btn btn-primary btn-icon btn-send"
-              onClick={() => void send()}
-              disabled={sending || reading > 0 || uploading}
+              onClick={() => send()}
+              disabled={!hasContent || reading > 0 || uploading}
               title={uploading ? 'Waiting for the attachments to upload' : touch ? 'Send' : busy ? 'Send (it waits for the current turn)' : 'Send (Enter; Shift+Enter for a new line)'}
               aria-label="Send"
             >
-              {sending ? <span className="spinner spinner-dark" /> : <Icon name="send" size={18} />}
+              {hasContent ? <Icon name="send" size={18} /> : <span className="spinner spinner-dark" />}
             </button>
           ) : busy ? (
             <button className="btn btn-icon btn-stop-main" onClick={stop} disabled={stopping} title={stopping ? 'Stopping…' : 'Stop the current turn'} aria-label="Stop">

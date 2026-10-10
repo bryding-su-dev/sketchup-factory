@@ -52,6 +52,10 @@ fixed transcript for screenshots, `stuck` with a blocked Unity editor) and the l
 `e2e-password-123`. Each project (desktop Chromium, Pixel-sized Chrome, iPhone-sized WebKit) gets its
 own server on ports 8791-8793, so run nothing else there.
 
+A test that intercepts the page's requests (`page.route`) sets `test.use({ serviceWorkers: 'block' })`: the app registers a
+service worker, and WebKit does not route the requests of a page one controls (the route is never hit and the real server
+answers; w893, `e2e/composerClears.spec.ts`).
+
 Visual snapshots (`toHaveScreenshot`) are compared only on Linux, where CI renders them; the
 baselines are the `*-linux.png` files in `e2e/__screenshots__/`. When you change the UI on purpose,
 run the CI workflow by hand with **update snapshots** ticked (Actions → CI → Run workflow), download
