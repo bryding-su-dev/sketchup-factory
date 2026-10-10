@@ -11,6 +11,7 @@ import { accountKeyOf } from './usage.ts';
 import { bedrockAccountKey, isBedrockEnv, startModel, type Backend } from './bedrock.ts';
 import { senderOf, type SessionSnapshot, type Unanswered } from './restart.ts';
 import { checkObject, readJsonDurable, writeJsonDurable } from './durable.ts';
+import { ContextMeter, IMAGE_CHARS, type Cumulative, type TurnUsage } from '../shared/spend.ts';
 
 /** A session is mid-turn: working, starting or waiting for a permission answer. Only these count toward the agent limits (w384). */
 export const MID_TURN: ReadonlySet<SessionInfo['status']> = new Set(['running', 'starting', 'waiting_permission']);
@@ -283,6 +284,8 @@ export class AgentSession implements SessionHandle {
   private costAtTurnOpen = 0;
   /** The uuids of /compact messages not answered yet: their results are no turn a person reads. */
   private readonly compactUuids = new Set<string>();
+  /** Where this session's context tokens go (w859, shared/spend.ts): read per turn into the result event's usage. */
+  private readonly meter = new ContextMeter();
   private readonly store: SessionSink;
   private readonly makeOptions: OptionsFactory;
   private readonly events: EventEmitter;
@@ -333,6 +336,7 @@ export class AgentSession implements SessionHandle {
     // Images arrive stored already (with an id) or are kept here, so the transcript can show them.
     const refs = images.map((i) => ({ id: i.id ?? this.store.saveImage(this.info.id, i.mediaType, i.data), mediaType: i.mediaType }));
     this.store.append(this.info.id, { kind: 'user', text, from, uuid, ...(refs.length ? { images: refs } : {}), ...(attachments.length ? { attachments } : {}), ...(requestedBy ? { requestedBy } : {}) });
+    this.meter.addUser(text.length + 200 + refs.length * IMAGE_CHARS);
     // The files come after the text, as a block the agent reads as data (shared/attachments.ts).
     const files = attachmentBlock(attachments, this.info.kind === 'orchestrator' ? 'orchestrator' : 'worker');
     this.input!.push(promptText(this.info.kind, files ? (text ? `${text}\n\n${files}` : files) : text, from, requestedBy), uuid, images);
@@ -517,12 +521,20 @@ export class AgentSession implements SessionHandle {
         const sub = m.parent_tool_use_id;
         // The context the next call reads (w535): this call's input, cached or not, and its output. Kept in memory here;
         // the next update (the turn's end at the latest) saves it.
-        const u = sub ? undefined : (m.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; output_tokens?: number } }).usage;
+        const u = sub ? undefined : (m.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; output_tokens?: number; cache_creation?: { ephemeral_5m_input_tokens?: number } | null } }).usage;
         if (u) {
           const n = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0);
           if (n > 0) this.info.contextTokens = n;
+          // The model call this message belongs to (a message's content blocks arrive as separate messages with one id).
+          const mid = (m.message as { id?: string }).id;
+          if (mid) this.meter.call({ id: mid, model: m.message.model, in: u.input_tokens ?? 0, out: u.output_tokens ?? 0, cr: u.cache_read_input_tokens ?? 0, cw: u.cache_creation_input_tokens ?? 0, cw5: u.cache_creation?.ephemeral_5m_input_tokens ?? 0 });
         }
         for (const b of m.message.content) {
+          if (!sub) {
+            if (b.type === 'text') this.meter.addAssistant(b.text.length);
+            else if (b.type === 'thinking') this.meter.addAssistant(b.thinking.length);
+            else if (b.type === 'tool_use') this.meter.addToolUse(b.id, b.name, b.input, JSON.stringify(b.input ?? {}).length);
+          }
           if (b.type === 'text' && !sub && b.text.trim()) this.store.append(id, { kind: 'assistant', text: b.text });
           else if (b.type === 'thinking' && !sub && b.thinking.trim()) this.store.append(id, { kind: 'thinking', text: b.thinking });
           else if (b.type === 'tool_use') this.store.append(id, { kind: 'tool_use', toolUseId: b.id, name: b.name, input: b.input, parentToolUseId: sub });
@@ -536,6 +548,8 @@ export class AgentSession implements SessionHandle {
         for (const b of content) {
           if (b.type === 'tool_result') {
             const images = this.keepImages(b.content);
+            // A subagent's own tool results never reach this context; its final answer comes as the Agent tool's result.
+            if (!m.parent_tool_use_id) this.meter.addToolResult(b.tool_use_id, textOf(b.content).length, Array.isArray(b.content) ? b.content.filter((x) => x && typeof x === 'object' && (x as { type?: string }).type === 'image').length : 0);
             this.store.append(id, { kind: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: clip(textOf(b.content), MAX_TOOL_RESULT), ...(images.length ? { images } : {}) });
           }
         }
@@ -550,6 +564,8 @@ export class AgentSession implements SessionHandle {
         // the info (bedrockCostUsd) is saved with them.
         if (this.info.backend === 'bedrock') this.events.emit('bedrockResult', this, m);
         const total = m.total_cost_usd ?? 0;
+        // A resumed process whose totals did not carry the earlier spend starts from zero (below the base): its cumulative usage is this turn in full (w859).
+        const restarted = this.firstResult && this.costBase > 0 && total < this.costBase;
         // A resumed session's first result may already carry the earlier spend; do not count it twice.
         if (this.firstResult && total >= this.costBase) this.costBase = 0;
         this.firstResult = false;
@@ -558,6 +574,7 @@ export class AgentSession implements SessionHandle {
         if (answered.length && answered.every((u) => this.compactUuids.has(u))) {
           for (const u of answered) this.compactUuids.delete(u);
           if (m.subtype !== 'success' || m.is_error) this.compactFailed(m.subtype === 'success' ? m.result || 'an error result' : m.subtype);
+          // Its cost is in the SDK's cumulative totals, so the next turn's result carries it (w859): no line of its own.
           this.update({ costUsd: this.costBase + total });
           if (!this.stateEvents) {
             this.update({ status: this.pending.size ? 'waiting_permission' : 'idle', turnOpenSince: undefined });
@@ -582,6 +599,7 @@ export class AgentSession implements SessionHandle {
           turns: m.num_turns,
           durationMs: m.duration_ms,
           answers: m.user_message_uuids ?? (m.user_message_uuid ? [m.user_message_uuid] : undefined),
+          usage: { ...this.turnUsage(m), ...(restarted ? { restarted: true } : {}) },
         });
         this.lastTurnText = text;
         const spent = this.costBase + total;
@@ -599,6 +617,24 @@ export class AgentSession implements SessionHandle {
       default:
         return;
     }
+  }
+
+  /**
+   * What this turn cost, from Claude Code's own numbers (w859): the SDK's cumulative per-model totals at its end (the portal
+   * takes the difference against the last it saw), the main loop's own usage for this turn, and the context meter's reading.
+   */
+  private turnUsage(m: Extract<SDKMessage, { type: 'result' }>): TurnUsage {
+    const cum: Cumulative = {};
+    for (const [model, u] of Object.entries(m.modelUsage ?? {})) {
+      if (!u) continue;
+      cum[model] = { in: u.inputTokens ?? 0, out: u.outputTokens ?? 0, cr: u.cacheReadInputTokens ?? 0, cw: u.cacheCreationInputTokens ?? 0, usd: u.costUSD ?? 0 };
+    }
+    const u = m.usage as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | undefined;
+    return {
+      ...(Object.keys(cum).length ? { cum } : {}),
+      ...(u ? { main: { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0, cr: u.cache_read_input_tokens ?? 0, cw: u.cache_creation_input_tokens ?? 0 } } : {}),
+      meter: this.meter.drain(),
+    };
   }
 
   /** The turn ended: 'turnEnd' with its text, and whose compaction it was when it was one (w535). */
@@ -1121,8 +1157,12 @@ export class SessionManager {
     s.dispose?.();
     this.sessions.delete(id);
     this.store.removeSession(id);
-    this.store.deleteTranscript(id);
+    // The transcript outlives its session while its request's spend is being looked at (w859): the data guard deletes it then.
+    if (!this.keepTranscript?.(id)) this.store.deleteTranscript(id);
   }
+
+  /** Whether a removed session's transcript must stay for now (its request closed less than the retention ago): wired by index.ts. */
+  keepTranscript?: (sessionId: string) => boolean;
 
   /**
    * The server is stopping: every process goes (all of them, or those `which` picks), but what each was doing is kept

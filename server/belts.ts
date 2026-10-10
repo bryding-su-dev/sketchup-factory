@@ -20,6 +20,8 @@ export const PERSONAL_TOOLS: ReadonlySet<string> = new Set([
   'list_branches',
   'agent_transcript',
   'search_transcripts',
+  // what work costs: dollars and tokens per request, session and model (w859)
+  'spend_report',
   'system_status',
   'ffbox_activity',
   'max_activity',

@@ -382,3 +382,21 @@ test('restart marks: an idle worker waiting on a background task is resumed, tol
   assert.match(texts(again, s.info.id).at(-1)!, /1 background task\(s\) running; they were stopped/);
   again.flush();
 });
+
+test('w859: a turn result line carries the SDK cumulative usage per model and the context reading', async (t) => {
+  const { store, sessions, worker } = setup(t);
+  const s = worker();
+  sessions.send(s.info.id, 'one');
+  await until(() => s.info.status === 'idle', 'the first turn');
+  sessions.send(s.info.id, 'two');
+  await until(() => s.info.turns === 2 && s.info.status === 'idle', 'the second turn');
+  const results = store.readTranscript(s.info.id).filter((e) => e.kind === 'result');
+  assert.equal(results.length, 2);
+  const [a, b] = results.map((e) => (e.kind === 'result' ? e.usage : undefined));
+  assert.ok(a?.cum?.['claude-opus-5-5'], 'the SDK totals per model');
+  assert.ok(b!.cum!['claude-opus-5-5'].usd > a!.cum!['claude-opus-5-5'].usd, 'cumulative: the later total is larger');
+  assert.equal(a?.main?.cw, 1000);
+  // the meter read the model calls of the turn (the fake reply carries usage)
+  assert.ok((a?.meter?.calls ?? 0) >= 1);
+  assert.ok(a?.meter?.cats.base, 'what the context held is shared out (here all base: the fake sends no tool output)');
+});

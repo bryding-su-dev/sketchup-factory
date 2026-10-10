@@ -37,6 +37,8 @@ import { sourceTag, workerRules } from './intakeRules.ts';
 import { buildSubmit } from './providerProtocol.ts';
 import { isUnused, labelAfterEnd, labelDecision, type Place } from './labelPolicy.ts';
 import { ghNoreply, githubSlug, publicIdentityEnv, publicReposOf } from './publicGit.ts';
+import { SpendStore, buildReport, costLine, renderReport, renderRequest, renderSession } from './spend.ts';
+import { dataGuardSettings, footprint, gzipRatioCached, renderFootprint } from './dataGuard.ts';
 import { REACTION_MEANINGS, REPLY_MARK } from '../shared/replies.ts';
 import { statsLine, systemStats } from './system.ts';
 import { commandLine, launchIndependent, run } from './proc.ts';
@@ -216,6 +218,8 @@ export class Agents {
   providers?: ProviderManager;
   /** Files people attach to messages (server/attachments.ts, docs/attachments.md); wired by index.ts. */
   attachments?: AttachmentStore;
+  /** What each request costs (server/spend.ts, docs/spend.md); wired by index.ts. */
+  spend?: SpendStore;
   /** Max, the Discord bot (server/max.ts); wired by index.ts. */
   max?: MaxManager;
 
@@ -1975,6 +1979,18 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
           wrap(async (a) => this.switchBranch({ sandbox: a.sandbox, machine: a.machine, branch: a.branch, createFrom: a.create_from })),
         ),
         tool(
+          'spend_report',
+          "What work costs, so token use can be optimized (w859, docs/spend.md). Dollars and tokens (input, output, cache read, cache write) come from Claude Code's own per-turn usage, per model, per session and per request; every turn is counted for the request the worker was on when it began (an [about wNNN] line, else the request it was last sent), the dispatcher's and orchestrators' turns for the requests their messages name, and what no request owns (the dispatcher, chats, the ops worker, standing agents, turns tied to nothing) is listed apart. Estimated parts (sessions that ran before the tracking, backfilled transcripts) are labelled. Default: the last 7 days' top requests by cost with where their tokens went, cost by kind of work (bug fix, feature, release, review, investigation, ops), where the money goes inside sessions (file reads, re-reads, CI polling, tool output, the agent's own text, the base context), and the data guard's footprint. request: one request in full (models, every session with its cost, tokens and a link to its transcript, how long each transcript is kept). session: one session's spend and the requests it served. footprint: what the transcripts weigh, their growth a day and the projection.",
+          {
+            days: z.number().int().min(1).max(120).optional().describe('Window in days, UTC (default 7).'),
+            top: z.number().int().min(1).max(50).optional().describe('How many requests to list (default 10).'),
+            request: z.string().optional().describe('A request id, e.g. "w859": its spend in full.'),
+            session: z.string().optional().describe('A session id: its spend, models, context readings and the requests it served.'),
+            footprint: z.boolean().optional().describe('The transcripts folder: size, growth a day, 7-day projection, gzip ratio, disk.'),
+          },
+          wrap(async (a) => this.spendReport(a)),
+        ),
+        tool(
           'search_transcripts',
           'Full-text search across every transcript: the orchestrator, workers, standing agents and machine agents. All words must match ("quoted phrases" stay together). Filters: sandbox, machine, agent (a session id, standing agent id or part of a title), since/until (YYYY-MM-DD). Returns the newest matches with session id, where, when and a snippet; read around one with agent_transcript.',
           {
@@ -2662,6 +2678,34 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
   }
 
   /** list_work's answer: one request in full, or one line per request. */
+  /** A session's transcript in the portal, as a link a person can open (the portal's public address when it has one). */
+  sessionLink(sessionId: string): string {
+    const base = (this.cfg.publicUrl ?? '').replace(/\/+$/, '');
+    return `${base}/#/session/${sessionId}`;
+  }
+
+  /** spend_report (w859): the cost views of server/spend.ts as text. */
+  spendReport(a: { days?: number; top?: number; request?: string; session?: string; footprint?: boolean }): string {
+    const sp = this.spend;
+    if (!sp) return 'Spend is not recorded on this server.';
+    sp.syncWork();
+    const link = (sid: string) => this.sessionLink(sid);
+    if (a.request) return renderRequest(sp, a.request.trim().toLowerCase(), link, this.retainDays());
+    if (a.session) return renderSession(sp, a.session.trim(), link);
+    const dir = this.store.transcriptsDir;
+    const guard = dataGuardSettings(this.cfg);
+    const fp = renderFootprint(footprint(dir, Date.now(), gzipRatioCached(dir)), guard);
+    if (a.footprint) return fp;
+    return `${renderReport(buildReport(sp, Date.now(), { days: a.days, top: a.top }))}
+
+${fp}`;
+  }
+
+  /** Days a transcript is kept after the last request it served closed (config dataGuard.retainDays, default 7). */
+  retainDays(): number {
+    return dataGuardSettings(this.cfg).retainDays;
+  }
+
   private listWork(a: { id?: string; status?: string; mine?: boolean; source?: 'people' | 'intake' | 'discord' | 'ffbox' | 'nightly' }, ctx: BeltCtx): string {
     const o = this.orchestrators;
     if (a.id) {
@@ -2669,7 +2713,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
       // The dispatcher sees the overlaps as they are now; people see what was found at filing.
       const overlaps = ctx.role === 'dispatcher' ? o.currentOverlaps(w) : w.overlaps;
       return [
-        describeItem(w, (id) => o.workerState(id)),
+        describeItem(w, (id) => o.workerState(id), costLine(this.spend, w.id)),
         '',
         w.brief,
         w.constraints ? `\nConstraints: ${w.constraints}` : '',
@@ -2678,6 +2722,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
         w.attachments?.length ? attachmentsNote(w.attachments) : '',
         overlaps.length ? `Possible overlaps: ${overlaps.map(overlapLine).join('; ')}.` : 'No overlap with open or recent work.',
         w.humanAsked ? `Asked for by ${w.requestedBy.displayName} in their own turn.` : `Filed outside a turn of ${w.requestedBy.displayName}'s.`,
+        this.spend ? `Spend: ${renderRequest(this.spend, w.id, (sid) => this.sessionLink(sid), this.retainDays())}` : '',
         'Log:',
         ...w.log.map((l) => `  ${l}`),
       ]
@@ -2692,7 +2737,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
       .filter((w) => sourceMatches(w, a.source))
       .sort(ledgerOrder)
       .slice(0, 60);
-    return items.map((w) => describeItem(w, (id) => o.workerState(id))).join('\n') || (status === 'open' ? 'No open requests.' : status === 'needs_human' ? 'Nothing needs a human.' : 'No requests.');
+    return items.map((w) => describeItem(w, (id) => o.workerState(id), costLine(this.spend, w.id))).join('\n') || (status === 'open' ? 'No open requests.' : status === 'needs_human' ? 'Nothing needs a human.' : 'No requests.');
   }
 
   /** The logins, for the briefs: "Ben (user id ben, owner), Lothsahn (user id lothsahn, member)". */

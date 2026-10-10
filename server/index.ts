@@ -51,6 +51,8 @@ import { appVersion, formatVersion } from './version.ts';
 import { VoiceService } from './voice.ts';
 import { MAX_DICTATION_SECONDS, MAX_TTS_CHARS, buildVoicePrompt, wavSeconds, type SpeakRequest, type TranscribeRequest, type VocabularySource } from '../shared/voice.ts';
 import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, Requester, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
+import { SpendStore, buildReport } from './spend.ts';
+import { dataGuardSettings, footprint, gzipRatioCached, runDataGuard } from './dataGuard.ts';
 
 const WEB = path.join(ROOT, 'web', 'dist');
 
@@ -82,6 +84,9 @@ writeAlive(cfg.dataDir);
 setInterval(() => writeAlive(cfg.dataDir), 30_000);
 
 const store = new Store(cfg.dataDir);
+// What each request costs (w859, docs/spend.md): fed by every transcript event, whether the session runs here or on a machine.
+const spend = new SpendStore(cfg.dataDir, { work: () => store.work.values(), session: (id) => store.sessions.get(id), priorResults: (id) => store.countResults(id) });
+store.onEvent = (sid, e) => spend.observe(sid, e);
 // The orchestrators' memory (Claude Code writes it, so it cannot be written crash-safe): a file a crash damaged gets its
 // newest good backup back, and a backup is taken every 10 minutes when something changed (server/orchestratorMemory.ts).
 const memoryRoot = memoryRootOf(cfg);
@@ -121,6 +126,13 @@ setTimeout(() => {
 }, 5000);
 const sandboxes = new SandboxManager(cfg, store);
 const sessions = new SessionManager(cfg, store);
+sessions.keepTranscript = (id) => {
+  // A removed chat (an orchestrator's or the ops worker's) goes with its session; a worker's stays while its request's numbers are looked at.
+  const role = spend.session(id)?.role;
+  if (role === 'dispatcher' || role === 'personal' || role === 'ops') return false;
+  const until = spend.protectedUntil(id, dataGuardSettings(cfg).retainDays);
+  return until !== undefined && until > Date.now();
+};
 const machines = new MachineManager(cfg, store, sessions);
 // Files people attach to messages (docs/attachments.md): stored by SHA-256, never opened; old ones go by retention.
 const attachments = new AttachmentStore(cfg.dataDir, () => cfg.attachments);
@@ -240,6 +252,7 @@ const identity = new Identity(cfg, () => auth.userInfos());
 const agents = new Agents(cfg, store, sandboxes, sessions, machines, identity);
 agents.attachments = attachments;
 if (host.elevated) sandboxes.refuseUnityWhileElevated(host.elevatedWhy ?? 'Run scripts/restart.ps1 to relaunch it non-elevated.');
+agents.spend = spend;
 
 /** The signed-in person making this request, as work records them (a route only runs for a signed-in user). */
 function requesterOf(req: http.IncomingMessage) {
@@ -263,6 +276,57 @@ function mayDrive(req: http.IncomingMessage, s: SessionInfo) {
 }
 const notifier = new Notifier(cfg.dataDir, store, sessions);
 notifier.orchestratorId = () => store.orchestratorId;
+// The data folder's disk guard (w859, server/dataGuard.ts, docs/spend.md "Data guard"): idle transcripts are compressed from
+// half a disk used, those past their retention (7 days after their request closed) deleted from three quarters, and a disk the
+// guard cannot get below 90% says so, once a day at most. The cost record in spend.json is never touched.
+let lastGuardAlert = 0;
+const guardData = async () => {
+  try {
+    spend.syncWork();
+    const run = await runDataGuard({ dir: store.transcriptsDir, spend, store, config: dataGuardSettings(cfg) });
+    if (run.gzipped || run.pruned) console.log(`data guard: ${run.level} at ${run.usedPercent?.toFixed(0)}% used; compressed ${run.gzipped} transcript(s) (${(run.gzippedFrom / 1048576).toFixed(0)} MB to ${(run.gzippedTo / 1048576).toFixed(0)} MB), deleted ${run.pruned} past their retention (${(run.prunedBytes / 1048576).toFixed(0)} MB)`);
+    if (run.error) console.warn(`data guard: ${run.error}`);
+    if (run.alert && Date.now() - lastGuardAlert > 24 * 3_600_000) {
+      lastGuardAlert = Date.now();
+      console.warn(`data guard: ${run.alert}`);
+      notifier.host('Portal data disk is filling', run.alert);
+    }
+  } catch (e) {
+    console.warn(`data guard failed: ${(e as Error).message}`);
+  }
+};
+setTimeout(() => void guardData(), 3 * 60_000).unref();
+setInterval(() => void guardData(), dataGuardSettings(cfg).everyMinutes * 60_000).unref();
+// Sessions that ran before the spend record existed are read from their transcripts once, a few at a time so the portal stays
+// responsive (w859, docs/spend.md "Backfill"): dollars as recorded, tokens estimated and labelled so.
+const backfillSpend = async () => {
+  const started = Date.now();
+  let sessionsDone = 0;
+  let turns = 0;
+  let usd = 0;
+  const todo = [...store.sessions.values()].filter((s) => !spend.session(s.id)?.backfilled && store.hasTranscript(s.id)).sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  for (const s of todo) {
+    try {
+      const r = spend.backfillSession(s.id, store.readTranscript(s.id), s);
+      sessionsDone++;
+      turns += r.turns;
+      usd += r.usd;
+    } catch (e) {
+      console.warn(`spend backfill: ${s.id}: ${(e as Error).message}`);
+    }
+    // One session per turn of the event loop (a big transcript is one blocking parse), a pause after every five.
+    await new Promise((r) => (sessionsDone % 5 === 0 ? setTimeout(r, 25) : setImmediate(r)));
+  }
+  if (sessionsDone) {
+    spend.backfill = { at: new Date().toISOString(), sessions: (spend.backfill?.sessions ?? 0) + sessionsDone, turns: (spend.backfill?.turns ?? 0) + turns, usd: (spend.backfill?.usd ?? 0) + usd };
+    spend.syncWork();
+    spend.changed();
+    console.log(`spend backfill: ${sessionsDone} session(s), ${turns} turn(s), $${usd.toFixed(2)} in ${((Date.now() - started) / 1000).toFixed(0)} s`);
+  }
+};
+setTimeout(() => void backfillSpend(), 90_000).unref();
+// The ledger moves on (requests close, titles change, closed ones drop out after a week): the spend record follows (w859).
+setInterval(() => spend.syncWork(), 5 * 60_000).unref();
 // Who hears about a session (docs/orchestrators.md): a person's own orchestrator only them, the dispatcher's turns
 // nobody (its questions and errors the owners), a worker's finished turns the people it works for.
 notifier.audience = (s, kind) => {
@@ -559,6 +623,35 @@ const setBackendMode = (mode: unknown) => {
 route('POST', '/api/backend/mode', async (req) => {
   requesterOf(req); // signed in: any person may switch, as with the other app settings
   return setBackendMode((await readJson<{ mode?: unknown }>(req)).mode);
+});
+
+// What work costs (w859, docs/spend.md): the cost of each request in the ledger, one request in full, and the analysis.
+route('GET', '/api/spend/summary', async () => {
+  spend.syncWork();
+  const requests: Record<string, { usd: number; in: number; out: number; cr: number; cw: number; sessions: number; estimatedUsd: number }> = {};
+  for (const w of store.work.values()) {
+    const r = spend.request(w.id);
+    if (r) requests[w.id] = { usd: r.total.usd, in: r.total.in, out: r.total.out, cr: r.total.cr, cw: r.total.cw, sessions: Object.keys(r.sessions).length, estimatedUsd: r.estimated.usd };
+  }
+  return { requests };
+});
+route('GET', '/api/spend/request/(w[0-9]+|_[a-z0-9:_-]+)', async (_r, [id]) => {
+  spend.syncWork();
+  const r = spend.request(id);
+  if (!r) return { request: null, sessions: [] };
+  const retain = dataGuardSettings(cfg).retainDays;
+  return {
+    request: r,
+    retainDays: retain,
+    sessions: spend.sessionsOf(id).map(({ session: s, share }) => ({ id: s.id, role: s.role, title: s.title, machine: s.machine, share, transcript: s.transcript ?? { state: 'full' }, keptUntil: (() => { const u = spend.protectedUntil(s.id, retain); return u === undefined || !Number.isFinite(u) ? null : new Date(u).toISOString(); })(), keptWhileOpen: spend.protectedUntil(s.id, retain) === Infinity, hasTranscript: store.hasTranscript(s.id) })),
+  };
+});
+route('GET', '/api/spend/report', async (_r, _m, url) => {
+  spend.syncWork();
+  const days = Number(url.searchParams.get('days')) || 7;
+  const top = Number(url.searchParams.get('top')) || 10;
+  const dir = store.transcriptsDir;
+  return { report: buildReport(spend, Date.now(), { days, top }), footprint: footprint(dir, Date.now(), gzipRatioCached(dir)), guard: dataGuardSettings(cfg), backfill: spend.backfill ?? null };
 });
 route('POST', '/api/usage/refresh', async () => ({ started: usage.refreshNow(), machines: machines.requestUsage() }));
 
@@ -1461,6 +1554,7 @@ function stopServer(req: RestartRequest, drained: ReadonlySet<string> = new Set(
   max.close();
   intake.close();
   store.flush();
+  spend.flush();
   process.exit(0);
 }
 
@@ -1721,6 +1815,7 @@ setTimeout(() => {
       writeResumeFile(cfg.dataDir, { ...f, reason: pending.reason, update: true });
       fs.writeFileSync(path.join(cfg.dataDir, 'update.request'), new Date().toISOString());
       store.flush();
+      spend.flush();
       process.exit(0);
     }
     agents.resumeAfterRestart(f, cutOff, { head: appHead(), version: appVersion().version }, notes);

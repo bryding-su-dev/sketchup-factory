@@ -5762,3 +5762,67 @@ button.board-head-link:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* What work costs (w859): a request's spend block, and the dispatcher's Spend tab. */
+.spend-block {
+  margin: var(--s-2) 0;
+}
+.spend-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--s-1) 0;
+}
+.spend-table th,
+.spend-table td {
+  text-align: left;
+  padding: 2px 8px 2px 0;
+  vertical-align: top;
+}
+.spend-table th {
+  color: var(--fg-3, var(--fg-2));
+  font-weight: 500;
+}
+.spend-sessions {
+  margin: var(--s-1) 0;
+  padding-left: var(--s-4);
+}
+.spend-bars {
+  display: grid;
+  gap: 3px;
+  margin: var(--s-1) 0 var(--s-2);
+}
+.spend-bar-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 200px) 1fr minmax(120px, auto);
+  gap: var(--s-2);
+  align-items: center;
+}
+.spend-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spend-bar {
+  height: 8px;
+  background: var(--bg-3, var(--bg-2));
+  border-radius: 4px;
+  overflow: hidden;
+}
+.spend-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent, #4c8dff);
+}
+.spend-tab {
+  padding: var(--s-3) var(--s-4);
+  overflow: auto;
+}
+.spend-tab h3 {
+  margin: var(--s-3) 0 var(--s-1);
+}
+@media (max-width: 640px) {
+  .spend-bar-row {
+    grid-template-columns: 1fr;
+  }
+}
