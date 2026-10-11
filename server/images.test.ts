@@ -142,6 +142,10 @@ test('message images: markdown images and bare paths, as the page reads them', a
   assert.deepEqual(markdownImagePaths(text), ['/Users/me/sb/Screenshots/a.png', 'C:/Users/me/My Shots/b.svg', '/tmp/x y/c.jpg']);
   assert.ok(mentionedPaths(text).includes('/Users/me/sb/v.mp4'));
   assert.deepEqual(messageImagePaths(text), ['/Users/me/sb/Screenshots/a.png', 'C:/Users/me/My Shots/b.svg', '/tmp/x y/c.jpg', '/Users/me/sb/Logs/d.webp', 'C:\\sb\\e.gif']);
+  // A video written as a markdown image is played by the page, not kept as an image (w1030).
+  const clip = '![old clip](</srv/fff/review/w801/w801-clip.mp4>) ![](/srv/fff/review/w801/a.webm) ![shot](/srv/fff/review/w801/s.png)';
+  assert.deepEqual(markdownImagePaths(clip), ['/srv/fff/review/w801/s.png']);
+  assert.deepEqual(messageImagePaths(clip), ['/srv/fff/review/w801/s.png']);
   assert.equal(localPath('//cdn.example/x.png'), undefined);
   assert.equal(localPath('C:%5Cx%5Cy.png'), 'C:\\x\\y.png');
   const many = Array.from({ length: 12 }, (_, i) => `![](/s/${i}.png)`).join(' ');

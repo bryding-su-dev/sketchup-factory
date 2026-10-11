@@ -72,6 +72,8 @@ fs.copyFileSync(path.join(ROOT, 'e2e', 'fixtures', 'clip.webm'), path.join(video
 fs.writeFileSync(path.join(videos, 'clip.webm.meta'), 'fileFormatVersion: 2\nguid: 0\n');
 // A screenshot in a sandbox that the orchestrator mentions by path (e2e/images.spec.ts).
 fs.writeFileSync(path.join(sandboxRoot, 'gallery', 'Screenshots', 'orch-proof.png'), Buffer.from(RED_PNG, 'base64'));
+// The same bytes named .mp4: Playwright's Chromium has no H.264, so this one only proves the page asks for it as a video.
+fs.copyFileSync(path.join(ROOT, 'e2e', 'fixtures', 'clip.webm'), path.join(videos, 'clip.mp4'));
 
 // Max (docs/max.md): the token in a scratch ffbox config, a mock Discord, and what agents' ffdiscord calls wrote.
 const discordPort = port + 100;

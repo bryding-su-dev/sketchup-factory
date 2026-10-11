@@ -26,6 +26,9 @@ export function localPath(url: string): string | undefined {
   return /^[a-zA-Z]:[\\/]/.test(u) || /^\/(?!\/)/.test(u) ? u : undefined;
 }
 
+/** A video file by its name: shown in a player, not as an image. */
+export const isVideoPath = (p: string) => /\.(mp4|m4v|webm)$/i.test(p);
+
 // Absolute image and video paths in agent text: Windows (C:\x\y.png, C:/x/y.mp4) or POSIX (/Users/x/y.png).
 const PATH_RE = /(?:[A-Za-z]:[\\/]|\/)(?:[^\s`'"()<>|*?,;]+[\\/])*[^\s`'"()<>|*?,;:\\/]+\.(?:png|jpe?g|gif|webp|svg|mp4|m4v|webm)\b/gi;
 
@@ -47,18 +50,16 @@ export function mentionedPaths(text: string): string[] {
   return [...out];
 }
 
-/** The local files `text` shows as markdown images, as paths. */
+/** The local image files `text` shows as markdown images, as paths (a video written the same way is played, not kept). */
 export function markdownImagePaths(text: string): string[] {
   const out = new Set<string>();
   for (const m of text.matchAll(MD_IMAGE)) {
     const p = localPath(m[1] ?? m[2]);
-    if (p) out.add(p);
+    if (p && !isVideoPath(p)) out.add(p);
     if (out.size >= MAX_MESSAGE_IMAGES) break;
   }
   return [...out];
 }
-
-export const isVideoPath = (p: string) => /\.(mp4|m4v|webm)$/i.test(p);
 
 /** Every image file a message shows (markdown images first, then bare paths), videos left out. */
 export function messageImagePaths(text: string): string[] {

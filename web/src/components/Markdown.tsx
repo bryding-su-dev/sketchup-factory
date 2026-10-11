@@ -1,11 +1,11 @@
 import { createContext, lazy, memo, Suspense, useContext, useMemo, useRef, useState, type ComponentProps } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { DATA_IMAGE_URI, localPath, MAX_DATA_URI } from '../../../shared/imagePaths';
+import { DATA_IMAGE_URI, isVideoPath, localPath, MAX_DATA_URI } from '../../../shared/imagePaths';
 import { sanitizeSvg } from '../../../shared/svg';
 import { openLightbox } from '../store';
-import { baseName } from './Images';
-import { CopyButton } from './ui';
+import { baseName, posterSrc } from './Images';
+import { CopyButton, Icon } from './ui';
 
 const Mermaid = lazy(() => import('./Mermaid'));
 
@@ -66,12 +66,32 @@ function InlineImage({ src, name, alt }: { src: string; name: string; alt?: stri
   );
 }
 
+/**
+ * A video written as a markdown image, `![clip](</srv/fff/review/w1/clip.mp4>)`: an inline player that loads only
+ * its metadata until played (seeking uses HTTP ranges). Spans, not a figure: the text sits in a paragraph.
+ */
+function InlineVideo({ src, name, alt }: { src: string; name: string; alt?: string }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) return <code title="This video is not available">{alt || name}</code>;
+  return (
+    <span className="md-video">
+      <video src={posterSrc(src)} controls playsInline muted preload="metadata" onError={() => setBroken(true)} />
+      <span className="md-video-cap dim small">
+        <span className="ellipsis mono">{alt || name}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => openLightbox([{ src, name, video: true }], 0)} title="Open large">
+          <Icon name="expand" size={12} />
+        </button>
+      </span>
+    </span>
+  );
+}
+
 function MdImage({ src, alt }: ComponentProps<'img'> & ExtraProps) {
   const resolve = useContext(LocalImages);
   const url = typeof src === 'string' ? src : '';
   const shown = useMemo(() => {
     const path = localPath(url);
-    if (path) return resolve ? { src: resolve(path), name: baseName(path) } : undefined;
+    if (path) return resolve ? { src: resolve(path), name: baseName(path), video: isVideoPath(path) } : undefined;
     if (url.startsWith('data:')) {
       const safe = safeDataImage(url);
       return safe ? { src: safe, name: alt || 'image' } : { refused: true };
@@ -80,6 +100,7 @@ function MdImage({ src, alt }: ComponentProps<'img'> & ExtraProps) {
   }, [url, resolve, alt]);
   if (!shown) return null;
   if ('refused' in shown) return <code title="Only PNG, JPEG, GIF, WebP and SVG images under 1.5 MB are shown">{alt || 'image'} (not shown)</code>;
+  if ('video' in shown && shown.video) return <InlineVideo src={shown.src} name={shown.name} alt={alt} />;
   return <InlineImage src={shown.src} name={shown.name} alt={alt} />;
 }
 

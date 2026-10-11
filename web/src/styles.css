@@ -2105,6 +2105,29 @@ select.input {
   object-fit: contain;
 }
 
+.md .md-video {
+  display: block;
+  width: min(100%, 480px);
+  margin: 4px 0;
+}
+.md .md-video video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 8px;
+}
+.md .md-video-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.md .md-video-cap .ellipsis {
+  flex: 1;
+  min-width: 0;
+}
+
 .md-code-actions {
   display: flex;
   align-items: center;
