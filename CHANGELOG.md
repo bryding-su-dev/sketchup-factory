@@ -12,6 +12,7 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- **A 👍 on the orchestrator's proposal counts as the person's own words** (port of upstream w1039, #326, the gates this fork has): a 👍 ✅ or 👎 ❌ on a message the orchestrator wrote, clicked by its owner, is armed for two hours and covers the one action that message proposes, for an intake approve or decline and an owner's close of another person's request. docs/orchestrators.md, "A reaction can be the person's own answer".
 - **What each request costs, and its transcripts kept** (w859, lothsahn: "I would like you to track the per workitem spend as well
   as the transcript so we can optimize token usage", and "We should keep worker transcripts and numbers for at least 7 days. But
   make sure we don't run the portal out of disk"). Every turn's result line now carries Claude Code's own usage (the SDK's

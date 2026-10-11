@@ -521,3 +521,15 @@ than Ben's own.
 - This host's sandboxes still run in the portal's own process. Moving them behind a daemon, as on the machines, is
   [backlog.md](backlog.md) item 1; the dispatcher already addresses a daemon's sandbox as `"<machine>/<name>"`, and
   nothing in the ledger or the routing depends on where a worker runs.
+
+
+## A reaction can be the person's own answer
+
+A 👍 ✅ (yes) or 👎 ❌ (no) on a message the orchestrator itself wrote, clicked by the owner of that chat within two days of the
+message, is armed for two hours. The orchestrator is told so in the `[reaction]` message, and the gates that need the
+person's own words (`update_work` approve or decline of an intake request, and an owner's close of another person's request)
+take the click for the action that message proposes: one sentence of it must name the request and the action together, and the
+message must be an offer or a question. Nothing else in that turn is covered, one click does each thing once, the request's
+log shows the click and the sentence, and taking the reaction back disarms it. A click on a relayed line, a person's own
+message or by anyone else arms nothing. (Upstream w1039; the conditional-decision, main-clone, deploy and ops-worker gates it
+also covers upstream are not in this fork.)
