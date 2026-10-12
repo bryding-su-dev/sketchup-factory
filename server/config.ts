@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { PermissionMode } from '../shared/types.ts';
 import { DEFAULT_HANG, type HangThresholds } from './unityHang.ts';
 import { checkObject, dataRecoveries, readJsonDurable } from './durable.ts';
+import { checkBedrockConfig, type BedrockConfig } from './bedrock.ts';
 
 /** What a portal-run agent runs on (docs/accounts.md): the computer's stored claude.ai login, or config claudeEnv's token. */
 export type ClaudeAccount = 'login' | 'token';
@@ -345,6 +346,8 @@ export interface Config {
    * as Claude Code's ANTHROPIC_DEFAULT_<ALIAS>_MODEL. Default: haiku pinned to claude-haiku-5-5. "" removes a pin.
    */
   modelPins?: Partial<Record<'opus' | 'sonnet' | 'haiku', string>>;
+  /** The Bedrock backend (w38, docs/bedrock.md): off until `profile` is set. */
+  bedrock?: BedrockConfig;
   orchestrator: {
     model: string;
     effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -631,6 +634,7 @@ export function loadConfig(): Config {
     if (!cfg[key]) throw new Error(`config.json is missing "${key}"`);
   }
   checkAccountConfig(cfg);
+  checkBedrockConfig(cfg);
   if (cfg.project.integration !== 'push' && cfg.project.integration !== 'pull-request') throw new Error('config project.integration is "push" or "pull-request"');
   for (const key of ['workerBriefFile', 'orchestratorBriefFile'] as const) {
     if (cfg.project[key]) cfg.project[key] = path.resolve(ROOT, cfg.project[key]!);

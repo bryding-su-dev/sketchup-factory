@@ -162,6 +162,10 @@ export interface SessionInfo {
    * follow the config (sessionSource).
    */
   account?: string;
+  /** Where its current process runs (w38, docs/bedrock.md): the Claude plan or Bedrock. Recorded when the process starts. */
+  backend?: 'plan' | 'bedrock';
+  /** The estimated Bedrock cost of this session so far, USD (the plan costs nothing per token). */
+  bedrockCostUsd?: number;
   createdAt: string;
   lastActivityAt: string;
   /** A tool call of its own (not a subagent's) still running: the oldest one, since when (Store.noteActivity). */
@@ -1265,8 +1269,33 @@ export interface AppState {
   work?: WorkItem[];
   /** Discord and FFBox intake into the ledger (docs/intake.md); absent from a server older than this field. */
   intake?: IntakeSummary;
+  /** Which backend the agents run on (w38); absent from a server older than this field. */
+  backend?: BackendStatus;
   config: { defaultModel: string; models: string[]; defaultBase: string; attachments: AttachmentSettings };
   settings: AppSettings;
+}
+
+/** Which backend the agents run on and what Bedrock has cost (w38, docs/bedrock.md). */
+export interface BackendStatus {
+  mode: 'auto' | 'plan' | 'bedrock';
+  /** `blocked`: Bedrock's daily cap is spent and the plan is at its limit, so new work waits. */
+  active: 'plan' | 'bedrock' | 'blocked';
+  reason: string;
+  /** Whether a Bedrock profile is set. */
+  configured: boolean;
+  profile?: string;
+  region?: string;
+  regionPrefix: string;
+  thresholdPercent: number;
+  resumePercent: number;
+  /** The plan's 5-hour session usage the decision reads, when known. */
+  sessionPercent?: number;
+  /** Since when `active` has been what it is. */
+  since?: string;
+  /** Why Bedrock cannot be used right now (expired SSO…), when it cannot. */
+  problem?: string;
+  spend: { day: string; todayUsd: number; weekUsd: number; dailyBudgetUsd: number };
+  models?: { opus: string; sonnet: string; haiku: string };
 }
 
 /** An orchestrator's timer as its person sees it (server/timers.ts TimerView; docs/orchestrators.md "Timers"). */
@@ -1328,6 +1357,7 @@ export type ServerEvent =
   | { type: 'host'; host: HostStatus }
   | { type: 'usage'; usage: PlanUsage }
   | { type: 'accounts'; accounts: AccountUsage[] }
+  | { type: 'backend'; backend: BackendStatus }
   /** null: the machine went offline and its numbers are gone. */
   | { type: 'machine_stats'; id: string; stats: MachineStats | null }
   /** Keep-alive, every SOCKET_PING_MS: a page that hears nothing for longer treats its socket as dead. */

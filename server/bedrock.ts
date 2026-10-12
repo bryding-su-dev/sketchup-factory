@@ -71,7 +71,9 @@ export const isBedrockKey = (k: string): k is BedrockKey => (BEDROCK_KEYS as rea
 
 /** An AWS profile name, as ~/.aws/config spells it. A key (AKIA…, a long secret) is refused, not stored. */
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.@+=,-]{0,127}$/;
-const AWS_KEY_LIKE = /^(AKIA|ASIA|AIDA|AROA)[A-Z0-9]{12,}$|^[A-Za-z0-9/+=]{40}$/;
+// Also the other credentials someone might paste here by mistake: an Anthropic key or OAuth token (sk-ant-…, which the
+// profile-name shape alone lets through), a Bedrock API key (ABSK…), a GitHub or provider token.
+const AWS_KEY_LIKE = /^(AKIA|ASIA|AIDA|AROA)[A-Z0-9]{12,}$|^[A-Za-z0-9/+=]{40}$|^(sk-ant-|ABSK|ffpv1_|ghp_|gho_|github_pat_|xox[bap]-)|^sk-[A-Za-z0-9_-]{30,}$/i;
 const REGION = /^[a-z]{2}(?:-[a-z]+)+-\d$/;
 const PREFIXES = ['us', 'eu', 'apac', 'jp', 'au', 'global'];
 
