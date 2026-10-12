@@ -120,6 +120,8 @@ fs.writeFileSync(
       voice: { enabled: false, autoInstall: false, tts: false },
       // A 20 MB cap: e2e/attachments.spec.ts sends a 9 MB file (two chunks) and is refused a 21 MB one.
       attachments: { maxMB: 20 },
+      // A profile name makes the Bedrock control appear (e2e/backend.spec.ts); the probe below is faked, AWS is never called.
+      bedrock: { profile: 'e2e-profile' },
       max: { eventsFile: path.join(base, 'max-events.jsonl'), ffboxConfigDir: path.join(base, 'ffbox'), discordApi: `http://127.0.0.1:${discordPort}/api/v10`, inbound: { pollMinutes: 60 } },
       ...(withIntake ? { intake: { discord: { enabled: true, bugChannels: ['beta_bugs', 'bug_reports'], trusted: { [INTAKE_TRUSTED]: 'tester' }, pollMinutes: 120 }, reviewers: ['tester'] } } : {}),
       // The provider projects also take FFBox's ledger check and its fix branches (docs/intake.md; e2e/provider.spec.ts).
@@ -191,6 +193,7 @@ process.env.FFSB_CONFIG = configFile;
 // and no agents' token from the environment this runs in, which the meter would poll for real.
 process.env.CLAUDE_CONFIG_DIR = path.join(base, 'claude');
 delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+process.env.FFSB_BEDROCK_PROBE = 'ok';
 // Nor a real Discord token: Max reads only the scratch ffbox config above.
 for (const k of ['DISCORD_TOKEN', 'FFDISCORD_APP_TOKEN', 'FFDISCORD_SERVER_ID', 'FFBOX_SECRETS', 'FFBOX_CONFIG_DIR']) delete process.env[k];
 fs.mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });

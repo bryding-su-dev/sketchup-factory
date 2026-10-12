@@ -8,6 +8,7 @@ import { contextGlance, dispatcherGlance, fmtCost, fmtRelative, isBusy, isOpenWo
 import { Markdown } from './Markdown';
 import { SessionView } from './SessionView';
 import { accountOf } from './SystemMeters';
+import { bedrockLine } from './Backend';
 import { Chip, Confirm, Dot, Icon, Menu } from './ui';
 import { TimersButton } from './Timers';
 import { useKeepScroll } from '../scrollKeep';
@@ -117,7 +118,7 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
                   </button>
                   <div className="menu-foot">
                     {session.model ?? 'default model'}
-                    {account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
+                    {bedrockLine(session) ? ` ${bedrockLine(session)}` : account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
                     {ctx && (
                       <>
                         <br />

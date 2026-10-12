@@ -112,6 +112,12 @@ does cheap work: every worker's `scout` subagent, and Claude Code's own backgrou
 (orchestrator, workers, standing), the token or the Mac's login ([docs/accounts.md](docs/accounts.md)). Token values are
 never shown or logged.
 
+**Bedrock** ([docs/bedrock.md](docs/bedrock.md)). With `bedrock.profile` set (an AWS SSO profile name), this host's
+agents move to SketchUp's AWS Bedrock account when the plan's 5-hour usage reaches `bedrock.thresholdPercent` (Auto), under a
+daily cap (`bedrock.dailyBudgetUsd`, default $200). The sidebar shows the backend and a Plan | Bedrock | Auto control. Keys, all
+settable with `set_app_config`: `bedrock.mode`, `bedrock.profile`, `bedrock.region`, `bedrock.regionPrefix`,
+`bedrock.thresholdPercent`, `bedrock.weeklyThresholdPercent`, `bedrock.resumeMarginPercent`, `bedrock.dailyBudgetUsd`.
+
 **Clean-up.** The host guard pauses new work and removes known-safe junk (Xcode DerivedData, Homebrew downloads,
 caches) when disk space runs low, and hourly otherwise. On a developer's own Mac set
 `"hostGuard": { "cleanup": { "enabled": false } }` or skip rules by id with `"skipRules"`

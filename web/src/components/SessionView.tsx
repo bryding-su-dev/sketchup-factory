@@ -8,6 +8,7 @@ import { Transcript } from './Transcript';
 import { Confirm, Dot, Icon, StateText } from './ui';
 import { AttentionStrip, DetailsSection, DetailsSheet, PanelHeader, useDetailsOpen } from './PanelChrome';
 import { accountOf, accountTag } from './SystemMeters';
+import { bedrockAccountLabel, bedrockLine } from './Backend';
 
 /**
  * A conversation: the transcript takes the height, the composer sits under it. Inside a sandbox or
@@ -168,7 +169,12 @@ export function SessionMeta({ session }: { session: SessionInfo }) {
           for {session.requestedBy.displayName}
         </span>
       )}
-      {account && (
+      {bedrockLine(session) && (
+        <span className="mono" title={`Amazon Bedrock account: ${bedrockAccountLabel(session) ?? 'Bedrock'}. The cost is estimated from token counts at list prices.`} data-testid="session-bedrock">
+          {bedrockLine(session)}
+        </span>
+      )}
+      {account && !bedrockLine(session) && (
         <span className="mono" title={`Claude account: ${account.label}`} data-testid="session-account">
           {accountTag(account)}
         </span>

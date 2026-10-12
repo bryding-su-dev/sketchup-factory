@@ -8,6 +8,7 @@ import type { CompactionTrigger, DeliveredAttachment, EffortLevel, ImageInput, I
 import { attachmentBlock } from '../shared/attachments.ts';
 import { emit } from './store.ts';
 import { accountKeyOf } from './usage.ts';
+import { bedrockAccountKey, isBedrockEnv, type Backend } from './bedrock.ts';
 import { senderOf, type SessionSnapshot, type Unanswered } from './restart.ts';
 import { checkObject, readJsonDurable, writeJsonDurable } from './durable.ts';
 
@@ -47,6 +48,10 @@ export interface QueuedSend {
   bypassGate?: boolean;
   at: string;
   why: string;
+  /** Held by the backend gate (w38), not for a slot: the Bedrock cap is spent and the plan is at its limit. */
+  backend?: true;
+  /** Held until the live process can move to the plan (w38): its background work has to end first, and it must not start a Bedrock turn over the cap. */
+  moving?: true;
   /** The last error a delivery attempt threw (w496): it stays queued and is tried again, up to QUEUE_HOLD_MS. */
   lastError?: string;
 }
@@ -153,6 +158,11 @@ export interface SessionHandle {
   decide(requestId: string, allow: boolean, message?: string): boolean;
   /** Drop the restart marks once a restart has resumed it, or decided not to. */
   clearRestartMarks?(): void;
+  /**
+   * w38: stop an idle process that runs on another backend than `want`, so the next message resumes it on `want`. False
+   * (nothing done) when it is not live, already on `want`, or not idle. Only sessions in this process have it.
+   */
+  recycleIfStale?(want: Backend, why: string, refresh?: boolean): boolean;
   /** Called when the session is removed for good. */
   dispose?(): void;
   /** What a restart needs to know (server/restart.ts); without it, snapshotOf() works from info alone. */
@@ -411,7 +421,10 @@ export class AgentSession implements SessionHandle {
     this.info.backgroundTasks = undefined;
     this.q = runQuery({ prompt: this.input, options });
     // What this process runs on, whatever the config says later (the account meters, docs/accounts.md).
-    this.update({ status: 'starting', account: accountKeyOf(options.env ?? process.env) });
+    // A Bedrock process is on its AWS profile, not on a plan account (usage.ts buildAccounts ignores bedrock: keys).
+    const env = options.env ?? process.env;
+    const backend: Backend = isBedrockEnv(env) ? 'bedrock' : 'plan';
+    this.update({ status: 'starting', account: backend === 'bedrock' ? bedrockAccountKey(env) : accountKeyOf(env), backend, bedrockRegion: backend === 'bedrock' ? env.AWS_REGION : undefined });
     void this.consume(this.q);
   }
 
@@ -427,6 +440,7 @@ export class AgentSession implements SessionHandle {
       const msg = (e as Error).message ?? String(e);
       const aborted = this.abort?.signal.aborted;
       if (!aborted) this.store.append(this.info.id, { kind: 'error', text: msg });
+      if (!aborted && this.info.backend === 'bedrock') this.events.emit('bedrockError', this, msg);
       if (this.q === q) this.update({ status: aborted ? 'stopped' : 'error', statusDetail: aborted ? undefined : clip(msg, 300) });
     } finally {
       if (this.q === q) {
@@ -531,6 +545,9 @@ export class AgentSession implements SessionHandle {
         this.events.emit('rateLimit', this, m.rate_limit_info);
         return;
       case 'result': {
+        // A Bedrock turn's spend (w38, server/bedrockBackend.ts): before the updates below, so what the listener sets on
+        // the info (bedrockCostUsd) is saved with them.
+        if (this.info.backend === 'bedrock') this.events.emit('bedrockResult', this, m);
         const total = m.total_cost_usd ?? 0;
         // A resumed session's first result may already carry the earlier spend; do not count it twice.
         if (this.firstResult && total >= this.costBase) this.costBase = 0;
@@ -696,6 +713,20 @@ export class AgentSession implements SessionHandle {
     this.compactFailed('the session was stopped');
     this.update({ status: 'stopped', statusDetail: undefined });
     this.events.emit('ended', this);
+  }
+
+  /**
+   * w38: the decision moved to another backend (the plan's usage crossed the threshold, or came back down). An idle
+   * process of the old one is stopped, like makeRoom stops one: the message that follows resumes the conversation
+   * (`resume: sdkSessionId`, history intact) on the new one. A busy one finishes its turn where it started.
+   */
+  recycleIfStale(want: Backend, why: string, refresh = false): boolean {
+    if (!this.q || (!refresh && (this.info.backend ?? 'plan') === want)) return false;
+    if (isMidTurn(this.info) || this.backgroundTasks || this.info.backgroundTasks || this.pending.size || this.compacting) return false;
+    this.store.append(this.info.id, { kind: 'system', text: refresh ? `Restarted on Bedrock (${why}); continuing on it.` : `Switched to ${want === 'bedrock' ? 'Bedrock' : 'your Claude plan'} (${why}); continuing on it.` });
+    this.stop(true);
+    console.log(`sessions: stopped idle ${this.info.id} to continue it on ${want} (${why})`);
+    return true;
   }
 
   clearRestartMarks() {
@@ -892,7 +923,7 @@ export class SessionManager {
   private enqueue(q: QueuedSend) {
     this.queue.push(q);
     this.saveQueue();
-    this.store.append(q.id, { kind: 'system', text: `A message is waiting for a free agent slot (${q.why}); it is delivered as soon as one frees.` });
+    this.store.append(q.id, { kind: 'system', text: q.moving ? `A message is ${q.why}; it is delivered as soon as the process can be moved.` : q.backend ? `A message is waiting (${q.why}); it is delivered as soon as Bedrock or your plan has room again.` : `A message is waiting for a free agent slot (${q.why}); it is delivered as soon as one frees.` });
     console.log(`sessions: queued a message for ${q.id}: ${q.why}`);
     return q.uuid;
   }
@@ -918,6 +949,15 @@ export class SessionManager {
         continue;
       }
       if (this.fullFor(s)) {
+        held.add(q.id);
+        continue;
+      }
+      if (!q.bypassGate && this.backendHeld(s)) {
+        held.add(q.id);
+        continue;
+      }
+      // The backend first (w38): a recycled process is a new start, which the host guard then judges like any other.
+      if (this.settleBackend(s)) {
         held.add(q.id);
         continue;
       }
@@ -976,6 +1016,33 @@ export class SessionManager {
   startGate?: () => string | undefined;
 
   /**
+   * w38 (server/bedrockBackend.ts): why a message to this session must wait for a backend, or undefined: the Bedrock
+   * cap is spent and the plan is at its limit. Wired by index.ts; it is told to look again (`drain`) when that changes.
+   */
+  backendGate?: (s: SessionHandle) => string | undefined;
+  /** w38: the backend a new process of this session would start on now, or undefined (a person's own token, a machine, blocked). */
+  backendWant?: (s: SessionHandle) => { backend: Backend; reason: string; refresh?: true } | undefined;
+
+  /** Whether the backend gate holds a message to `s`: not when it is mid-turn (the message joins that turn). */
+  private backendHeld(s: SessionHandle): string | undefined {
+    return isMidTurn(s.info) ? undefined : this.backendGate?.(s);
+  }
+
+  /**
+   * w38: an idle process on the other backend than the decision's is stopped, so the message resumes it on the right one.
+   * Returns why the message must wait when the process cannot be stopped now (it has background work or a pending
+   * permission) and is on Bedrock while the decision wants the plan (the cap is spent, blocked, or the mode is plan): no
+   * Bedrock turn starts after that. A plan process that would like Bedrock just takes the message.
+   */
+  private settleBackend(s: SessionHandle): string | undefined {
+    if (!s.recycleIfStale || !s.live || isMidTurn(s.info)) return undefined;
+    const want = this.backendWant?.(s);
+    if (!want || s.recycleIfStale(want.backend, want.reason, want.refresh)) return undefined;
+    if (s.live && (s.info.backend ?? 'plan') === 'bedrock' && want.backend === 'plan') return `waiting for its background work to end before moving off Bedrock (${want.reason})`;
+    return undefined;
+  }
+
+  /**
    * Send, enforcing the concurrent-agent ceiling and the host guard when this send would start a process.
    * `bypassGate`: the host guard's own messages (resume after recovery, checkpoint requests).
    */
@@ -985,12 +1052,18 @@ export class SessionManager {
    */
   send(id: string, text: string, from: 'human' | 'orchestrator' | 'system' = 'human', images?: ImageInput[], opts: { bypassGate?: boolean; requestedBy?: Requester; attachments?: DeliveredAttachment[]; hold?: boolean } = {}): string {
     const s = this.get(id);
-    const queue = (why: string) =>
-      this.enqueue({ uuid: randomUUID(), id, text, from, ...(images?.length ? { images } : {}), ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}), ...(opts.attachments?.length ? { attachments: opts.attachments } : {}), ...(opts.bypassGate ? { bypassGate: true } : {}), at: new Date().toISOString(), why });
+    const queued = (why: string): QueuedSend => ({ uuid: randomUUID(), id, text, from, ...(images?.length ? { images } : {}), ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}), ...(opts.attachments?.length ? { attachments: opts.attachments } : {}), ...(opts.bypassGate ? { bypassGate: true } : {}), at: new Date().toISOString(), why });
+    const queue = (why: string) => this.enqueue(queued(why));
     // ALL RUNNING SLOTS BUSY (w384): the message waits and goes when a turn ends, instead of being refused. So does any
     // later message to a session that already has one waiting, so its messages keep their order.
     const full = this.fullFor(s) ?? (this.queue.some((q) => q.id === id) && !isMidTurn(s.info) ? 'an earlier message to it is still waiting' : undefined);
     if (full) return queue(full);
+    // THE BACKEND IS OUT OF ROOM (w38): the Bedrock cap is spent and the plan is at its limit; the message waits.
+    const blocked = opts.bypassGate ? undefined : this.backendHeld(s);
+    if (blocked) return this.enqueue({ ...queued(blocked), backend: true });
+    // Recycle before the host guard looks: a recycled process is a new start (w38).
+    const moving = this.settleBackend(s);
+    if (moving) return this.enqueue({ ...queued(moving), moving: true });
     if (opts.hold) {
       try {
         this.checkStart(id, opts.bypassGate);

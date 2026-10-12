@@ -9,6 +9,7 @@ import { AttentionButton, DrawerButton } from './ShellButtons';
 import { Confirm, Icon, Menu, StateText } from './ui';
 import { chatOwner, contextGlance, fmtCost, fmtRelative, sessionLabel, sessionTone, useNow } from '../util';
 import { accountOf } from './SystemMeters';
+import { bedrockLine } from './Backend';
 import { TimersButton } from './Timers';
 
 const SUGGESTIONS = ["What's running, and what needs me?", 'Start work on spec 098', 'Play the tutorial single-player and log the bugs', 'Read the Discord forums and find bugs'];
@@ -181,7 +182,7 @@ export const OrchestratorView = memo(function OrchestratorView({ session, compac
               </button>
               <div className="menu-foot">
                 {session.model ?? 'default model'}
-                {account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
+                {bedrockLine(session) ? ` ${bedrockLine(session)}` : account ? ` on ${account.label}` : ''} · {fmtCost(session.costUsd)} over {session.turns} turns · active {fmtRelative(session.lastActivityAt, now)}
                 {ctx && (
                   <>
                     <br />

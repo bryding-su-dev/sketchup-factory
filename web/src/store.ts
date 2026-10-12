@@ -230,6 +230,9 @@ function applyEvent(ev: ServerEvent) {
     case 'usage':
       set((s) => (s.app ? { app: { ...s.app, usage: ev.usage } } : {}));
       return;
+    case 'backend':
+      set((s) => (s.app ? { app: { ...s.app, backend: ev.backend } } : {}));
+      return;
     case 'accounts':
       set((s) => (s.app ? { app: { ...s.app, accounts: ev.accounts } } : {}));
       return;

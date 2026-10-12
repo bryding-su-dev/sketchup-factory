@@ -1,6 +1,7 @@
 import { modelEnv } from './models.ts';
 import { hostAccount, hostClaudeEnv, hostClaudeEnvFor, machineUsesLogin } from './secrets.ts';
 import { claudeEnvFor } from './identity.ts';
+import type { BedrockBackend } from './bedrockBackend.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -111,6 +112,8 @@ export class StandingAgents {
   private readonly cfg: Config;
   /** The host guard's gate (server/hostHealth.ts): while set, runs on this host wait. */
   hostGate?: () => string | undefined;
+  /** The Bedrock backend (server/bedrockBackend.ts, w38); wired by index.ts. Agents on a machine never use it. */
+  backend?: Pick<BedrockBackend, 'apply'>;
   private readonly store: Store;
   private readonly sessions: SessionPort;
   private readonly deps: StandingDeps;
@@ -806,6 +809,10 @@ export class StandingAgents {
     return act ? a.runs.find((r) => r.id === act.runId)?.requestedBy : undefined;
   }
 
+  private onBackend(env: Record<string, string>, who: { userId: string } | undefined, model: string | undefined): Record<string, string> {
+    return this.backend ? this.backend.apply('standing', env, who, model) : env;
+  }
+
   /** The folder of an agent that runs here; a machine's daemon makes its own (spec.init). */
   private ensureFolder(a: StandingAgent) {
     if (a.machineId) return;
@@ -840,7 +847,9 @@ export class StandingAgents {
       gameRepos: [this.cfg.repo.url, this.cfg.repo.basePath],
       // Config claudeAccounts.standing: the host token or this host's stored login (docs/accounts.md); the run's
       // person's own token when they have one.
-      env: { ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, this.currentRequester(a), hostClaudeEnv(this.cfg, 'standing')) },
+      // Bedrock instead (w38, docs/bedrock.md) when the backend says so and the run's person has no token of their own;
+      // buildOptions then drops the credentials of the server's own environment too.
+      env: this.onBackend({ ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, this.currentRequester(a), hostClaudeEnv(this.cfg, 'standing')) }, this.currentRequester(a), a.model),
       login: hostAccount(this.cfg, 'standing') === 'login',
       claudeExecutable: this.cfg.claudeExecutable,
     };

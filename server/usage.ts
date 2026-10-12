@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { MODEL_IDS } from './models.ts';
+import { isBedrockAccount } from './bedrock.ts';
 import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { HOST_ROLES, roleNames, type Config, type HostRole } from './config.ts';
 import type { AccountUsage, PlanUsage, SessionInfo, SessionKind, UsageMeter } from '../shared/types.ts';
@@ -295,7 +296,8 @@ export function accountKeyOf(env: Record<string, string | undefined>): string {
  * started on (SessionInfo.account), so a config change shows only once it restarts. Otherwise the one its next
  * process gets from the current config: a person's own token for their work, on a machine the token it is sent
  * (machineToken), on this host the token (hostToken) unless config claudeAccounts sets the session's role to
- * "login" (`hostLogin`); else the login of the computer it runs on (docs/accounts.md).
+ * "login" (`hostLogin`); else the login of the computer it runs on (docs/accounts.md). A running Bedrock process (w38) is on
+ * its "bedrock:<profile>" key, which buildAccounts leaves out of every plan account.
  */
 export function sessionSource(
   info: Pick<SessionInfo, 'machineId' | 'requestedBy'> & Partial<Pick<SessionInfo, 'kind' | 'account' | 'status'>>,
@@ -357,7 +359,9 @@ const newer = (a?: PlanUsage, b?: PlanUsage) => {
  * a token is one account per token. Sources nobody polls (a machine login no daemon reported yet) still
  * appear when a session runs on them. Most agents running now first, then tokens (the agents' account), then by label. Pure.
  */
-export function buildAccounts(entries: ReadonlyMap<string, UsageEntry>, ctx: AccountContext): AccountUsage[] {
+export function buildAccounts(entries: ReadonlyMap<string, UsageEntry>, fullCtx: AccountContext): AccountUsage[] {
+  // A Bedrock process (w38, "bedrock:<profile>") runs on AWS, not on a plan account: it is counted against none of them.
+  const ctx = { ...fullCtx, sessions: fullCtx.sessions.filter((s) => !isBedrockAccount(s.source)) };
   const machineIds = new Set(ctx.machines.map((m) => m.id));
   const sources = new Map<string, UsageEntry>();
   sources.set(HOST_LOGIN, entries.get(HOST_LOGIN) ?? { kind: 'login' });

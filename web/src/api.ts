@@ -1,6 +1,7 @@
 import { SOCKET_PING_MS } from '../../shared/types';
 import type {
   AppSettings,
+  BackendStatus,
   TimersAnswer,
   AppState,
   CreateSandboxRequest,
@@ -26,6 +27,13 @@ import type {
   TranscriptEvent,
 } from '../../shared/types';
 import type { TranscribeResult, VoiceStatus } from '../../shared/voice';
+
+/** GET /api/backend: the status, the costliest Bedrock sessions and the last spend lines. */
+export interface BackendDetail {
+  backend: BackendStatus;
+  sessions: { session: string; title: string; usd: number; turns: number }[];
+  recent: { t: string; session: string; title: string; model: string; usd: number }[];
+}
 
 export class UnauthorizedError extends Error {
   constructor() {
@@ -98,6 +106,8 @@ export const api = {
   maxInbound: () => request<(MaxInboundChannel & { items: MaxInboundItem[] })[]>('GET', '/api/max/inbound'),
   maxSeen: (alias: string) => request<{ ok: boolean }>('POST', `/api/max/inbound/${encodeURIComponent(alias)}/seen`),
   refreshUsage: () => request<{ started: boolean; machines: number }>('POST', '/api/usage/refresh'),
+  backend: () => request<BackendDetail>('GET', '/api/backend'),
+  setBackendMode: (mode: BackendStatus['mode']) => request<BackendStatus>('POST', '/api/backend/mode', { mode }),
   maxRefresh: () => request<{ ok: boolean; note?: string }>('POST', '/api/max/refresh'),
   events: (sessionId: string, limit = 500) =>
     request<TranscriptEvent[]>('GET', `/api/sessions/${enc(sessionId)}/events?limit=${limit}`),

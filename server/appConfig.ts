@@ -8,6 +8,7 @@ import { USER_ID } from './identity.ts';
 import { writeFileDurable } from './durable.ts';
 import { AUTO_COMPACT_LIMITS } from './autoCompact.ts';
 import { MODEL_ALIASES, MODEL_ID, type ModelAlias, type SubagentRole } from './models.ts';
+import { BEDROCK_KEYS, isBedrockKey, normalizeBedrockSetting } from './bedrock.ts';
 
 /**
  * The config.json keys an agent may change (the set_app_config tool). Only cosmetic ones, plus the public
@@ -74,6 +75,8 @@ export const SETTABLE_KEYS = [
   'modelPins.opus',
   'modelPins.sonnet',
   'modelPins.haiku',
+  // The Bedrock backend (w38, docs/bedrock.md): which backend the agents run on and its thresholds, region and daily cap.
+  ...BEDROCK_KEYS,
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
@@ -108,6 +111,7 @@ export function checkAgeRules(value: unknown, cfg?: Pick<Config, 'protectedPaths
 /** The value to store for `key`, or throws with what is wrong. `null` removes the key (back to the default). */
 export function normalizeSetting(key: SettableKey, value: unknown, cfg?: Config): unknown {
   if (value === null || value === undefined) return undefined;
+  if (isBedrockKey(key)) return normalizeBedrockSetting(key, value, cfg?.bedrock);
   switch (key) {
     case 'ownerName': {
       if (typeof value !== 'string') throw new Error('ownerName is a string');
@@ -379,6 +383,13 @@ export function setAppConfig(file: string, cfg: Config, key: SettableKey, value:
     if (v === undefined) delete pins[alias];
     else pins[alias] = v as string;
     cfg.modelPins = pins;
+  }
+  else if (isBedrockKey(key)) {
+    const b = { ...cfg.bedrock } as Record<string, unknown>;
+    const field = key.slice('bedrock.'.length);
+    if (v === undefined) delete b[field];
+    else b[field] = v;
+    cfg.bedrock = b as Config['bedrock'];
   }
   else if (key === 'guard.protectFactoryCheckout') cfg.guard = { ...cfg.guard, protectFactoryCheckout: v as boolean | undefined };
   else if (key === 'hostGuard.cleanup.ageRules') cfg.hostGuard.cleanup.ageRules = (v as { path: string; olderThanDays: number }[] | undefined) ?? [];
