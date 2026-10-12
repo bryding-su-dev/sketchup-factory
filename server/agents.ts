@@ -1710,7 +1710,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
         ),
         tool(
           'start_agent',
-          'Start a new Claude Code worker agent with a task prompt: in a sandbox on this host, in a sandbox on a machine ("lothdesktop/sb1": its own worktree and editor there), or on a machine itself (machine alone: one of the user\'s Macs or Windows PCs, working in their main clone there). The worker has the full Final Factory harness (CLAUDE.md, ff-agents / ff-speckit / ff-discord skills, the Unity MCP bridge for its own editor). Write the prompt as a complete brief: goal, done-criteria, constraints, and which skill to use if one fits. You will get a [worker update] message when it finishes a turn.',
+          'Start a new Claude Code worker agent with a task prompt: in a sandbox on this host, in a sandbox on a machine ("lothdesktop/sb1": its own worktree and editor there), or on a machine itself (machine alone: one of the user\'s Macs or Windows PCs, working in their main clone there). The worker has the full Final Factory harness (CLAUDE.md, ff-agents / ff-speckit / ff-discord skills, the Unity MCP bridge for its own editor). Every start is a fresh Claude Code session, even in a sandbox an earlier worker used: write the prompt as a complete brief (goal, done-criteria, constraints, which skill to use if one fits, and a short handoff of earlier work it builds on: request ids, branch or PR, report paths; never paste an old transcript). With work_id, the harness adds the request as filed and a handoff of the requests and workers its related_ids name. You will get a [worker update] message when it finishes a turn.',
           {
             sandbox: z.string().optional().describe('A sandbox id: "spec-098" on this host, "lothdesktop/sb1" on a machine. Give this or machine.'),
             machine: z.string().optional().describe('A machine id from list_machines (e.g. "m5"): its main clone. Give this or sandbox.'),
@@ -1737,7 +1737,7 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
               const repeats = this.orchestrators.blockingOverlaps(w);
               if (repeats.length && !override) {
                 throw new Error(
-                  `${w.id} may repeat work in flight: ${repeats.map(overlapLine).join('; ')}. Merge it into that request (decide_work merge), send it to the worker already on it (message_agent with work_id), or pass override_duplicate saying what makes it different.`,
+                  `${w.id} may repeat work in flight: ${repeats.map(overlapLine).join('; ')}. Merge it into that request (decide_work merge), continue the worker already on it (message_agent with work_id and continue_reason), or pass override_duplicate saying what makes it different.`,
                 );
               }
               const live = w.sessionIds.filter((id) => ['running', 'starting', 'waiting_permission', 'idle'].includes(this.store.sessions.get(id)?.status ?? 'stopped'));
@@ -1748,7 +1748,8 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
             const requestedBy = actor(a.for_user, a.work_id);
             // An intake request always carries its rules (untrusted text, posting limits, the markers), whatever the brief says.
             // The request as filed goes with every brief (w496), then the intake rules.
-            const prompt = `${a.prompt}${w ? requestAsFiled(w) : ''}${w?.source ? workerRules(w) : ''}`;
+            // A fresh session carries none of the earlier work's conversation: a handoff names what it builds on.
+            const prompt = `${a.prompt}${w ? `${requestAsFiled(w)}${this.orchestrators.handoffFor(w)}` : ''}${w?.source ? workerRules(w) : ''}`;
             const files = this.attachmentsFor(a.attachments, w);
             const s = this.startWorker({ sandbox: a.sandbox, machine: a.machine, prompt, title: a.title, model: a.model, effort: a.effort, permissionMode: a.permission_mode, from, requestedBy, attachments: files });
             const where = s.info.machineSandbox ? `in sandbox ${s.info.machineId}/${s.info.machineSandbox}` : s.info.machineId ? `on machine ${s.info.machineId}` : `in ${a.sandbox}`;
@@ -1772,9 +1773,19 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
           'message_agent',
           ctx.role === 'personal'
             ? `Send a follow-up message to one of ${ctx.owner?.displayName ?? 'your person'}'s own workers (they started it, or one of their requests is on it): resumes it if it was stopped, queued if it is mid-turn. At most ${FOLLOW_UPS} per worker until they write to you again. New scope is a request_work, not a follow-up.`
-            : 'Send a follow-up message to a worker agent (resumes it if it was stopped). It is queued if the agent is mid-turn.',
-          { session_id: z.string(), text: z.string(), for_user: FOR_USER, work_id: WORK_ID, attachments: ATTACHMENTS },
-          wrap(async ({ session_id, text, for_user, work_id, attachments }) => {
+            : "Send a follow-up message to a worker agent (resumes its session, with its whole conversation, if it was stopped). It is queued if the agent is mid-turn. A new request is not a follow-up: it starts a fresh session (start_agent). With a work_id the worker is not on yet, continue_reason is required: it says how the request continues this worker's change, and is logged and told to the requesters.",
+          {
+            session_id: z.string(),
+            text: z.string(),
+            for_user: FOR_USER,
+            work_id: WORK_ID,
+            attachments: ATTACHMENTS,
+            continue_reason: z
+              .string()
+              .optional()
+              .describe('Dispatcher, with a work_id this worker is not on yet: how the request directly continues its work ("w31 is the review fix-ups on w28\'s PR 4, same branch"). Refused without it then: a new request starts a fresh session.'),
+          },
+          wrap(async ({ session_id, text, for_user, work_id, attachments, continue_reason }) => {
             if (work_id && ctx.role !== 'dispatcher') throw new Error(WORK_ID_ONLY);
             const w = worker(session_id);
             const sent = (n: number) => (n ? `, with ${n === 1 ? 'the attachment' : `${n} attachments`} in its ${INBOX_DIR}/` : '');
@@ -1787,13 +1798,17 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
             const requestedBy = actor(for_user, work_id);
             const item = work_id ? this.orchestrators.requireWork(work_id) : undefined;
             const linked = !!item?.sessionIds.includes(w.info.id);
+            // A request the worker is not on yet would resume its session with unrelated context: that needs a reason.
+            const reason = continue_reason?.trim().slice(0, 300);
+            if (item && !linked && !reason) throw new Error(this.orchestrators.continueProblem(item, w.info.id));
             // A worker newly given a request gets its attachments too; one already on it has them.
             const files = this.attachmentsFor(attachments, linked ? undefined : item);
             // A worker newly given a request gets it as filed (w496), and its intake rules.
             const fresh = item && !linked;
             await this.sendWithAttachments(session_id, `${text}${fresh ? requestAsFiled(item) : ''}${fresh && item.source ? workerRules(item) : ''}`, from, { requestedBy, attachments: files });
-            if (work_id) this.orchestrators.linkWorker(work_id, w.info, `sent to ${this.orchestrators.workerLine(w.info.id)}, already on it`);
-            return `Sent, for ${requestedBy.displayName}${work_id ? ` (${work_id})` : ''}${sent(files.length)}.${Agents.goneLine(files)}${this.queuedLine(session_id)}`;
+            const how = fresh ? `continued ${this.orchestrators.workerLine(w.info.id)}'s session, reusing its context: ${reason}` : `sent to ${this.orchestrators.workerLine(w.info.id)}, already on it`;
+            if (work_id) this.orchestrators.linkWorker(work_id, w.info, how);
+            return `Sent, for ${requestedBy.displayName}${work_id ? ` (${work_id}${fresh ? `, continuing its session: ${reason}` : ''})` : ''}${sent(files.length)}.${Agents.goneLine(files)}${this.queuedLine(session_id)}`;
           }),
         ),
         tool(
@@ -2701,8 +2716,9 @@ ${this.worldBrief(true)}
 
 ## Dispatching
 - You get \`[work request]\` (a person's orchestrator filed a request, with the server's check for overlapping work), \`[work update]\` (a requester added to, re-prioritised, cancelled or reopened one), \`[ledger]\` (capacity may have freed while requests are queued), and the harness's notices (\`[app restarted]\`, \`[machines]\`, \`[unity]\`, \`[unity blocked]\`, \`[host]\`). \`[wake_me]\` messages are your own check-ins coming back. \`[timer <id> "<title>"]\` messages are your own standing timers firing (set_timer; docs/orchestrators.md, "Timers"): do the job; their turn carries no one's authority, so destructive and admin tools still need a person's own words.
-- For each new request, check list_work, list_sandboxes and list_machines for work already in flight, then do exactly one: start it (start_agent with its work_id and a complete brief: goal, done-criteria, constraints, the skill to use), give it to a worker already on the same thing (message_agent with work_id), or decide_work: merge it into the open request it repeats, link the workers already doing it, queue it (say for what), ask its requester (only when you cannot choose; at most 3 questions), reject it (say why), or done (nothing is needed).
+- For each new request, check list_work, list_sandboxes and list_machines for work already in flight, then do exactly one: start it (start_agent with its work_id and a complete brief: goal, done-criteria, constraints, the skill to use), continue a worker already on the same change (message_agent with work_id and continue_reason, below), or decide_work: merge it into the open request it repeats, link the workers already doing it, queue it (say for what), ask its requester (only when you cannot choose; at most 3 questions), reject it (say why), or done (nothing is needed).
 - Same spec, PR, branch or bug means the same work, unless the verbs differ (implement vs playtest vs review). A PR already being merged is not work to redo. When the server found a strong overlap still in flight, start_agent refuses unless you pass override_duplicate saying what makes the request different.
+- A new request starts a fresh worker session: start_agent, never message_agent to a worker that did other work, however idle or well placed. Reusing its sandbox, branch and files is fine (start_agent in that sandbox). Give the new worker a short handoff in its brief: the request ids it builds on, the branch or PR, report paths; never an old transcript (the harness adds a handoff of what the request's related_ids name). Continue an existing worker's session only when the request directly continues that worker's change and its context helps: a follow-up on the same request, or a request whose related_ids name that worker's request and that continues the same PR or branch. Then message_agent with work_id and continue_reason saying how; it is logged, and the requesters hear that the session was continued and why. Naming a request for context does not make it a continuation.
 - Priority: urgent, high, normal, low, then the oldest first. Do not stop a running worker for a new request unless a person asks.
 - Your decide_work note is what the requester's orchestrator reads: one or two plain lines. Starting or messaging with work_id tells them by itself.
 - Pass work_id whenever you act for a request: the worker then runs for its requester, on their Claude account. for_user is for someone this conversation shows asking; work nobody asked for (after a restart, a stuck editor) is for the system payer, ${payer.displayName} (user id ${payer.userId}).

@@ -11,6 +11,10 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- A new request starts a fresh worker session (docs/orchestrators.md, "A fresh session per request"): `message_agent`
+  with a `work_id` the worker is not on yet is refused without `continue_reason`, which is logged in the request and
+  told to its people in the `[dispatch]` line. `start_agent` with a `work_id` adds a handoff of the requests and workers
+  its `related_ids` name, never the old conversation. The dispatcher's brief and tool descriptions say so.
 - The app is called SketchUp Factory in the UI, the manifest, notifications and agents' prompts. Internal names
   (the `FFSB` cookie, `FFSB_CONFIG`, `ffsb.*` localStorage keys, the `ffsb-*` helper tasks) are unchanged.
 

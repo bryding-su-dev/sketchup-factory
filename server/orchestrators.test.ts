@@ -684,3 +684,59 @@ test('w496: the request as filed: whole notes from WorkItem.notes, older ones fr
   assert.equal(requestAsFiled({ ...base, source: { kind: 'discord-bug' } as never }), '', 'an intake request without notes: its text is in workerRules');
   assert.match(requestAsFiled({ ...base, source: { kind: 'discord-bug' } as never, notes: [{ at: '2026-10-06T02:30:00.000Z', by: 'Lothsahn', text: 'Yes, alternate evenly.' }] }), /Notes since it was filed \(1\):\n- .*Lothsahn: Yes, alternate evenly\.$/);
 });
+
+test('w28: a new request starts a fresh session; message_agent continues a worker only with a reason, which is logged and told', async (t) => {
+  const { o, store, sessions, dispatcher, chat, call, heard } = setup(t);
+  const ben = chat(BEN).info;
+  const d = dispatcher().info;
+  const users = (id: string) => store.readTranscript(id).filter((e): e is Extract<TranscriptEvent, { kind: 'user' }> => e.kind === 'user');
+  await call(ben, 'request_work', { title: 'Make the tutorial skippable', brief: 'Add a skip button.' });
+  const started = await call(d, 'start_agent', { sandbox: 'alpha', prompt: 'Add a skip button to the tutorial', title: 'Tutorial skip', work_id: 'w1' });
+  const id = /Started agent (\w+)/.exec(started.text)![1];
+  await until('the worker finished its turn', () => sessions.get(id).info.status === 'idle' && store.work.get('w1')!.outcome !== undefined);
+  assert.doesNotMatch(users(id)[0].text, /Handoff/, 'a request naming nothing gets no handoff');
+
+  // Unrelated: refused without a reason, nothing sent, nothing linked; it names what the session holds.
+  o.personWrote(ben.id);
+  await call(ben, 'request_work', { title: 'Sign-in times out on stage', brief: 'The connect token exchange hangs.' });
+  const reuse = await call(d, 'message_agent', { session_id: id, text: 'Now fix the sign-in timeout.', work_id: 'w2' });
+  assert.equal(reuse.isError, true);
+  assert.match(reuse.text, new RegExp(`^ERROR: w2 is not on worker ${id} "Tutorial skip" in alpha, and its session holds w1 "Make the tutorial skippable"\\. A new request starts a fresh session: start_agent with work_id "w2"`));
+  assert.match(reuse.text, /pass continue_reason saying how\. w2 names none of it\.$/);
+  assert.equal(users(id).length, 1, 'the worker got nothing');
+  assert.deepEqual(store.work.get('w2')!.sessionIds, []);
+  // The way it should go: a fresh session, in the same sandbox.
+  const fresh = await call(d, 'start_agent', { sandbox: 'alpha', prompt: 'Fix the sign-in timeout.', title: 'Sign-in timeout', work_id: 'w2' });
+  const id2 = /Started agent (\w+)/.exec(fresh.text)![1];
+  assert.notEqual(id2, id);
+  assert.equal(sessions.get(id2).info.sandboxId, 'alpha');
+  assert.deepEqual(store.work.get('w2')!.sessionIds, [id2]);
+
+  // A continuation: its related_ids name the worker's request, and the reason is logged and told to the requesters.
+  o.personWrote(ben.id);
+  await call(ben, 'request_work', { title: 'Tutorial skip: review fix-ups', brief: 'Address the review comments on the skip button PR.', related_ids: ['w1'] });
+  const turns = sessions.get(id).info.turns;
+  const cont = await call(d, 'message_agent', { session_id: id, text: 'Address the review comments.', work_id: 'w3', continue_reason: 'review fix-ups on w1, same branch' });
+  assert.equal(cont.isError, false, cont.text);
+  assert.equal(cont.text, 'Sent, for Ben (w3, continuing its session: review fix-ups on w1, same branch).');
+  await until('the same session took it', () => sessions.get(id).info.turns > turns && sessions.get(id).info.status === 'idle');
+  assert.match(users(id).at(-1)!.text, /^Address the review comments\.[\s\S]*The request as filed \(w3/);
+  const w3 = store.work.get('w3')!;
+  assert.deepEqual(w3.sessionIds, [id]);
+  assert.ok(w3.log.some((l) => l.includes(`dispatcher: continued worker ${id} "Tutorial skip" in alpha's session, reusing its context: review fix-ups on w1, same branch`)), w3.log.join('\n'));
+  await until('Ben hears it was continued, and why', () => heard(ben.id, '[dispatch]').some((e) => e.text.startsWith(`[dispatch] w3 "Tutorial skip: review fix-ups": continued worker ${id} "Tutorial skip" in alpha's session, reusing its context: review fix-ups on w1, same branch.`)));
+  // A follow-up on a request the worker is already on needs no reason.
+  assert.equal((await call(d, 'message_agent', { session_id: id, text: 'Also the tooltip.', work_id: 'w3' })).isError, false);
+
+  // A fresh start for related work gets a handoff of what it names, never the old conversation.
+  o.personWrote(ben.id);
+  await call(ben, 'request_work', { title: 'Playtest the tutorial skip', brief: 'Play it through on Desktop.', related_ids: ['w1', id2] });
+  const play = await call(d, 'start_agent', { sandbox: 'alpha', prompt: 'Playtest the skip button.', title: 'Skip playtest', work_id: 'w4', override_duplicate: 'a playtest, not the implementation' });
+  assert.equal(play.isError, false, play.text);
+  const id3 = /Started agent (\w+)/.exec(play.text)![1];
+  const brief = users(id3)[0].text;
+  assert.match(brief, /\n---\nHandoff \(added by the harness\): the earlier work this request names\. You start in a fresh session without its conversation/);
+  assert.match(brief, new RegExp(`\\n- w1 "Make the tutorial skippable" \\(active\\); last word: Echo: [^;\\n]+; worked on by worker ${id} "Tutorial skip" in alpha, branch sandbox/alpha\\n- worker ${id2} "Sign-in timeout" in alpha, branch sandbox/alpha \\((idle|running|starting)\\)$`));
+  assert.equal(users(id3).length, 1);
+  await until('the workers answered', () => [...sessions.sessions.values()].filter((s) => s.info.kind === 'worker').every((s) => s.info.status === 'idle'), 20_000);
+});
