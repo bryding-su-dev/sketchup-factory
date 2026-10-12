@@ -378,6 +378,20 @@ export function aliasOf(modelId: string): ModelAlias | undefined {
   return m ? (m[1] as ModelAlias) : undefined;
 }
 
+const FIRST_PARTY_OR_BEDROCK_ID = /^(?:[a-z-]+\.)?(?:anthropic\.)?(claude-.+?)(?:-v\d+:\d+)?$/;
+
+/**
+ * The model a process is started with, given the one a session recorded. Claude Code records the id it ran on
+ * ("us.anthropic.claude-haiku-5-5" on Bedrock, "claude-haiku-5-5" on the plan), and neither backend accepts the other's
+ * form: the plan refuses the Bedrock id ("model_not_found") and Bedrock refuses the plain id ("provided model identifier
+ * is invalid"). A 5.x id of either kind becomes its alias, which both resolve through the pins (modelEnv, bedrockEnv);
+ * anything else is left as it is.
+ */
+export function startModel(m: string | undefined): string | undefined {
+  const x = m ? FIRST_PARTY_OR_BEDROCK_ID.exec(m) : null;
+  return x ? (aliasOf(x[1]) ?? m) : m;
+}
+
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -411,7 +425,7 @@ export function tokenDelta(cur: TokenUsage, prev: TokenUsage | undefined): Token
 }
 
 /** Whether a failed turn's text says the AWS credentials are the problem (an expired SSO session, no access). */
-export const AWS_AUTH_ERROR = /ExpiredToken|security token included in the request is expired|SSO (?:session|token)|Token has expired|UnrecognizedClientException|could not load credentials|Unable to locate credentials|AWS authentication failed|failed to load AWS credentials|AccessDeniedException/i;
+export const AWS_AUTH_ERROR = /ExpiredToken|security token included in the request is expired|SSO (?:session|token)|Token has expired|UnrecognizedClientException|could not load (?:AWS )?credentials|cloud_credential_error|Unable to locate credentials|AWS authentication failed|failed to load AWS credentials|AccessDeniedException/i;
 
 /** What to run for an AWS problem, in words: SSO expiry is the usual one. */
 export function awsFix(profile: string | undefined, problem: string): string {

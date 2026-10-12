@@ -117,6 +117,7 @@ agents move to SketchUp's AWS Bedrock account when the plan's 5-hour usage reach
 daily cap (`bedrock.dailyBudgetUsd`, default $200). The sidebar shows the backend and a Plan | Bedrock | Auto control. Keys, all
 settable with `set_app_config`: `bedrock.mode`, `bedrock.profile`, `bedrock.region`, `bedrock.regionPrefix`,
 `bedrock.thresholdPercent`, `bedrock.weeklyThresholdPercent`, `bedrock.resumeMarginPercent`, `bedrock.dailyBudgetUsd`.
+Without an agent or any plan tokens: the sidebar control, or `node scripts/backend.ts plan|bedrock|auto|status` (docs/bedrock.md).
 
 **Clean-up.** The host guard pauses new work and removes known-safe junk (Xcode DerivedData, Homebrew downloads,
 caches) when disk space runs low, and hourly otherwise. On a developer's own Mac set
