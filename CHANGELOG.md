@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to FF Factory are recorded here. The format follows
+All notable changes to SketchUp Factory are recorded here. Entries from before the fork may mention Final Factory and
+Unity. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/). Until 1.0 a minor bump may break things.
 
@@ -11,6 +12,8 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- README rewritten for the SketchUp Factory as it runs (a Mac host, plain worktree sandboxes); `docs/README.md` indexes the docs
+  and marks the inherited Final Factory ones. SECURITY.md and CONTRIBUTING.md name this fork.
 - A new request starts a fresh worker session (docs/orchestrators.md, "A fresh session per request"): `message_agent`
   with a `work_id` the worker is not on yet is refused without `continue_reason`, which is logged in the request and
   told to its people in the `[dispatch]` line. `start_agent` with a `work_id` adds a handoff of the requests and workers
