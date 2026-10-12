@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { checkEditorSwitch, sandboxGuard } from './guard.ts';
+import { guardedPaths } from './config.ts';
 
 const decide = async (g: ReturnType<typeof sandboxGuard>, tool_name: string, tool_input: unknown, cwd = '') => {
   const input = { hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 'x', session_id: 's', transcript_path: '', cwd };
@@ -196,4 +197,55 @@ test('public repos: the real lookup lists the unpushed commits\' emails', async 
   git(w, 'fetch', '-q', 'origin');
   git(w, '-c', 'user.name=b', '-c', 'user.email=b@example.com', 'commit', '-q', '--allow-empty', '-m', 'not yet');
   assert.deepEqual(gitPushedEmails(w, 'origin', ['HEAD']), ['b@example.com']);
+});
+
+test("the factory's own checkout: open with guard.protectFactoryCheckout false, its data never", async () => {
+  const root = 'C:/srv/factory';
+  const factory = (guard?: { protectFactoryCheckout?: boolean }) =>
+    sandboxGuard({ sandboxId: 'sb1', sandboxPath: 'C:/ffsb/sb1', protectedPaths: guardedPaths({ protectedPaths: ['C:/live/game'], dataDir: `${root}/data`, guard }, root) });
+
+  const open = factory({ protectFactoryCheckout: false });
+  for (const command of [
+    `git -C ${root} status`,
+    `cd ${root} && git pull && npm ci && npm run build`,
+    `cd ${root} && grep -rn dataDir server && npm test`,
+    `git -C ${root} clean -fd`,
+  ]) {
+    assert.equal(await decide(open, 'Bash', { command }), 'allow', command);
+  }
+  assert.equal(await decide(open, 'Write', { file_path: `${root}/server/guard.ts` }), 'allow');
+  assert.equal(await decide(open, 'Bash', { command: 'git status' }, root), 'allow', 'a session whose cwd is the checkout');
+  for (const command of [
+    `cat ${root}/data/state.json`,
+    'cat C:\\srv\\factory\\data\\state.json',
+    `cd ${root} && rm -rf data`,
+    `cd ${root} && cat ./data/secrets.env`,
+    `cd ${root}/server && cat ../data/state.json`,
+    `cd ${root} && echo x >data/state.json`,
+    `cd ${root} && git clean -fdx`,
+    `git -C ${root} clean -Xf`,
+    'ls /c/live/game',
+  ]) {
+    assert.equal(await decide(open, 'Bash', { command }), 'deny', command);
+  }
+  assert.equal(await decide(open, 'Bash', { command: 'cat data/state.json' }, root), 'deny', 'relative to the session cwd');
+  assert.equal(await decide(open, 'Write', { file_path: `${root}/data/state.json` }), 'deny');
+  assert.equal(await decide(open, 'Edit', { file_path: 'C:\\srv\\factory\\data\\memories\\x.md' }), 'deny');
+  // The guard's other rules stay.
+  assert.equal(await decide(open, 'Bash', { command: `cd ${root} && git push -f origin sketchup` }), 'deny');
+  assert.equal(await decide(open, 'Bash', { command: 'pkill -f node' }), 'deny');
+
+  for (const closed of [factory(), factory({}), factory({ protectFactoryCheckout: true })]) {
+    assert.equal(await decide(closed, 'Bash', { command: `git -C ${root} status` }), 'deny');
+    assert.equal(await decide(closed, 'Bash', { command: `cd ${root}/data && ls` }), 'deny');
+    assert.equal(await decide(closed, 'Write', { file_path: `${root}/server/guard.ts` }), 'deny');
+    assert.equal(await decide(closed, 'Write', { file_path: `${root}/data/state.json` }), 'deny');
+  }
+});
+
+test('guardedPaths: configured paths, the checkout unless opened, the data directory always', () => {
+  const cfg = { protectedPaths: ['/live/game'], dataDir: '/srv/factory/data' };
+  assert.deepEqual(guardedPaths(cfg, '/srv/factory'), ['/live/game', '/srv/factory', '/srv/factory/data']);
+  assert.deepEqual(guardedPaths({ ...cfg, guard: { protectFactoryCheckout: true } }, '/srv/factory'), ['/live/game', '/srv/factory', '/srv/factory/data']);
+  assert.deepEqual(guardedPaths({ ...cfg, guard: { protectFactoryCheckout: false } }, '/srv/factory'), ['/live/game', '/srv/factory/data']);
 });

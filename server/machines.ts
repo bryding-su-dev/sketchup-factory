@@ -5,7 +5,7 @@ import type http from 'node:http';
 import type { Duplex } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { DEFAULT_USAGE_POLL_MINUTES, ROOT, type Config } from './config.ts';
+import { DEFAULT_USAGE_POLL_MINUTES, ROOT, guardedPaths, type Config } from './config.ts';
 import { emit, type Store } from './store.ts';
 import { isMidTurn, type SessionHandle, type SessionManager } from './sessions.ts';
 import type { CatalogTool, LaunchSpec, ToolHandler } from './launch.ts';
@@ -92,7 +92,7 @@ export function poolSettingsOf(m: Pick<Machine, 'sandboxRoot'> & SandboxLimits &
  * (plus this app and its data) and disk thresholds, editors below normal (the live game wins), and this server's own
  * loopback address. Anything add_machine is given explicitly wins. Exported for tests.
  */
-export function localMachineDefaults(cfg: Pick<Config, 'port' | 'repo' | 'sandboxRoot' | 'limits' | 'protectedPaths' | 'dataDir' | 'librarySeed' | 'librarySeedCopy' | 'librarySeedGB' | 'hostGuard'>, root = ROOT) {
+export function localMachineDefaults(cfg: Pick<Config, 'port' | 'repo' | 'sandboxRoot' | 'limits' | 'protectedPaths' | 'dataDir' | 'guard' | 'librarySeed' | 'librarySeedCopy' | 'librarySeedGB' | 'hostGuard'>, root = ROOT) {
   const cap = (n: number) => Math.max(1, Math.min(8, n));
   return {
     host: 'localhost',
@@ -106,7 +106,7 @@ export function localMachineDefaults(cfg: Pick<Config, 'port' | 'repo' | 'sandbo
     maxAgentsPerSandbox: cap(cfg.limits.maxSessions),
     diskWarnGB: cfg.hostGuard.warnFreeGB,
     diskCriticalGB: Math.min(cfg.hostGuard.criticalFreeGB, cfg.hostGuard.warnFreeGB),
-    protectedPaths: [...new Set([...cfg.protectedPaths, root, cfg.dataDir].filter(Boolean))],
+    protectedPaths: guardedPaths(cfg, root),
     librarySeed: cfg.librarySeed,
     librarySeedCopy: cfg.librarySeedCopy,
     librarySeedGB: cfg.librarySeedCopy === 'clone' ? 10 : cfg.librarySeedGB,

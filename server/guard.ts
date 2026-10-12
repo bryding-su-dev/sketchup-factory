@@ -30,7 +30,9 @@ import type { HookCallback } from '@anthropic-ai/claude-agent-sdk';
  *     determined it counts as the game repo.
  *   - processes: no killing Unity, node, claude or PowerShell by hand, no shutdown/restart.
  *   - files: no writes to, or shell commands naming, a protected path (the live co-op checkout, this
- *     server's own directory).
+ *     server's own directory unless config guard.protectFactoryCheckout is false, its data directory always).
+ *     A relative name counts too (`cd <checkout> && cat data/x`), and so does `git clean -x` in a folder
+ *     that holds one (checkRelativeProtected).
  *   - Unity MCP: refused until the session pins its own editor ("<id>@<hash>"), and never another.
  *   - public repos (config publicGitIdentity, default this app's own repo, and any other GitHub repo that
  *     GitHub reports as public, server/publicGit.ts): a push is refused when a commit it would publish has
@@ -102,6 +104,8 @@ export function sandboxGuard(opts: {
       for (const s of spellings) {
         if (flat.includes(s)) return deny(`${s} is a protected path (the live co-op checkout or this server). Work only inside ${opts.sandboxPath}.`);
       }
+      const nested = checkRelativeProtected(cmd, input.cwd || opts.sandboxPath, protectedPaths);
+      if (nested) return deny(`${nested} Work only inside ${opts.sandboxPath}.`);
     }
 
     if (tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit') {
@@ -345,6 +349,48 @@ function checkPublicIdentity(ctx: ShellContext | undefined, remote: string, srcs
   const name = pub.name ?? '<your name>';
   const email = pub.email ?? '<id>+<login>@users.noreply.github.com';
   return `This push publishes commits with the email(s) ${bad.join(', ')} to ${target}, whose history is public. Commit as the public identity instead: in this clone run git config user.name "${name}" and git config user.email "${email}", then rewrite your unpushed commits with git rebase -r @{u} --exec "git commit --amend --no-edit --reset-author" and push again.`;
+}
+
+/**
+ * Why a shell command reaches a protected path by a relative name, or undefined. A protected
+ * path can sit inside a folder an agent may work in (this app's data/ inside its checkout, when config
+ * guard.protectFactoryCheckout is false), so `cd <checkout> && rm -rf data` or `git clean -x` there must still
+ * be refused although the command never spells the protected path out. Every word is resolved against the
+ * directory the command is in by then (its cwd, `cd`, `git -C`); `protectedPaths` are normalised (lower case,
+ * forward slashes, no trailing slash).
+ */
+export function checkRelativeProtected(cmd: string, cwd: string | undefined, protectedPaths: string[]): string | undefined {
+  if (!protectedPaths.length) return undefined;
+  const n = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const hit = (p: string | undefined) => (p ? protectedPaths.find((q) => n(p) === q || n(p).startsWith(q + '/')) : undefined);
+  const holds = (d: string | undefined) => (d ? protectedPaths.find((q) => q.startsWith(n(d) + '/')) : undefined);
+  let dir = cwd;
+  for (const seg of cmd.split(/&&|\|\||[;|\n]/)) {
+    const raw = seg
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((w) => w.replace(/^[<>&\d]*[<>]+/, '').replace(/^["']|["']$/g, ''));
+    const lower = raw.map((w) => w.toLowerCase());
+    for (const w of raw) {
+      if (!w || w.startsWith('-')) continue;
+      const p = hit(resolveDir(dir, w));
+      if (p) return `${w} is inside protected path ${p} (this server's data, or a checkout agents must not touch).`;
+    }
+    if (['cd', 'pushd', 'chdir', 'set-location', 'sl'].includes(lower[0] ?? '')) dir = resolveDir(dir, raw[1]);
+    const g = lower.findIndex((w) => w === 'git' || w.endsWith('/git') || w.endsWith('git.exe'));
+    if (g < 0) continue;
+    let gitDir = dir;
+    let i = g + 1;
+    while (i < raw.length && raw[i].startsWith('-')) {
+      if (raw[i] === '-C') gitDir = resolveDir(gitDir, raw[i + 1]);
+      i += raw[i] === '-C' || raw[i] === '-c' ? 2 : 1;
+    }
+    // git clean -x / -X also deletes ignored files, and a protected folder inside a checkout is usually ignored.
+    const p = lower[i] === 'clean' && raw.slice(i + 1).some((w) => /^-[a-zA-Z]*[xX]/.test(w)) ? holds(gitDir) : undefined;
+    if (p) return `git clean -x here would delete protected path ${p}. Clean without -x/-X, or name the paths.`;
+  }
+  return undefined;
 }
 
 /** Where a `cd` / `git -C` argument lands, or undefined when that cannot be known from the text. */

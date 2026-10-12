@@ -25,6 +25,9 @@
   "protectedPaths": [
     "/Users/you/work/your-repo"
   ],
+  "guard": {
+    "protectFactoryCheckout": true
+  },
   "limits": {
     "maxUnity": 0,
     "maxSessions": 4,
