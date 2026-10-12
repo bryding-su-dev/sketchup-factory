@@ -324,14 +324,17 @@ export class Orchestrators {
     this.gathered.set(key, g);
   }
 
-  /** Send each of these people's own orchestrators a harness message (made if missing). */
-  toPeople(people: readonly Requester[], text: string) {
+  /**
+   * Send each of these people's own orchestrators a harness message (made if missing). `bypassGate`: not held by the
+   * host guard or the Bedrock gate (w38: the notice that the cap is spent must not wait behind the cap).
+   */
+  toPeople(people: readonly Requester[], text: string, opts: { bypassGate?: boolean } = {}) {
     const seen = new Set<string>();
     for (const r of people) {
       if (seen.has(r.userId.toLowerCase())) continue;
       seen.add(r.userId.toLowerCase());
       try {
-        this.sessions.send(this.personalFor(r).info.id, text, 'system', undefined, { requestedBy: asRequester(r) });
+        this.sessions.send(this.personalFor(r).info.id, text, 'system', undefined, { requestedBy: asRequester(r), ...(opts.bypassGate ? { bypassGate: true } : {}) });
       } catch {
         // that orchestrator could not be started (a limit); the ledger and the UI still have it
       }

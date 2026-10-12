@@ -1469,7 +1469,7 @@ let backendTimer: NodeJS.Timeout | undefined;
 const backend: BedrockBackend = new BedrockBackend({
   cfg,
   usage: () => usage.entries,
-  notify: (text) => agents.orchestrators.toPeople([identity.owner()], text),
+  notify: (text) => agents.orchestrators.toPeople([identity.owner()], text, { bypassGate: true }),
   // Status and spend are broadcast at most once a second.
   changed: () => {
     backendTimer ??= setTimeout(() => {
