@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to FF Factory are recorded here. The format follows
+All notable changes to SketchUp Factory are recorded here. Entries from before the fork may mention Final Factory and
+Unity. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/). Until 1.0 a minor bump may break things.
 
@@ -11,6 +12,8 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- README rewritten for the SketchUp Factory as it runs (a Mac host, plain worktree sandboxes); `docs/README.md` indexes the docs
+  and marks the inherited Final Factory ones. SECURITY.md and CONTRIBUTING.md name this fork.
 - **Workers default to Sonnet 5.5** (port of upstream w680, #230): `defaultModel` (what `start_agent` and standing agents
   use when no model is named) is `sonnet`, and so are auto-approved delegations and the standing-agent editor's default.
   Orchestrators and the dispatcher stay on Opus (`orchestrator.model`). A `config.json` that sets `defaultModel` itself
