@@ -49,7 +49,9 @@ function setup(t: { after: (fn: () => void | Promise<void>) => void }) {
   const store = new Store(dir);
   t.after(async () => {
     sessions.stopAll();
-    await new Promise((r) => setTimeout(r, 50));
+    // Let the stopped processes finish writing (a loaded machine takes longer than a fixed pause) before the folder goes.
+    for (let i = 0; i < 100 && [...sessions.sessions.values()].some((x) => x.live || isMidTurnStatus(x.info.status)); i++) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 100));
     store.flush();
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   });
@@ -70,6 +72,7 @@ async function until(pred: () => boolean, what: string, ms = 3000) {
   }
 }
 const idle = (s: { info: SessionInfo }) => s.info.status === 'idle';
+const isMidTurnStatus = (status: string) => status === 'running' || status === 'starting' || status === 'waiting_permission';
 const lines = (store: Store, id: string) => store.readTranscript(id).map((e) => ('text' in e ? e.text : ''));
 
 test('a process records where it runs: the plan account, or Bedrock with the profile name only', async (t) => {
