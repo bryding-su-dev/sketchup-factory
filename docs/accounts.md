@@ -143,3 +143,11 @@ endpoint rate-limits, so the numbers are allowed to be that old: each account's 
   counts from it.
 - A request that never answers cannot hold the polls up: each gives up after 75 s, and a poll still marked running
   after 5 minutes no longer blocks the next one.
+
+## Bedrock
+
+With a Bedrock profile configured (`bedrock.profile`), this host's agents can run on SketchUp's AWS Bedrock account
+instead of any Claude account above: always (`bedrock.mode bedrock`) or, in Auto, while the plan's usage is near its
+limit. While Bedrock is active it **overrides the `claudeAccounts` choice** for the orchestrator, workers and standing
+agents on this host; those sessions show as `bedrock:<profile>` and are left out of the plan meters. A person's own
+token still wins: their agents stay on it. Agents on machines are not affected. See [bedrock.md](bedrock.md).

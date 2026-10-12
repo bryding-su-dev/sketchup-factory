@@ -1,0 +1,141 @@
+# Bedrock
+
+The agents can run on SketchUp's AWS Bedrock account instead of the Claude plan. In **Auto** the host moves them to
+Bedrock when the plan's 5-hour usage nears its limit and back when it has room again. Bedrock bills per token, so the
+app counts what it spends against a daily cap.
+
+## Scope
+
+- **This host's agents only**: orchestrators, the dispatcher, workers and standing agents that run on this computer.
+  Agents on machines (Macs, Windows PCs) are untouched; they keep their own account.
+- **A person's own token wins.** An agent working for someone who set their own Claude token (`userClaudeEnv.<user>`,
+  [accounts.md](accounts.md)) stays on that token whatever the mode says.
+- Bedrock overrides the host's account choice (`claudeAccounts`) for the agents it covers while it is active.
+- Nothing secret is configured: Bedrock authenticates through a named AWS SSO profile in `~/.aws/config`. The app
+  knows the profile's name and a region, never a key. A value that looks like a key or token is refused and not echoed.
+
+## Config
+
+`config.json` `bedrock`, or `set_app_config bedrock.<key> <value>` (applies live; a null value returns to the default).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `auto` | `auto`, `plan` (always the plan) or `bedrock` (always Bedrock). |
+| `profile` | none | The AWS profile name. Without it Bedrock is off and the UI shows the plan only. |
+| `region` | `us-west-2` | The AWS region. |
+| `regionPrefix` | `us` | Inference profile prefix: `us`, `eu`, `apac`, `jp`, `au` or `global` (about 10% cheaper). |
+| `thresholdPercent` | `94` | Auto goes to Bedrock when the plan's 5-hour session usage reaches this. |
+| `weeklyThresholdPercent` | off | Auto also goes when the weekly usage reaches this. |
+| `resumeMarginPercent` | `10` | Auto returns to the plan once usage is this many points under the threshold, or its window reset. |
+| `dailyBudgetUsd` | `200` | The most Bedrock may cost per local day. `0` turns the cap off. Do not raise it unless asked. |
+
+## How Auto decides
+
+- Session usage at or over `thresholdPercent` (or weekly at `weeklyThresholdPercent`): Bedrock.
+- Once on Bedrock it stays until usage is under `thresholdPercent - resumeMarginPercent` (94 → 84 by default), or the
+  window has reset. That gap is the hysteresis: a reading wobbling around the threshold cannot flap the backend. An
+  unknown reading keeps the current state. A meter whose window has reset since it was read counts as 0.
+- Bedrock is skipped when it cannot be used: no profile, or the AWS login does not work. The plan carries the work and
+  the reason says why.
+- **Daily cap.** The day is the host's local day. At 80% of `dailyBudgetUsd` the owner's orchestrator is told once. At
+  100% Bedrock stops: work goes to the plan if the plan has room, otherwise it **waits** (the badge says "Bedrock cap
+  reached – waiting") and starts when the plan frees up or the next day begins. A turn already running is not cut off,
+  so the day can overshoot the cap by what in-flight turns cost.
+
+## Agents mid-turn
+
+A turn in progress finishes on the backend it started on. When the decided backend changes, the next message to an
+**idle** agent restarts its process on the new backend with the history resumed; a cross-provider resume is tested.
+Agents that are mid-turn, waiting for a permission, running tasks or compacting are left alone and move on a later
+message. While the cap is spent and the plan is full, messages are held in the existing queue.
+
+## Switching by hand
+
+- The dashboard: the **Plan | Bedrock | Auto** control under the sidebar (shown when a profile is set). Choosing
+  Bedrock asks for confirmation, because it spends money.
+- Or ask the orchestrator: `set_app_config bedrock.mode plan|bedrock|auto`. `POST /api/backend/mode {"mode": …}` is the
+  same call.
+
+The badge at the top of the sidebar (and a mark on the phone's menu button) shows the active backend: Plan, Bedrock, or
+the cap message, with today's spend, and an amber dot when AWS is the problem. Agents on Bedrock carry a **B** tag in
+the fleet rows and "on Bedrock · $0.42" in their details. Under the system meters, **Bedrock** shows today against the
+cap, this week, the reason, and the top spenders (`GET /api/backend`, fetched when opened).
+
+## Models
+
+A Bedrock process gets the three aliases mapped to inference profile ids `<prefix>.anthropic.<model>`:
+
+| Alias | Id (prefix `us`) |
+| --- | --- |
+| opus | `us.anthropic.claude-opus-5-5` |
+| sonnet | `us.anthropic.claude-sonnet-5-5` |
+| haiku | `us.anthropic.claude-haiku-5-5` |
+
+Checked 2026-10-12 with `aws bedrock list-inference-profiles` in us-west-2 and us-east-1, and Claude Code's Bedrock
+documentation (https://code.claude.com/docs/en/amazon-bedrock). With `regionPrefix: "global"` the prefix is `global`.
+
+## The environment
+
+A Bedrock process gets `CLAUDE_CODE_USE_BEDROCK=1`, `AWS_PROFILE`, `AWS_REGION` and
+`ANTHROPIC_DEFAULT_OPUS_MODEL` / `_SONNET_MODEL` / `_HAIKU_MODEL`. These are removed from the server's environment first,
+so nothing can win over the profile or the plan: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_BASE_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`,
+`AWS_DEFAULT_REGION`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_MANTLE`. The session's
+account is recorded as `bedrock:<profile>`; the plan meters leave such sessions out.
+
+## Spend
+
+The spend is an **estimate from token counts at Bedrock list prices**, kept per turn.
+
+Prices in USD per million tokens (AWS Price List API, `AmazonBedrockFoundationModels`, us-west-2, 2026-10-12; global
+endpoints):
+
+| Model | Input | Output | Cache write (5 min) | Cache read |
+| --- | --- | --- | --- | --- |
+| Opus 5.5 | 4 | 20 | 5 | 0.20 |
+| Sonnet 5.5 | 2 | 10 | 2.50 | 0.10 |
+| Haiku 5.5 | 0.10 | 0.50 | 0.125 | 0.01 |
+
+- A regional prefix (`us`, `eu`, …) costs 10% more than `global`; the estimate applies it.
+- Haiku has a long-context tier above 100K input tokens at 0.5 input / 2.5 output. A turn's totals cannot show it, so
+  the estimate keeps the **larger** of the table and Claude Code's own figure for the same tokens.
+- A resumed session's first result already carries what came before; only the difference since the last total is
+  counted, so nothing is counted twice.
+- AWS Cost Explorer is the reconciliation, but it is **account-wide**: it includes other users of the AWS account, so it
+  will read higher than this app's number.
+
+Files in `data/`:
+
+- `bedrock-spend.jsonl`: one line per turn (time, session, model, tokens, USD). The day and week totals are rebuilt from
+  it at start.
+- `bedrock-state.json`: Auto's state per account (on Bedrock since when and why), the per-session token totals and which
+  notices were sent.
+
+## SSO expiry
+
+When the AWS login lapses the probe (`aws sts get-caller-identity`, cached, repeated every 5 minutes) or a failed turn's error says so. The badge shows an amber dot with the reason, Auto falls back to the plan, the
+owner's orchestrator is told once. Fix: `aws sso login --profile
+<profile>`. Bedrock resumes by itself at the next probe.
+
+## Preflight
+
+```
+node scripts/bedrock-preflight.ts [--profile P] [--region R] [--call]
+```
+
+Read-only. Lists profile names, the caller's account id and role, whether the three model ids are ACTIVE, yesterday's
+and today's account-wide cost; `--call` also makes one tiny Haiku call (a fraction of a cent) with the same environment
+an agent gets. Run it before turning Bedrock on and whenever it stops working.
+
+## Live setup
+
+```
+aws sso login --profile <profile>
+node scripts/bedrock-preflight.ts --profile <profile> --call
+set_app_config bedrock.profile <profile>
+set_app_config bedrock.region us-west-2
+set_app_config bedrock.mode auto
+```
+
+Optional: `bedrock.regionPrefix global`, `bedrock.thresholdPercent`, `bedrock.weeklyThresholdPercent`,
+`bedrock.resumeMarginPercent`, `bedrock.dailyBudgetUsd`.
