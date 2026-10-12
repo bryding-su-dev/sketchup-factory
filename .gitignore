@@ -1,5 +1,5 @@
-node_modules/
-web/node_modules/
+# No trailing slash: node_modules may be a symlink to a shared install, which "node_modules/" (directories only) never matched.
+node_modules
 web/dist/
 data/
 config.json
