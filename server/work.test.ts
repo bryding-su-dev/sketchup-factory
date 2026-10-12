@@ -7,6 +7,7 @@ import {
   decisionProblem,
   dispatchNotice,
   findOverlaps,
+  handoffNote,
   ledgerOrder,
   limitProblem,
   limitsFor,
@@ -205,4 +206,24 @@ test('lines: the dispatcher reads the request and the overlap check; people see 
   assert.equal(asked.attention, true);
   assert.equal(asked.summary, 'The dispatcher asks about “Fix belt desync”');
   assert.equal(asked.body, 'Which save shows it?');
+});
+
+test('w28: the handoff a fresh worker gets names the earlier work: status, last word, PRs, branches and workers; nothing named, nothing added', () => {
+  assert.equal(handoffNote([]), '');
+  const note = handoffNote(
+    [
+      { item: { id: 'w20', title: 'Mac updater', status: 'done', outcome: 'PR 3 merged.\nDetails below', keys: ['pr:3', 'branch:w20-mac-updater', 'spec:020'] }, workers: ['worker ab12 "Mac updater" in decks, branch sandbox/decks'] },
+      { item: { id: 'w9', title: 'Upstream port', status: 'active', keys: [] }, workers: [] },
+    ],
+    ['worker cd34 "Sign-in" in alpha (stopped)'],
+  );
+  assert.equal(
+    note,
+    [
+      '\n\n---\nHandoff (added by the harness): the earlier work this request names. You start in a fresh session without its conversation; this is what carries over.',
+      '- w20 "Mac updater" (done); last word: PR 3 merged. Details below; PR 3, branch w20-mac-updater; worked on by worker ab12 "Mac updater" in decks, branch sandbox/decks',
+      '- w9 "Upstream port" (active)',
+      '- worker cd34 "Sign-in" in alpha (stopped)',
+    ].join('\n'),
+  );
 });

@@ -12,6 +12,7 @@ import {
   dispatchNotice,
   findOverlaps,
   firstLine,
+  handoffNote,
   isFor,
   isOpen,
   ledgerOrder,
@@ -30,6 +31,7 @@ import {
   updateNotice,
   updateProblem,
   type Decision,
+  type HandoffItem,
   type PoolEntry,
 } from './work.ts';
 import { autoApproveProblem, identityKeys, parseMarkers, sourceTag } from './intakeRules.ts';
@@ -761,6 +763,60 @@ export class Orchestrators {
     this.stamp(w, `dispatcher: ${what}`);
     this.store.putWork(w);
     if (opts.reply !== false) this.toPeople(w.requesters, dispatchNotice(w, what));
+  }
+
+  /**
+   * Why message_agent does not give a request to a worker that is not on it yet without a continue_reason: a new request
+   * starts a fresh session (docs/orchestrators.md, "A fresh session per request"). The refusal names what the worker's
+   * session already holds and whether the request names it, so the dispatcher can judge whether it really continues.
+   */
+  continueProblem(w: WorkItem, workerId: string): string {
+    const held = [...this.store.work.values()].filter((x) => x.id !== w.id && x.sessionIds.includes(workerId));
+    const named = new Set((w.relatedIds ?? []).map((x) => x.trim().toLowerCase()));
+    const hits = held.filter((x) => named.has(x.id.toLowerCase())).map((x) => x.id);
+    if (named.has(workerId.toLowerCase())) hits.push(workerId);
+    const holds = held.length ? `its session holds ${held.slice(-5).map((x) => `${x.id} "${clip(x.title, 60)}"`).join(', ')}` : 'its session holds other work';
+    const names = hits.length ? `${w.id} names ${hits.join(', ')}` : `${w.id} names none of it`;
+    return (
+      `${w.id} is not on ${this.workerLine(workerId)}, and ${holds}. A new request starts a fresh session: start_agent with work_id "${w.id}" ` +
+      `(reusing that sandbox is fine; the brief gets a handoff of the work the request names). Continue this session only when ${w.id} ` +
+      `directly continues its work (a follow-up on the same request, PR or branch, where its context helps): pass continue_reason saying how. ${names}.`
+    );
+  }
+
+  /**
+   * The handoff a fresh worker gets with a request (handoffNote): the requests its related_ids name (a merged one as the
+   * request it continues as) with their workers, and the workers it names directly. Their transcripts stay where they
+   * are (agent_transcript, search_transcripts); only these lines go into the brief.
+   */
+  handoffFor(w: WorkItem): string {
+    const items: HandoffItem[] = [];
+    const workers: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of w.relatedIds ?? []) {
+      const id = raw.trim();
+      let item = this.store.work.get(id) ?? this.store.work.get(id.toLowerCase());
+      if (item?.mergedInto) item = this.store.work.get(item.mergedInto) ?? item;
+      if (item && item.id !== w.id && !items.some((x) => x.item.id === item!.id)) {
+        const ids = item.sessionIds.filter((sid) => this.store.sessions.get(sid));
+        for (const sid of ids) seen.add(sid);
+        items.push({ item, workers: ids.map((sid) => this.workerPlace(sid)) });
+        continue;
+      }
+      const s = this.store.sessions.get(id);
+      if (s?.kind === 'worker' && !seen.has(s.id)) {
+        seen.add(s.id);
+        workers.push(`${this.workerPlace(s.id)} (${s.status})`);
+      }
+    }
+    return handoffNote(items, workers);
+  }
+
+  /** A worker's line with its sandbox's branch, for a handoff: `worker ab12 "Belt fix" in alpha, branch 098-belts`. */
+  private workerPlace(id: string): string {
+    const s = this.store.sessions.get(id);
+    const branch = s?.sandboxId ? this.store.sandboxes.get(s.sandboxId)?.branch : undefined;
+    return branch ? `${this.workerLine(id)}, branch ${branch}` : this.workerLine(id);
   }
 
   /**

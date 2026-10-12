@@ -65,7 +65,8 @@ The dispatcher then does one of these for each request:
 
 | decision | how | status |
 |---|---|---|
-| start it | `start_agent` with `work_id`, or `message_agent` with `work_id` to a worker already on it | `active` |
+| start it | `start_agent` with `work_id`: a fresh worker session (below) | `active` |
+| continue a worker | `message_agent` with `work_id` to a worker already on it, or with `continue_reason` to one whose change it directly continues | `active` |
 | merge it | `decide_work merge` into the open request it repeats; its people join that one | `merged` |
 | link it | `decide_work link` to workers already doing it | `active` |
 | queue it | `decide_work queue`, saying what it waits for | `queued` |
@@ -77,6 +78,32 @@ live worker, unless `override_duplicate` says what is different. `work_id` is th
 for a request runs for the person who filed it, on their account. The requester's orchestrator can add a note (which
 answers a question), change the priority, close the request, or reopen it within 7 days (`update_work`). Closing is the
 filer's: the others still on the request hear it. Someone whose request was merged into it only leaves it.
+
+### A fresh session per request
+
+**A new request starts a new Claude Code session** (w28, Ben, 2026-10-12: one worker's session ran w1, w5, w11 and w25
+for $150, another ran w15 and then the unrelated w26 sign-in work for $159). Resuming a worker's session hands the new
+task its whole earlier conversation: tokens paid again on every turn, a slower worker, and old work bleeding into the new.
+So the default is `start_agent`; its sandbox, branch and files can be the earlier worker's (start it in that sandbox).
+
+- **Continuing is explicit and logged.** `message_agent` with a `work_id` the worker is not on yet is refused without
+  `continue_reason` (`Orchestrators.continueProblem`). The refusal names what the worker's session already holds and
+  whether the request names it, and points to `start_agent`. With a reason, the request is linked to the worker, its log
+  says `continued worker <id> "<title>" in <sandbox>'s session, reusing its context: <reason>`, and its people's orchestrators get that line as
+  the `[dispatch]`. The dispatcher continues a session only when the request directly continues that worker's change and
+  its context helps: a follow-up on the same request, or a request whose `related_ids` name the worker's request and that
+  continues the same PR or branch. Naming a request for context does not make it a continuation.
+- **A follow-up on the same request needs no reason**: `message_agent` with the `work_id` of a request the worker is
+  already on (`start_agent` refuses a second worker for a request with a live one), and a person's orchestrator's
+  follow-ups to its own workers, are the same work.
+- **The fresh worker gets a handoff, never a transcript.** The dispatcher's brief names what it builds on (request ids,
+  branch or PR, report paths), and `start_agent` with a `work_id` adds, after the request as filed, a `Handoff` of what
+  the request's `related_ids` name (`Orchestrators.handoffFor`, `handoffNote` in `server/work.ts`): each request's
+  status, last word, PRs and branches and the workers that had it (with their sandbox's branch), then the workers named
+  directly.
+- **The earlier session stays where it was.** It is not deleted: the reaper stops it once its requests are closed or
+  have moved to another worker (below), `agent_transcript` and `search_transcripts` still read it, and a message
+  resumes it.
 
 **Owners close each other's requests when asked** (w402, Lothsahn: "ben and I can close each other's requests if we
 explicitly ask"). A person with the `owner` role (docs/identity.md; Ben and Lothsahn today) may have their own
@@ -353,7 +380,7 @@ or not, takes no slot. Orchestrators never count. The Unity editor limits are un
   next pass (the transcript says why it waits), and given up only after 24 hours (`QUEUE_HOLD_MS`), with an error that
   quotes its start. Before, a throw dropped it.
 - **Every worker gets the request as filed** (w496): after the dispatcher's own brief, `start_agent` (and `message_agent`
-  with a `work_id` the worker is not on yet) adds "The request as filed": its title, brief, constraints, related ids
+  with a `work_id` the worker is not on yet, which needs a `continue_reason`) adds "The request as filed": its title, brief, constraints, related ids
   and every `update_work` note (`requestAsFiled`, `server/work.ts`; notes are kept whole in `WorkItem.notes`, older ones
   are read back from the log), then the intake rules and the `Request:` line. Its attachments go with it as before.
 - **Idle processes are capped by stopping, not refusing.** An idle claude process holds memory: measured on BEAST
