@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HOST_ROLES, editorConfigured, loadConfig, machineCleanupSettings, publicIdentityOf, ROOT } from './config.ts';
+import { HOST_ROLES, configPath, editorConfigured, loadConfig, machineCleanupSettings, publicIdentityOf, ROOT } from './config.ts';
+import { setAppConfig } from './appConfig.ts';
+import { BedrockBackend } from './bedrockBackend.ts';
 import { Store, bus } from './store.ts';
 import { SandboxManager } from './sandboxes.ts';
 import { SessionManager, compactCommand, snapshotOf } from './sessions.ts';
@@ -449,6 +451,7 @@ function appState(user: string | undefined): AppState {
     system: lastSystem,
     host: { ...host, drain: drainer.status },
     usage: usage.usage,
+    backend: backend.status(),
     accounts: accountsNow(),
     machineStats: machines.allStats(),
     orchestratorId: mine.info.id,
@@ -542,6 +545,19 @@ route('POST', '/api/work/(w[0-9]+)/decline', async (req, [id]) => {
   return { id: w.id, status: w.status, approval: w.approval };
 });
 // The usage meters' Refresh: poll every account now, here and on each connected machine (docs/accounts.md).
+// The Bedrock backend (docs/bedrock.md): where the agents run, what it costs, and the Plan / Bedrock / Auto switch.
+route('GET', '/api/backend', async () => ({ backend: backend.status(), sessions: backend.topSessions(20), recent: backend.recentSpend(30) }));
+route('POST', '/api/backend/mode', async (req) => {
+  requesterOf(req); // signed in: any person may switch, as with the other app settings
+  const b = await readJson<{ mode?: unknown }>(req);
+  try {
+    setAppConfig(configPath(), cfg, 'bedrock.mode', b.mode);
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+  backend.evaluate();
+  return backend.status();
+});
 route('POST', '/api/usage/refresh', async () => ({ started: usage.refreshNow(), machines: machines.requestUsage() }));
 
 route('GET', '/api/sessions/([\\w-]+)/events', async (_r, [id], url) => {
@@ -1437,6 +1453,7 @@ function stopServer(req: RestartRequest, drained: ReadonlySet<string> = new Set(
 const usage = new UsageTracker(cfg, () => {
   if (usage.usage) broadcast({ type: 'usage', usage: usage.usage });
   broadcast({ type: 'accounts', accounts: accountsNow() });
+  backend.evaluate(); // new plan numbers: Auto may switch
 });
 /** People's own Claude tokens (config userClaudeEnv, docs/identity.md), labelled with their names. */
 function personTokens() {
@@ -1447,6 +1464,32 @@ function personTokens() {
     .map(({ u, token }) => ({ token, displayName: u.displayName, label: `${u.displayName}'s token …${token.slice(-4)}` }));
 }
 usage.personTokens = personTokens;
+// The Bedrock backend (w38, docs/bedrock.md): Auto moves this host's agents to Bedrock at the plan's usage threshold.
+let backendTimer: NodeJS.Timeout | undefined;
+const backend: BedrockBackend = new BedrockBackend({
+  cfg,
+  usage: () => usage.entries,
+  notify: (text) => agents.orchestrators.toPeople([identity.owner()], text),
+  // Status and spend are broadcast at most once a second.
+  changed: () => {
+    backendTimer ??= setTimeout(() => {
+      backendTimer = undefined;
+      broadcast({ type: 'backend', backend: backend.status() });
+    }, 1000);
+  },
+  switched: () => void setImmediate(() => sessions.drain()),
+  whoFor: (i) => (i.kind === 'orchestrator' ? (agents.orchestrators.ownerOf(i) ?? identity.systemPayer()) : i.requestedBy),
+});
+agents.backend = backend;
+agents.standing.backend = backend;
+agents.bedrockChanged = () => {
+  backend.evaluate();
+  void backend.checkAws();
+};
+sessions.backendGate = (s) => backend.gateFor(s.info);
+sessions.backendWant = (s) => backend.wantFor(s.info);
+sessions.events.on('bedrockResult', (s, m) => backend.recordResult(s, m));
+sessions.events.on('bedrockError', (_s, text: string) => backend.bedrockError(text));
 function accountsNow() {
   const token = hostToken(cfg);
   const toMachine = (id: string) => machineToken(cfg, usesHostClaudeEnv(cfg, store.machines.get(id) ?? id));
@@ -1500,6 +1543,7 @@ agents.usageLines = () => {
     ...accountSetupLines(cfg, os.hostname(), hostToken(cfg), machines.list(), personTokens().map((p) => p.displayName)),
     orchestratorAccountsLine(),
     ...accountLines(accountsNow(), store.sessions, new Date()),
+    ...backend.statusLines(),
   ];
 };
 // usagePollMinutes changed (set_app_config): this host's next poll moves, and the daemons hear the new interval.
@@ -1521,6 +1565,7 @@ const outsideWatchLines = () => {
   ];
 };
 usage.start();
+backend.start();
 
 /** Backlog step 2: a restart leaves the agents machine daemons run alone (config machines.keepAgentsOnRestart). */
 const keepDaemonAgents = () => cfg.machines?.keepAgentsOnRestart === true;
