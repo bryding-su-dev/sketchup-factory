@@ -100,8 +100,55 @@ function buildItems(events: TranscriptEvent[], now: number): Item[] {
 
 const seqsOf = (steps: Step[]) => steps.flatMap((s) => (s.kind === 'tool' ? [s.use.seq, s.result?.seq] : s.kind === 'orphan' ? [s.result.seq] : [s.ev.seq])).filter((x): x is number => x !== undefined);
 
-/** Where each chat was scrolled to, so leaving and coming back keeps the place ('bottom': follow new messages). */
-const scrollMemory = new Map<string, number | 'bottom'>();
+/**
+ * Where a chat was left: 'bottom' (follow new messages), or at a message: its `seq`, how far its top sat below the top of
+ * the view (`off`), the newest seq then (`latest`), and the pixel offset (`top`) as a fallback. A pixel offset alone is
+ * not the place once the chat is drawn again: it may be narrower (beside a panel), and its images load again, lazily (w1100).
+ */
+type Place = 'bottom' | { top: number; seq?: number; off: number; latest?: number };
+type Held = Exclude<Place, 'bottom'>;
+/** Where each chat was scrolled to, so leaving and coming back keeps the place. */
+const scrollMemory = new Map<string, Place>();
+/** How long after a chat is drawn again its place is held against content that loads late (images, diagrams), until the reader moves. */
+const HOLD_MS = 4000;
+
+const seqOf = (c: Element): number | undefined => {
+  const v = c.getAttribute('data-seq') ?? c.getAttribute('data-seqs')?.trim().split(/\s+/)[0];
+  const n = v === null || v === undefined ? NaN : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+/** The first message in view (the first row ending below the top edge that has a seq) and where its top sits. */
+function placeOf(box: HTMLElement): { seq: number; off: number } | undefined {
+  const kids = box.firstElementChild?.children;
+  if (!kids) return undefined;
+  const top = box.getBoundingClientRect().top;
+  let lo = 0;
+  let hi = kids.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (kids[mid].getBoundingClientRect().bottom > top + 1) hi = mid;
+    else lo = mid + 1;
+  }
+  for (let i = lo; i < kids.length; i++) {
+    const seq = seqOf(kids[i]);
+    if (seq !== undefined) return { seq, off: Math.round(kids[i].getBoundingClientRect().top - top) };
+  }
+  return undefined;
+}
+
+/** Scroll so the row holding `p.seq` sits `p.off` below the top. False when that row is not drawn (yet). */
+function alignTo(box: HTMLElement, p: Held): boolean {
+  if (p.seq === undefined) return false;
+  const want = String(p.seq);
+  for (const c of Array.from(box.firstElementChild?.children ?? [])) {
+    if (c.getAttribute('data-seq') !== want && c.getAttribute('data-seq2') !== want && !c.getAttribute('data-seqs')?.includes(` ${want} `)) continue;
+    const delta = c.getBoundingClientRect().top - box.getBoundingClientRect().top - p.off;
+    if (Math.abs(delta) >= 1) box.scrollTop += delta;
+    return true;
+  }
+  return false;
+}
 
 /** Set on someone else's conversation (docs/orchestrators.md): its permission requests are theirs to answer. */
 const ReadOnly = createContext<string | undefined>(undefined);
@@ -149,32 +196,101 @@ export const Transcript = memo(function Transcript({
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const [jump, setJump] = useState<'none' | 'far' | 'new'>('none');
+  // The place being brought back and held: `pending` until its row is drawn, `hold` while late content may still move it.
+  const pending = useRef<Held | null>(null);
+  const hold = useRef<{ place: Held; until: number } | null>(null);
+  // Size and position at the last scroll event: an event after the content grew, with nothing scrolled up, is the page growing, not the reader leaving the bottom.
+  const lastTop = useRef(0);
+  const lastHeight = useRef(0);
+  const latestSeq = useRef(0);
+  latestSeq.current = events?.at(-1)?.seq ?? 0;
+  const seenLatest = useRef(latestSeq.current);
+  const loadedNow = useRef(loaded);
+  loadedNow.current = loaded;
+
+  const track = (el: HTMLElement) => {
+    lastTop.current = el.scrollTop;
+    lastHeight.current = el.scrollHeight;
+  };
 
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const grew = el.scrollHeight > lastHeight.current;
+    const down = el.scrollTop >= lastTop.current;
+    track(el);
+    if (atBottom.current && grew && down) {
+      // Late content (a lazy image, a diagram) pushed the end away before this event was handled: still following, so follow.
+      el.scrollTo({ top: el.scrollHeight });
+      track(el);
+      return;
+    }
     atBottom.current = dist < 80;
-    scrollMemory.set(session.id, atBottom.current ? 'bottom' : el.scrollTop);
+    // While a place is being brought back, the scrolling is ours: what is remembered stays the place the reader left.
+    if (atBottom.current || !(hold.current || pending.current)) {
+      const at = atBottom.current ? undefined : placeOf(el);
+      scrollMemory.set(session.id, atBottom.current ? 'bottom' : { top: el.scrollTop, seq: at?.seq, off: at?.off ?? 0, latest: latestSeq.current });
+    }
     setJump((j) => (atBottom.current ? 'none' : j === 'new' ? 'new' : dist > el.clientHeight * 0.6 ? 'far' : 'none'));
+  };
+
+  // The reader takes over: nothing is held against them.
+  const released = () => {
+    hold.current = null;
   };
 
   const scrollToBottom = (smooth = false) => {
     const el = scroller.current;
     if (!el) return;
+    pending.current = null;
+    hold.current = null;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     atBottom.current = true;
+    track(el);
     scrollMemory.set(session.id, 'bottom');
     setJump('none');
+  };
+
+  // The remembered place, once its row is drawn; if the chat loaded without it (older than what was fetched), the pixel offset.
+  const restore = () => {
+    const el = scroller.current;
+    const p = pending.current;
+    if (!el || !p) return;
+    if (alignTo(el, p)) {
+      pending.current = null;
+      const h = { place: p, until: performance.now() + HOLD_MS };
+      hold.current = h;
+      track(el);
+      // Content above can change without the chat's size changing (a row grows as another shrinks), and the browser's own
+      // scroll anchoring stands down after a script moved the view: so look at every frame, until the reader takes over.
+      const frame = () => {
+        if (hold.current !== h || performance.now() > h.until) return;
+        alignTo(el, p);
+        requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+      if (p.latest !== undefined && latestSeq.current > p.latest) setJump('new');
+    } else if (loadedNow.current) {
+      pending.current = null;
+      if (el.scrollHeight > el.clientHeight) {
+        el.scrollTop = p.top;
+        atBottom.current = false;
+        track(el);
+      } else scrollToBottom();
+    }
   };
 
   // A chat on screen: where it was left, else the bottom.
   useLayoutEffect(() => {
     const saved = scrollMemory.get(session.id);
-    const el = scroller.current;
-    if (el && typeof saved === 'number' && el.scrollHeight > el.clientHeight) {
-      el.scrollTop = saved;
+    pending.current = null;
+    hold.current = null;
+    seenLatest.current = latestSeq.current;
+    if (saved && saved !== 'bottom') {
       atBottom.current = false;
+      pending.current = saved;
+      restore();
     } else {
       atBottom.current = true;
       scrollToBottom();
@@ -182,9 +298,12 @@ export const Transcript = memo(function Transcript({
   }, [session.id]);
 
   useLayoutEffect(() => {
-    if (atBottom.current) scrollToBottom();
-    else setJump('new');
-  }, [items.length, streaming, orphanPending.length]);
+    const fresh = latestSeq.current > seenLatest.current;
+    seenLatest.current = latestSeq.current;
+    if (pending.current) restore();
+    else if (atBottom.current) scrollToBottom();
+    else if (fresh || streaming || orphanPending.length) setJump('new');
+  }, [items.length, streaming, orphanPending.length, loaded]);
 
   // Content that grows after layout (markdown, images, opened rows), and the box shrinking (a keyboard, the
   // iPad's shortcut bar, the details panel), keep us pinned to the bottom.
@@ -193,7 +312,11 @@ export const Transcript = memo(function Transcript({
     const el = box?.firstElementChild;
     if (!box || !el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      if (atBottom.current) box.scrollTo({ top: box.scrollHeight });
+      if (atBottom.current) {
+        box.scrollTo({ top: box.scrollHeight });
+        track(box);
+      } else if (pending.current) restore();
+      else if (hold.current && performance.now() < hold.current.until) alignTo(box, hold.current.place);
     });
     ro.observe(el);
     ro.observe(box);
@@ -220,6 +343,8 @@ export const Transcript = memo(function Transcript({
     const el = (root?.querySelector(`[data-seq="${focus.seq}"], [data-seq2="${focus.seq}"]`) ?? root?.querySelector(`[data-seqs~="${focus.seq}"]`)) as HTMLElement | null | undefined;
     if (!el) return;
     atBottom.current = false;
+    pending.current = null;
+    hold.current = null;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.add('flash');
     setTimeout(() => el.classList.remove('flash'), 1800);
@@ -232,7 +357,7 @@ export const Transcript = memo(function Transcript({
     <ReadOnly.Provider value={readOnlyFor}>
     <LocalImages.Provider value={liveImage}>
     <div className={`transcript transcript-${size}`}>
-      <div className="transcript-scroll" ref={scroller} onScroll={onScroll}>
+      <div className="transcript-scroll" ref={scroller} onScroll={onScroll} onWheel={released} onTouchStart={released} onPointerDown={released} onKeyDown={released}>
         <div className="transcript-inner">
           {!loaded && !events && (
             <div className="transcript-loading">

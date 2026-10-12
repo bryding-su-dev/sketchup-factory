@@ -228,3 +228,46 @@ Chromium's source it should be, unless that flag is on for some users); how much
 covered with the hardware keyboard (the app takes anything up to 200 px for a bar); whether iPadOS's
 floating bar covers the Send button (Enter sends then); and whether Safari or Chrome pans the page for
 the box at the bottom under the bar (the app follows a pan, so the header should stay).
+
+## Leaving a page and coming back keeps the place (w1100)
+
+lothsahn, 2026-10-12: "When I switch to the dispatcher pane and then back to the orchestrator pane, it loses my position
+in the conversation and I have to scroll all the way to the bottom of the orchestrator pane again."
+
+The cause was in `web/src/components/Transcript.tsx`, the `onScroll` handler. It decided "at the bottom" from the page's
+geometry at the time of the scroll event, and the chat remembered its place per session as a pixel offset. A chat that is
+drawn again (every page switch draws the other pane's chat from the store) grows after it is drawn: pictures load lazily
+(`loading="lazy"` in `Markdown.tsx`), so a chat that has pictures lengthens by several screens over the second or two after the
+mount. A scroll event that arrived after some of that growth saw "400 px from the bottom", took it for the reader scrolling
+up, and set `atBottom` false. The `ResizeObserver` that follows growth only follows while `atBottom` is true, so the chat was
+left where it was, with "New messages" showing, and the reader had to scroll down by hand. Reproduced before the fix: a chat of
+12 messages with pictures, opened fresh, ended 3,000 px above its bottom.
+
+What it does now:
+
+- A scroll event after the content grew, with nothing scrolled up, is the page growing: the chat that was following the end
+  goes on following it.
+- A chat scrolled up is remembered by the message at the top of the view (its `seq`) and how far below the top that message
+  sits, not by pixels, which mean something else once the pane is narrower (the Dispatcher page puts the orchestrator beside
+  it) or its pictures are not loaded yet. It is put back on that message, and held there against late content until the
+  reader scrolls, touches or presses a key (4 s at most). If the chat has loaded without that message (older than the 500
+  events fetched), the pixel offset is the fallback.
+- "New messages" shows on the way back only when something newer than what the reader had seen has come in; it no longer
+  shows on every return to a scrolled-up chat.
+- The lists that were drawn only while open (the Dispatcher's Requests and Intake, the Overview board, Max, a standing agent's
+  runs and delegations) keep their scroll position through `web/src/scrollKeep.ts`. They never had any: they were at the top on
+  every return.
+
+`e2e/scrollKeep.spec.ts` covers it in the desktop, Android Chrome and iPhone Safari projects (the Intake tab's is in
+`e2e/intake.spec.ts`): the orchestrator across the Dispatcher page, a worker in a sandbox panel across the Overview, a worker on
+its full-width page, the dispatcher's own conversation across its tabs, and the Requests list and Overview board. The chats are
+filled with pictures, because a chat without any returns to the bottom even with the bug. Each chat is checked pinned to the
+bottom (with a message that came while away), scrolled up to a message (the same message in the same place, and "New
+messages"), and once more with nothing new. All six chat and list tests fail without the fix.
+
+Before and after (a chat of nine messages with pictures, left for the Dispatcher page and back; desktop, then Android Chrome):
+
+| | before | after |
+|---|---|---|
+| desktop | ![before, desktop](images/keep-place-before-desktop.png) | ![after, desktop](images/keep-place-after-desktop.png) |
+| phone | ![before, phone](images/keep-place-before-mobile.png) | ![after, phone](images/keep-place-after-mobile.png) |

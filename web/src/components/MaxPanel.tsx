@@ -8,6 +8,7 @@ import { api } from '../api';
 import { sessionIndex } from '../store';
 import { fmtRelative, maxGlance, navigate, useNow } from '../util';
 import { Chip, Dot, Icon } from './ui';
+import { useKeepScroll } from '../scrollKeep';
 
 type Tab = 'activity' | 'inbound';
 
@@ -31,6 +32,7 @@ export function channelLabel(e: MaxEvent): string {
 
 export function MaxPanel({ app, max: m, tab, onClose }: { app: AppState; max: MaxSummary; tab?: string; onClose?: () => void }) {
   const now = useNow(15_000);
+  const keep = useKeepScroll(`max:${tab ?? 'activity'}`);
   const current: Tab = tab === 'inbound' ? 'inbound' : 'activity';
   const setTab = (t: Tab) => navigate({ view: 'max', tab: t === 'activity' ? undefined : t }, true);
   const [events, setEvents] = useState<MaxEvent[]>();
@@ -143,7 +145,7 @@ export function MaxPanel({ app, max: m, tab, onClose }: { app: AppState; max: Ma
         </button>
       </nav>
 
-      <div className="sa-scroll">
+      <div className="sa-scroll" ref={keep}>
         {error && <p className="small tone-red">Could not load: {error}</p>}
         {current === 'activity' && <Activity list={events} max={m} sessions={sessionsById} />}
         {current === 'inbound' && <Inbound list={inbound} max={m} now={now} />}

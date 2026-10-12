@@ -10,6 +10,7 @@ import { displayName, fmtBytes, fmtRelative, isUnused, lsGet, lsSet, machineGlan
 import { AttentionButton, DrawerButton } from './ShellButtons';
 import { describe, gpuPct, level, ramLvl, ramPct, type Lvl } from './SystemMeters';
 import { Dot, Icon } from './ui';
+import { useKeepScroll } from '../scrollKeep';
 
 type Variant = 'side' | 'board';
 
@@ -346,6 +347,7 @@ export function FleetGroups({ app, sel, go, onNewSandbox }: { app: AppState; sel
 // ---------------------------------------------------------------- the Overview board
 
 export function OverviewBoard({ app }: { app: AppState }) {
+  const keep = useKeepScroll('overview');
   const now = useNow(15_000);
   const fleet = fleetFor(app);
   const live = fleet.reduce((n, c) => n + c.live, 0);
@@ -363,7 +365,7 @@ export function OverviewBoard({ app }: { app: AppState }) {
         <span className="spacer" />
         <AttentionButton />
       </header>
-      <div className="board">
+      <div className="board" ref={keep}>
         {fleet.map((c) => (
           <article key={c.key} className="board-card" data-testid={`board-${c.key}`}>
             <header className="board-head">
