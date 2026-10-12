@@ -164,6 +164,8 @@ export interface SessionInfo {
   account?: string;
   /** Where its current process runs (w38, docs/bedrock.md): the Claude plan or Bedrock. Recorded when the process starts. */
   backend?: 'plan' | 'bedrock';
+  /** The AWS region a Bedrock process started with (w38), to tell a process on an old region from the new one. */
+  bedrockRegion?: string;
   /** The estimated Bedrock cost of this session so far, USD (the plan costs nothing per token). */
   bedrockCostUsd?: number;
   createdAt: string;

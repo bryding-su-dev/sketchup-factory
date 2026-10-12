@@ -56,7 +56,7 @@ function setup(t: { after: (fn: () => void | Promise<void>) => void }) {
   const sessions = new SessionManager({ limits: { maxSessions: 6 }, dataDir: dir } as unknown as Config, store);
   /** What the controller says: the backend a new process starts on, and whether new work is held. */
   const want = { backend: 'plan' as 'plan' | 'bedrock', reason: 'plan usage is under the 94% threshold', blocked: undefined as string | undefined };
-  sessions.backendWant = () => (want.blocked ? undefined : { backend: want.backend, reason: want.reason });
+  sessions.backendWant = () => (want.blocked ? { backend: 'plan', reason: want.blocked } : { backend: want.backend, reason: want.reason });
   sessions.backendGate = () => want.blocked;
   const worker = () => sessions.create({ kind: 'worker', title: 'w', permissionMode: 'bypassPermissions', options: () => ({ model: 'opus', env: want.backend === 'bedrock' ? { ...BEDROCK_ENV } : { ...PLAN_ENV } }) });
   return { dir, store, sessions, worker, want };
@@ -211,4 +211,126 @@ test('a session already mid-turn is not held by the gate; a stopped one is, and 
   assert.equal(started.length, before, 'no process was started for it');
   assert.equal(sessions.queued().length, 1);
   assert.equal(stopped.live, false);
+});
+
+/** A session on Bedrock with a background task running (its process cannot be moved until the task ends). */
+async function bedrockWithTask(h: ReturnType<typeof setup>) {
+  h.want.backend = 'bedrock';
+  const s = h.worker();
+  h.sessions.send(s.info.id, '#bg start one');
+  await until(() => idle(s) && !!s.info.backgroundTasks, 'a background task');
+  assert.equal(s.info.backend, 'bedrock');
+  return s;
+}
+const endTasks = (s: { info: SessionInfo }) => {
+  (s as unknown as { backgroundTasks: number }).backgroundTasks = 0;
+  s.info.backgroundTasks = undefined;
+};
+
+test('a Bedrock process that cannot be moved yet takes no message once the decision wants the plan: it waits, then goes on the plan', async (t) => {
+  const h = setup(t);
+  const { sessions, store, want } = h;
+  const s = await bedrockWithTask(h);
+  // Still Bedrock: the message goes to the process as before.
+  sessions.send(s.info.id, 'still on bedrock');
+  await until(() => s.info.turns === 2 && idle(s), 'the second turn');
+  assert.equal(sessions.queued().length, 0);
+  // The cap is spent (or the mode is plan): the plan carries the work.
+  want.backend = 'plan';
+  want.reason = "today's Bedrock cap is spent ($200 of $200), so the plan carries the work";
+  const n = started.length;
+  const uuid = sessions.send(s.info.id, 'after the cap');
+  assert.equal(sessions.isQueued(uuid), true);
+  assert.equal(started.length, n, 'no turn started on Bedrock');
+  assert.equal(s.info.turns, 2);
+  assert.match(sessions.queued()[0].why, /^waiting for its background work to end before moving off Bedrock \(today's Bedrock cap is spent/);
+  assert.ok(lines(store, s.info.id).some((l) => /A message is waiting for its background work to end before moving off Bedrock/.test(l)));
+  assert.equal(sessions.drain(), 0, 'the drain retries, and it still cannot');
+  // The task ends: the next drain recycles it onto the plan and delivers.
+  endTasks(s);
+  assert.equal(sessions.drain(), 1);
+  await until(() => s.info.turns === 3 && idle(s), 'the delivered turn');
+  assert.equal(s.info.backend, 'plan');
+  assert.equal(started.at(-1)!.env.CLAUDE_CODE_USE_BEDROCK, undefined);
+  assert.equal(sessions.queued().length, 0);
+});
+
+test('a plan process with a background task takes the message even when the decision wants Bedrock (the plan is not capped)', async (t) => {
+  const h = setup(t);
+  const s = h.worker();
+  h.sessions.send(s.info.id, '#bg start one');
+  await until(() => idle(s) && !!s.info.backgroundTasks, 'a background task');
+  h.want.backend = 'bedrock';
+  h.sessions.send(s.info.id, 'again');
+  await until(() => s.info.turns === 2 && idle(s), 'the second turn');
+  assert.equal(h.sessions.queued().length, 0);
+});
+
+test('blocked: a bypassGate message recycles a Bedrock process onto the plan first; with a task running it waits instead of starting a Bedrock turn', async (t) => {
+  const h = setup(t);
+  const { sessions, want } = h;
+  const plain = h.worker();
+  want.backend = 'bedrock';
+  sessions.send(plain.info.id, 'warm up');
+  await until(() => idle(plain), 'the Bedrock turn');
+  assert.equal(plain.info.backend, 'bedrock');
+  want.blocked = "today's Bedrock cap is spent ($200 of $200) and the plan is at its limit, so new work waits";
+  want.backend = 'plan';
+  const n = started.length;
+  sessions.send(plain.info.id, '[backend] the cap notice', 'system', undefined, { bypassGate: true });
+  await until(() => plain.info.turns === 2 && idle(plain), 'the notice turn');
+  assert.equal(started.length, n + 1, 'one new process');
+  assert.equal(started.at(-1)!.env.CLAUDE_CODE_USE_BEDROCK, undefined, 'on the plan');
+  assert.equal(plain.info.backend, 'plan');
+  // A Bedrock process that has a task running: the notice waits too.
+  want.blocked = undefined;
+  const busy = await bedrockWithTask(h);
+  want.blocked = 'blocked';
+  want.backend = 'plan';
+  const m = started.length;
+  const id = sessions.send(busy.info.id, '[backend] the cap notice', 'system', undefined, { bypassGate: true });
+  assert.equal(sessions.isQueued(id), true);
+  assert.equal(started.length, m);
+  assert.equal(busy.info.turns, 1);
+});
+
+test('the host guard sees a recycled process as the new start it is: refused or queued, with nothing started', async (t) => {
+  const h = setup(t);
+  const { sessions, want } = h;
+  const s = h.worker();
+  want.backend = 'bedrock';
+  sessions.send(s.info.id, 'warm up');
+  await until(() => idle(s), 'the Bedrock turn');
+  want.backend = 'plan';
+  sessions.startGate = () => 'the disk is nearly full';
+  const n = started.length;
+  assert.throws(() => sessions.send(s.info.id, 'after the cap'), /not started: the disk is nearly full/);
+  assert.equal(s.live, false, 'it was recycled to move to the plan');
+  assert.equal(started.length, n, 'and no process started past the guard');
+  // With hold the message waits; drain keeps it while the guard refuses and delivers it when the guard lets go.
+  const uuid = sessions.send(s.info.id, 'held', 'human', undefined, { hold: true });
+  assert.equal(sessions.isQueued(uuid), true);
+  assert.equal(sessions.drain(), 0);
+  assert.equal(started.length, n);
+  sessions.startGate = undefined;
+  assert.equal(sessions.drain(), 1);
+  await until(() => s.info.turns === 2 && idle(s), 'the delivered turn');
+  assert.equal(s.info.backend, 'plan');
+  // The same through the queue: a live Bedrock process queued behind something, then the guard closes.
+  const q = h.worker();
+  want.backend = 'bedrock';
+  sessions.send(q.info.id, 'warm up');
+  await until(() => idle(q), 'the Bedrock turn');
+  want.blocked = 'full';
+  const w = sessions.send(q.info.id, 'queued by the gate');
+  assert.equal(sessions.isQueued(w), true);
+  want.blocked = undefined;
+  want.backend = 'plan';
+  sessions.startGate = () => 'the disk is nearly full';
+  const before = started.length;
+  assert.equal(sessions.drain(), 0, 'recycled first, then refused by the guard like any start');
+  assert.equal(q.live, false);
+  assert.equal(started.length, before);
+  sessions.startGate = undefined;
+  assert.equal(sessions.drain(), 1);
 });
