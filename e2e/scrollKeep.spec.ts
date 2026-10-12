@@ -1,4 +1,4 @@
-import type { APIRequestContext, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, BrowserContextOptions, Locator, Page } from '@playwright/test';
 import type { TranscriptEvent } from '../shared/types.ts';
 import { ALPHA, appState, expect, go, openSandbox, sendMessage, sendToChat, startWorker, test, uniq } from './fixtures.ts';
 
@@ -88,7 +88,22 @@ async function keepsPlace(opts: {
   await expectRowAt(row(), where);
 }
 
-test('the orchestrator chat keeps its place across a visit to the Dispatcher', async ({ authed: page }) => {
+/** A signed-in page of a login whose own orchestrator no other test writes to (e2e/server.ts, "fourth login"). */
+const asScroller = test.extend<{ solo: Page }>({
+  solo: async ({ browser }, use) => {
+    const ctx = await browser.newContext(test.info().project.use as BrowserContextOptions);
+    await expect(async () => {
+      const r = await ctx.request.post('/api/login', { data: { username: 'scroller', password: 'e2e-password-246' } });
+      expect(r.ok(), await r.text()).toBeTruthy();
+    }).toPass({ intervals: [100, 200, 400, 800], timeout: 15_000 });
+    const page = await ctx.newPage();
+    await page.goto('/');
+    await use(page);
+    await ctx.close();
+  },
+});
+
+asScroller('the orchestrator chat keeps its place across a visit to the Dispatcher', async ({ solo: page }) => {
   const me = await appState(page.request);
   await go(page, '#/');
   await keepsPlace({

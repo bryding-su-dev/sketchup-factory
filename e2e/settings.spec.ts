@@ -55,7 +55,7 @@ test('settings: notifications on and off, per-kind choices, and the version', as
   await sidebar.getByRole('button', { name: 'Settings' }).click();
   const sheet = page.getByRole('dialog');
   await expect(sheet.locator('.modal-head h2')).toHaveText('This device');
-  await expect(sheet.getByTestId('about-version')).toContainText(`FF Factory ${version}`);
+  await expect(sheet.getByTestId('about-version')).toContainText(`SketchUp Factory ${version}`);
   await expect(sheet.getByTestId('about-version').getByRole('link', { name: 'changelog' })).toHaveAttribute('href', /CHANGELOG\.md$/);
   // Voice is turned off on this server: the sheet says so instead of offering it.
   await expect(sheet).toContainText('Local Whisper: unavailable (turned off in config.json (voice.enabled))');
@@ -65,7 +65,7 @@ test('settings: notifications on and off, per-kind choices, and the version', as
 
   if (browserName === 'webkit') {
     // iPhone: push only works from the Home Screen app, and the sheet says how to get there.
-    await expect(status).toContainText('add FF Factory to the Home Screen first (Share → Add to Home Screen)');
+    await expect(status).toContainText('add SketchUp Factory to the Home Screen first (Share → Add to Home Screen)');
     await expect(turnOn).toHaveCount(0);
     await expect(sheet.getByRole('button', { name: 'Send a test' })).toHaveCount(0);
     // The choices still work locally (kept for when it is added to the Home Screen).
@@ -78,7 +78,7 @@ test('settings: notifications on and off, per-kind choices, and the version', as
     const subscribed = page.waitForResponse((r) => r.url().endsWith('/api/push/subscribe') && r.ok());
     await turnOn.click();
     await subscribed;
-    await expect(status).toHaveText('On: this device gets notifications even when FF Factory is closed.');
+    await expect(status).toHaveText('On: this device gets notifications even when SketchUp Factory is closed.');
     await expect(sheet.getByRole('button', { name: 'Turn off' })).toBeVisible();
     await expect(sheet.getByRole('button', { name: 'Send a test' })).toBeVisible();
 

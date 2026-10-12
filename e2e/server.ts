@@ -12,6 +12,11 @@
  *   login              tester / e2e-password-123 (the owner)
  *   second login       teammate / e2e-teammate-456, "Team Mate", a member (e2e/identity.spec.ts), with an /mcp API
  *                      key bound to it in <data folder>/../teammate-key.txt
+ *   third login        compactor / e2e-password-789, "Compact Tester", a member whose own orchestrator only
+ *                      e2e/compact.spec.ts's /compact test writes to: the owner's is shared by every chat test, so a
+ *                      /compact sent there is refused whenever another test's turn is running
+ *   fourth login       scroller / e2e-password-246, "Scroll Tester", a member whose own orchestrator only
+ *                      e2e/scrollKeep.spec.ts writes to: other tests' messages would move the chat it holds in place
  *   Max                a mock Discord on <port + 100> (e2e/mockDiscord.ts) with a bot token in a scratch ffbox config, and
  *                      five seeded events from the gallery worker (e2e/max.spec.ts)
  *   provider "ffbox"   only with E2E_PROVIDER=1 (the provider projects, e2e/provider.spec.ts): switched on, with
@@ -34,6 +39,10 @@ export const USER = 'tester';
 export const PASSWORD = 'e2e-password-123';
 export const MATE = 'teammate';
 export const MATE_PASSWORD = 'e2e-teammate-456';
+export const COMPACTOR = 'compactor';
+export const COMPACTOR_PASSWORD = 'e2e-password-789';
+export const SCROLLER = 'scroller';
+export const SCROLLER_PASSWORD = 'e2e-password-246';
 const withProvider = process.env.E2E_PROVIDER === '1';
 const withIntake = process.env.E2E_INTAKE === '1';
 /** The Discord user id the intake projects trust, mapped to tester (e2e/intake.spec.ts). */
@@ -190,6 +199,8 @@ const { Auth } = await import('../server/auth.ts');
 const auth = new Auth(dataDir, { trustProxy: false });
 await auth.setUser(USER, PASSWORD);
 await auth.setUser(MATE, MATE_PASSWORD, { displayName: 'Team Mate', role: 'member' });
+await auth.setUser(COMPACTOR, COMPACTOR_PASSWORD, { displayName: 'Compact Tester', role: 'member' });
+await auth.setUser(SCROLLER, SCROLLER_PASSWORD, { displayName: 'Scroll Tester', role: 'member' });
 fs.writeFileSync(path.join(base, 'teammate-key.txt'), auth.createApiKey('teammate-laptop', MATE));
 // FFBox's key for Max's escalations (docs/intake.md), scoped to POST /api/intake/ffbox (e2e/provider.spec.ts).
 if (withProvider) fs.writeFileSync(path.join(base, 'ffbox-key.txt'), auth.createApiKey('ffbox', undefined, 'ffbox'));

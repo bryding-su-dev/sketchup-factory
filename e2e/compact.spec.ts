@@ -1,5 +1,6 @@
-import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions } from '@playwright/test';
+import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions, Page } from '@playwright/test';
 import { BOX, appState, boxText, expect, go, sendMessage, test, uniq } from './fixtures.ts';
+import { REPLY_MARK } from '../shared/replies.ts';
 import type { TranscriptEvent } from '../shared/types.ts';
 
 /**
@@ -10,14 +11,32 @@ import type { TranscriptEvent } from '../shared/types.ts';
  * by the tests on a server, so a compaction refused because another test's turn is running is tried again.
  */
 
-async function mateContext(browser: Browser): Promise<BrowserContext> {
+/** A browser context with the project's device, signed in as `username` (e2e/server.ts seeds the logins). */
+async function loginContext(browser: Browser, username: string, password: string): Promise<BrowserContext> {
   const ctx = await browser.newContext(test.info().project.use as BrowserContextOptions);
   await expect(async () => {
-    const r = await ctx.request.post('/api/login', { data: { username: 'teammate', password: 'e2e-teammate-456' } });
+    const r = await ctx.request.post('/api/login', { data: { username, password } });
     expect(r.ok(), await r.text()).toBeTruthy();
   }).toPass({ intervals: [100, 200, 400, 800], timeout: 15_000 });
   return ctx;
 }
+
+const mateContext = (browser: Browser) => loginContext(browser, 'teammate', 'e2e-teammate-456');
+
+/**
+ * The page of a login whose own orchestrator no other test writes to (upstream w636, #217): the owner's is shared by
+ * every chat test, and since the message box empties on send (w893) a /compact refused mid-turn would look sent.
+ */
+const asCompactor = test.extend<{ solo: Page }>({
+  solo: async ({ browser }, use) => {
+    const ctx = await loginContext(browser, 'compactor', 'e2e-password-789');
+    const page = await ctx.newPage();
+    await page.goto('/');
+    await expect(page.locator('.sidebar')).toBeAttached();
+    await use(page);
+    await ctx.close();
+  },
+});
 
 async function transcript(request: APIRequestContext, id: string): Promise<TranscriptEvent[]> {
   const r = await request.get(`/api/sessions/${id}/events?limit=500`);
@@ -25,7 +44,7 @@ async function transcript(request: APIRequestContext, id: string): Promise<Trans
   return r.json();
 }
 
-test('/compact in your own chat compacts the conversation, says the context before and after', async ({ authed: page }) => {
+asCompactor('/compact in your own chat compacts the conversation, says the context before and after', async ({ solo: page }) => {
   const tag = uniq('compact');
   const me = await appState(page.request);
   const id = me.orchestratorId;
@@ -89,7 +108,8 @@ test('past its threshold the orchestrator compacts itself after the turn (w535):
   const evs = await transcript(page.request, me.orchestratorId);
   // Nothing was said when it started, and the compaction never reached the model as a person's message.
   expect(evs.some((e) => e.kind === 'system' && e.text.startsWith('Compacting this conversation') && e.text.includes(tag))).toBe(false);
-  expect(evs.some((e) => e.kind === 'user' && e.text.startsWith('/compact'))).toBe(false);
+  // A reply that says "/compact" is a message on purpose (e2e/replies.spec.ts shares this chat): only a command counts.
+  expect(evs.some((e) => e.kind === 'user' && e.text.startsWith('/compact') && !e.text.includes(REPLY_MARK))).toBe(false);
   const chip = page.locator('.orch').getByTestId('context-size');
   await expect(chip).toHaveText(/^Context \d+k$/);
   await expect.poll(async () => (await appState(page.request)).sessions.find((s) => s.id === me.orchestratorId)?.lastCompaction?.before).toBeTruthy();
