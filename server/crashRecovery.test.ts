@@ -4,7 +4,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from './store.ts';
@@ -129,14 +128,6 @@ test('orchestrator memory: backed up when changed, and a zeroed file gets its la
   assert.match(healed[0].label ?? '', /orchestrator memory person-ben\//);
 });
 
-async function freePort(): Promise<number> {
-  const srv = net.createServer();
-  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
-  const port = (srv.address() as net.AddressInfo).port;
-  await new Promise((r) => srv.close(r));
-  return port;
-}
-
 test('the real server comes back by itself from a zeroed state.json and users.json', { timeout: 90_000 }, async (t) => {
   const base = tmp(t, 'ffsb-crash-boot-');
   const data = path.join(base, 'data');
@@ -146,11 +137,12 @@ test('the real server comes back by itself from a zeroed state.json and users.js
   fs.mkdirSync(repo);
   execFileSync('git', ['init', '-q', '-b', 'develop'], { cwd: repo });
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@users.noreply.github.com', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo });
-  const port = await freePort();
+  // Port 0: the server takes the one the OS gives and says it in its log (w1095: a port picked here and closed again went to
+  // another test before the server bound it, EADDRINUSE on PR #335).
   fs.writeFileSync(
     path.join(base, 'config.json'),
     JSON.stringify({
-      port,
+      port: 0,
       host: '127.0.0.1',
       trustProxy: false,
       dataDir: data,
@@ -190,7 +182,9 @@ test('the real server comes back by itself from a zeroed state.json and users.js
       await new Promise((r) => setTimeout(r, 100));
     }
   };
-  await until(new RegExp(`on http://127\\.0\\.0\\.1:${port}`), 60_000);
+  await until(/on http:\/\/127\.0\.0\.1:\d+ /, 60_000);
+  const port = Number(/on http:\/\/127\.0\.0\.1:(\d+) /.exec(log)![1]);
+  assert.ok(port > 0, `the server says its port: ${port}`);
   const res = await fetch(`http://127.0.0.1:${port}/api/state`);
   assert.equal(res.status, 401, 'up and answering (a login is needed)');
   await until(/DATA RESTORED AFTER A CRASH/, 20_000);
