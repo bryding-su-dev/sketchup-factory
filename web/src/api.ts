@@ -49,9 +49,10 @@ export function setUnauthorizedHandler(fn: () => void) {
 /** For requests made outside request() (the attachment uploader's XMLHttpRequest). */
 export const notifyUnauthorized = () => onUnauthorized();
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, opts: { keepalive?: boolean } = {}): Promise<T> {
   const res = await fetch(path, {
     method,
+    keepalive: opts.keepalive,
     credentials: 'same-origin',
     // Every write is JSON, even an empty one: the server refuses other content types (CSRF).
     headers: method === 'GET' ? undefined : { 'Content-Type': 'application/json' },
@@ -101,8 +102,19 @@ export const api = {
   events: (sessionId: string, limit = 500) =>
     request<TranscriptEvent[]>('GET', `/api/sessions/${enc(sessionId)}/events?limit=${limit}`),
   /** `note` is set for a standing agent: what the message did (started a run, joined one, waited). */
-  sendMessage: (sessionId: string, text: string, images?: ImageInput[], attachments?: string[]) =>
-    request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }),
+  /**
+   * `clientId` names this send: the same id again (a retry after no answer) is the same message, which the server takes once (w893).
+   * A text-only message goes with keepalive, so a page that reloads or closes right after sending does not cancel it.
+   */
+  sendMessage: (sessionId: string, text: string, images?: ImageInput[], attachments?: string[], replyTo?: number, clientId?: string) =>
+    request<{ note?: string }>(
+      'POST',
+      `/api/sessions/${enc(sessionId)}/message`,
+      { text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}), ...(replyTo !== undefined ? { replyTo } : {}), ...(clientId ? { clientId } : {}) },
+      { keepalive: !images?.length && text.length < 20_000 },
+    ),
+  /** React to a message of your orchestrator chat with an emoji (w866), or take the reaction back (on: false). */
+  react: (sessionId: string, seq: number, emoji: string, on = true) => request<{ changed: boolean }>('POST', `/api/sessions/${enc(sessionId)}/react`, { seq, emoji, on }),
   /** Compact an orchestrator's conversation now (w518): what `/compact [focus]` typed in its chat does. */
   compact: (sessionId: string, instructions?: string) => request<{ note?: string }>('POST', `/api/sessions/${enc(sessionId)}/compact`, instructions ? { instructions } : {}),
   // Attachments (docs/attachments.md): an upload starts here; web/src/upload.ts sends the chunks.

@@ -220,12 +220,12 @@ export function waitDeadline(next: Date | undefined, from: Date): Date {
 
 // ---- delegation auto-approval ----
 
-/** Defaults for a standing agent's auto-approved delegations (Opus, high effort, 3 a night). */
+/** Defaults for a standing agent's auto-approved delegations (Sonnet 5.5 since 2026-10-08, high effort, 3 a night). */
 export const DEFAULT_AUTO: AutoApprove = {
   enabled: false,
   maxPerRun: 3,
   maxPerDay: 3,
-  model: 'opus',
+  model: 'sonnet',
   effort: 'high',
   targets: 'sandboxes-then-machines',
   expiryHours: 8,

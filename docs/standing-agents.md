@@ -87,7 +87,7 @@ result on its next run.
 
 **Auto-approve** (per agent, `autoApprove` / the `auto_*` fields of create/update_standing_agent,
 and the editor): requests start without the user, up to `maxPerRun` and `maxPerDay` (default 3 and 3),
-with `model` / `effort` (default opus, high) on `targets` (default unused sandboxes, then idle
+with `model` / `effort` (default sonnet, high) on `targets` (default unused sandboxes, then idle
 machines; `exclude` default `mp-r2`; a sandbox not labelled `unused` is never used). A request over
 the limits waits for the user as before. One with no free target is queued and retried every tick until
 `expiryHours` (default 8) after it was filed, then marked `expired`. The worker gets the normal

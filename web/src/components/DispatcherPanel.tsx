@@ -10,6 +10,7 @@ import { SessionView } from './SessionView';
 import { accountOf } from './SystemMeters';
 import { Chip, Confirm, Dot, Icon, Menu } from './ui';
 import { TimersButton } from './Timers';
+import { useKeepScroll } from '../scrollKeep';
 
 type Tab = 'requests' | 'intake' | 'conversation';
 
@@ -174,6 +175,7 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
 }
 
 function Requests({ app, open, closed, focus, now }: { app: AppState; open: WorkItem[]; closed: WorkItem[]; focus?: string; now: number }) {
+  const keep = useKeepScroll('dispatcher:requests');
   const [expanded, setExpanded] = useState<string | null>(focus ?? null);
   const [showClosed, setShowClosed] = useState(() => !!focus && closed.some((w) => w.id === focus));
   useEffect(() => {
@@ -195,7 +197,7 @@ function Requests({ app, open, closed, focus, now }: { app: AppState; open: Work
   }
   const row = (w: WorkItem) => <WorkRow key={w.id} app={app} w={w} open={expanded === w.id} onToggle={() => setExpanded(expanded === w.id ? null : w.id)} now={now} />;
   return (
-    <div className="sa-scroll">
+    <div className="sa-scroll" ref={keep}>
       {open.length ? <div className="run-list">{open.map(row)}</div> : <p className="dim small ledger-none">Nothing open.</p>}
       {closed.length > 0 && (
         <>
@@ -217,6 +219,7 @@ const onOff = (on: boolean) => (on ? 'on' : 'off');
  * and what the intake saw lately. The settings are config.json's; this page only shows them.
  */
 function IntakeTab({ app, intake: s, work, now }: { app: AppState; intake: IntakeSummary; work: WorkItem[]; now: number }) {
+  const keep = useKeepScroll('dispatcher:intake');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const items = work.filter((w) => w.source);
@@ -234,7 +237,7 @@ function IntakeTab({ app, intake: s, work, now }: { app: AppState; intake: Intak
   const f = s.ffbox;
   const n = s.nightly;
   return (
-    <div className="sa-scroll intake-tab" data-testid="intake-tab">
+    <div className="sa-scroll intake-tab" data-testid="intake-tab" ref={keep}>
       <section className="intake-settings" data-testid="intake-settings">
         <div className="intake-source">
           <Chip tone={d.enabled ? 'green' : 'grey'}>Discord {onOff(d.enabled)}</Chip>

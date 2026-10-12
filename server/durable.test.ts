@@ -133,13 +133,19 @@ test('background saves: a steady stream of changes cannot postpone the write', a
   let n = 0;
   const s = new SnapshotFile(f, () => JSON.stringify({ n }), { delayMs: 50, intervalMs: 200, label: 'test' });
   const t0 = Date.now();
-  // A change every 20 ms for 700 ms: the old trailing debounce (reset on every change) would not have written once.
-  while (Date.now() - t0 < 700) {
+  // A change every 20 ms for 700 ms, and on until a recent version is on disk (at most 20 s): the old trailing debounce
+  // (reset on every change) would not have written once. The first write starts after 50 ms and holds n of about 3; a
+  // later one, intervalMs after it started, holds a recent n. Both run while the changes go on, but on a loaded Windows
+  // runner one write and its fsync can take seconds (w636: CI on Windows ended at 700 ms with n 2 or 3 on disk, the second
+  // write not yet committed), so the stream waits for the write instead of a fixed time.
+  const recentOnDisk = () => fs.existsSync(f) && read(f).n > 5;
+  while ((Date.now() - t0 < 700 || !recentOnDisk()) && Date.now() - t0 < 20_000) {
     n++;
     s.changed();
     await new Promise((r) => setTimeout(r, 20));
   }
   assert.ok(fs.existsSync(f), 'written while the changes were still coming');
+  assert.ok(Date.now() - t0 < 10_000, `a recent version within 10 s (${Date.now() - t0} ms), with a write every 200 ms`);
   const seen = read(f).n;
   assert.ok(seen > 5 && seen <= n, `a recent version (${seen} of ${n})`);
   await s.idle();

@@ -1366,6 +1366,17 @@ export interface SendMessageRequest {
   images?: ImageInput[];
   /** Ids of files uploaded first (POST /api/attachments, docs/attachments.md). */
   attachments?: string[];
+  /** A reply (w866): the transcript seq of the message in this orchestrator chat it answers; the server quotes it to the orchestrator. */
+  replyTo?: number;
+  /** Names this send (w893): the page sends the same id again after an answer that never came, and the server takes the message once. */
+  clientId?: string;
+}
+
+/** An emoji reaction on a message of a person's orchestrator chat (w866), or taking it back with on: false. */
+export interface ReactRequest {
+  seq: number;
+  emoji: string;
+  on?: boolean;
 }
 
 export interface PermissionDecisionRequest {

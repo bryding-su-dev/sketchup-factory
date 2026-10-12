@@ -14,7 +14,7 @@ export const fileUrl = (place: ImagePlace, path: string) => `/api/image?${new UR
 export const baseName = (p: string) => p.split(/[\\/]/).pop() || p;
 export { isVideoPath, mentionedPaths };
 /** "#t=0.1" makes Safari (iPad) and Chrome paint the first frame as the poster before playing. */
-const posterSrc = (src: string) => `${src}#t=0.1`;
+export const posterSrc = (src: string) => `${src}#t=0.1`;
 
 /** Thumbnails; a click opens the lightbox on that image, with the others to page through. */
 export function ImageStrip({ items, size = 'normal' }: { items: LightboxItem[]; size?: 'normal' | 'small' }) {

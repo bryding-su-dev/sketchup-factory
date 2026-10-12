@@ -31,7 +31,7 @@ export function StandingAgentModal({ app, agent, onClose }: { app: AppState; age
   const [auto, setAuto] = useState(!!aa?.enabled);
   const [autoRun, setAutoRun] = useState(String(aa?.maxPerRun ?? 3));
   const [autoDay, setAutoDay] = useState(String(aa?.maxPerDay ?? 3));
-  const [autoModel, setAutoModel] = useState(aa?.model ?? (app.config.models.includes('opus') ? 'opus' : app.config.defaultModel));
+  const [autoModel, setAutoModel] = useState(aa?.model ?? (app.config.models.includes('sonnet') ? 'sonnet' : app.config.defaultModel));
   const [autoEffort, setAutoEffort] = useState<EffortLevel>(aa?.effort ?? 'high');
   const [autoTargets, setAutoTargets] = useState<AutoApprove['targets']>(aa?.targets ?? 'sandboxes-then-machines');
   const [autoExpiry, setAutoExpiry] = useState(String(aa?.expiryHours ?? 8));

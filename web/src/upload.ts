@@ -176,6 +176,11 @@ export function removePending(sessionId: string, key: number) {
   });
 }
 
+/** The message did not go (w893): its files are back in the chat, in front of any attached since. */
+export function restorePending(sessionId: string, files: PendingFile[]) {
+  update(sessionId, (xs) => [...files.filter((f) => !xs.some((x) => x.key === f.key)), ...xs]);
+}
+
 /** The chat's message went: its files with it. */
 export function clearPending(sessionId: string, sent: PendingFile[]) {
   const keys = new Set(sent.map((f) => f.key));

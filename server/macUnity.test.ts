@@ -77,6 +77,9 @@ test('mac unity watch: a hung editor is restarted; a quit one left closed; a cra
     bridge: () => ({ port: 6400, reloading: false }),
     ping: async () => bridgeOk,
     now: () => world.now,
+    // What the real probes return off a Mac; on a Mac they would ask this machine's System Events and display.
+    displayAsleep: async () => false,
+    listDialogs: async () => ({ dialogs: [] }),
   });
   editor(100);
   assert.equal(await w.tick(), 'ok'); // up, bridge answers
@@ -153,6 +156,7 @@ test('mac unity watch: an idle or throttled editor is not hung; App Nap is turne
     ping: async (_p, timeoutMs) => ((timeoutMs ?? 0) >= 60_000 ? slow : quick),
     now: () => world.now,
     displayAsleep: async () => asleep,
+    listDialogs: async () => ({ dialogs: [] }),
   });
   editor(100);
   assert.equal(await w.tick(), 'ok');

@@ -25,6 +25,7 @@ import { Markdown } from './Markdown';
 import { SessionView } from './SessionView';
 import { StandingAgentModal } from './StandingModal';
 import { Chip, Confirm, CopyButton, Dot, Icon } from './ui';
+import { useKeepScroll } from '../scrollKeep';
 
 type Tab = 'runs' | 'conversation' | 'delegations';
 
@@ -187,6 +188,7 @@ export function StandingPanel({ app, agent, tab, onClose }: { app: AppState; age
 }
 
 function Runs({ agent, last, now }: { agent: StandingAgent; last: StandingRun | undefined; now: number }) {
+  const keep = useKeepScroll(`agent:${agent.id}:runs`);
   const [open, setOpen] = useState<string | null>(null);
   if (!agent.runs.length) {
     return (
@@ -198,7 +200,7 @@ function Runs({ agent, last, now }: { agent: StandingAgent; last: StandingRun | 
   }
   const history = [...agent.runs].reverse();
   return (
-    <div className="sa-scroll">
+    <div className="sa-scroll" ref={keep}>
       {last && (
         <div className="sa-last">
           <div className="sa-last-head">
@@ -244,6 +246,7 @@ function Runs({ agent, last, now }: { agent: StandingAgent; last: StandingRun | 
 }
 
 function Delegations({ list, now, app }: { list: DelegationRequest[]; now: number; app: AppState }) {
+  const keep = useKeepScroll('agent:delegations');
   const where = (d: DelegationRequest) => {
     const sb = d.sandboxId ? app.sandboxes.find((x) => x.id === d.sandboxId) : undefined;
     const m = d.machineId ? app.machines.find((x) => x.id === d.machineId) : undefined;
@@ -265,7 +268,7 @@ function Delegations({ list, now, app }: { list: DelegationRequest[]; now: numbe
     if (r && approve && (r.sandboxId || r.machineId)) toast(`Worker started in ${where(r)}`);
   };
   return (
-    <div className="sa-scroll">
+    <div className="sa-scroll" ref={keep}>
       {list.map((d) => (
         <div key={d.id} className={`deleg deleg-${d.status}`}>
           <div className="deleg-head">

@@ -1,15 +1,17 @@
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Machine, PendingPermission, Sandbox, SessionInfo, StandingAgent, TranscriptEvent } from '../../../shared/types';
-import { parseNotice, type Notice, type NoticeKind } from '../../../shared/notices';
+import { NOTICE_TAG, parseNotice, type Notice, type NoticeKind } from '../../../shared/notices';
+import { parseReaction, reactionsByMessage, splitReply } from '../../../shared/replies';
 import { api } from '../api';
 import { sessionRoute } from '../attention';
-import { attempt, clearFocusEvent, focusPermission, sessionIndex, useStore } from '../store';
+import { attempt, clearFocusEvent, focusEvent, focusPermission, sessionIndex, useStore } from '../store';
 import { displayName, fmtClock, fmtCost, fmtDivider, fmtDuration, FREE_TEXT, navigate, sameTitle, useNow, type Route } from '../util';
 import { LocalImages, Markdown } from './Markdown';
 import { fileUrl, ImageStrip, MentionedImages, uploadUrl } from './Images';
 import { AttachmentList } from './Attachments';
 import { prettyJson, summarizeToolInput, toolDisplayName, toolLabel, toolsSummary } from './toolSummary';
 import { Icon, type IconName } from './ui';
+import { ChatActionsContext, glance, MessageActions, quoteLabel, Reactions, useActionsHost, type ChatActions } from './MessageActions';
 
 type ToolUse = Extract<TranscriptEvent, { kind: 'tool_use' }>;
 type ToolResult = Extract<TranscriptEvent, { kind: 'tool_result' }>;
@@ -36,6 +38,9 @@ type Item =
   | { type: 'event'; key: string; ev: TranscriptEvent };
 
 const GAP_MS = 15 * 60_000;
+
+/** The harness line that carries a reaction to the orchestrator, or the record that one was taken back (shared/replies.ts). */
+const isReactionRecord = (e: TranscriptEvent) => (e.kind === 'system' || (e.kind === 'user' && e.from === 'system')) && !!parseReaction(e.text);
 
 function buildItems(events: TranscriptEvent[], now: number): Item[] {
   const results = new Map<string, ToolResult>();
@@ -75,6 +80,8 @@ function buildItems(events: TranscriptEvent[], now: number): Item[] {
       group.push(e.kind === 'tool_use' ? { kind: 'tool', use: e, result: results.get(e.toolUseId) } : e.kind === 'thinking' ? { kind: 'thinking', ev: e } : { kind: 'orphan', result: e });
       continue;
     }
+    // A reaction is shown on the message it is on, not as a row of its own (w866).
+    if (isReactionRecord(e)) continue;
     flush();
     if (e.kind === 'result') {
       lastT = Date.parse(e.t);
@@ -100,8 +107,55 @@ function buildItems(events: TranscriptEvent[], now: number): Item[] {
 
 const seqsOf = (steps: Step[]) => steps.flatMap((s) => (s.kind === 'tool' ? [s.use.seq, s.result?.seq] : s.kind === 'orphan' ? [s.result.seq] : [s.ev.seq])).filter((x): x is number => x !== undefined);
 
-/** Where each chat was scrolled to, so leaving and coming back keeps the place ('bottom': follow new messages). */
-const scrollMemory = new Map<string, number | 'bottom'>();
+/**
+ * Where a chat was left: 'bottom' (follow new messages), or at a message: its `seq`, how far its top sat below the top of
+ * the view (`off`), the newest seq then (`latest`), and the pixel offset (`top`) as a fallback. A pixel offset alone is
+ * not the place once the chat is drawn again: it may be narrower (beside a panel), and its images load again, lazily (w1100).
+ */
+type Place = 'bottom' | { top: number; seq?: number; off: number; latest?: number };
+type Held = Exclude<Place, 'bottom'>;
+/** Where each chat was scrolled to, so leaving and coming back keeps the place. */
+const scrollMemory = new Map<string, Place>();
+/** How long after a chat is drawn again its place is held against content that loads late (images, diagrams), until the reader moves. */
+const HOLD_MS = 4000;
+
+const seqOf = (c: Element): number | undefined => {
+  const v = c.getAttribute('data-seq') ?? c.getAttribute('data-seqs')?.trim().split(/\s+/)[0];
+  const n = v === null || v === undefined ? NaN : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+/** The first message in view (the first row ending below the top edge that has a seq) and where its top sits. */
+function placeOf(box: HTMLElement): { seq: number; off: number } | undefined {
+  const kids = box.firstElementChild?.children;
+  if (!kids) return undefined;
+  const top = box.getBoundingClientRect().top;
+  let lo = 0;
+  let hi = kids.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (kids[mid].getBoundingClientRect().bottom > top + 1) hi = mid;
+    else lo = mid + 1;
+  }
+  for (let i = lo; i < kids.length; i++) {
+    const seq = seqOf(kids[i]);
+    if (seq !== undefined) return { seq, off: Math.round(kids[i].getBoundingClientRect().top - top) };
+  }
+  return undefined;
+}
+
+/** Scroll so the row holding `p.seq` sits `p.off` below the top. False when that row is not drawn (yet). */
+function alignTo(box: HTMLElement, p: Held): boolean {
+  if (p.seq === undefined) return false;
+  const want = String(p.seq);
+  for (const c of Array.from(box.firstElementChild?.children ?? [])) {
+    if (c.getAttribute('data-seq') !== want && c.getAttribute('data-seq2') !== want && !c.getAttribute('data-seqs')?.includes(` ${want} `)) continue;
+    const delta = c.getBoundingClientRect().top - box.getBoundingClientRect().top - p.off;
+    if (Math.abs(delta) >= 1) box.scrollTop += delta;
+    return true;
+  }
+  return false;
+}
 
 /** Set on someone else's conversation (docs/orchestrators.md): its permission requests are theirs to answer. */
 const ReadOnly = createContext<string | undefined>(undefined);
@@ -111,19 +165,29 @@ export const Transcript = memo(function Transcript({
   size = 'normal',
   empty,
   readOnlyFor,
+  interactive,
 }: {
   session: SessionInfo;
   size?: 'normal' | 'large';
   empty?: ReactNode;
   /** Someone else's conversation: the name of the person who answers its permission requests. */
   readOnlyFor?: string;
+  /** Your own orchestrator chat (w866): its messages take a Reply and emoji reactions. */
+  interactive?: boolean;
 }) {
   const events = useStore((s) => s.transcripts[session.id]);
+  const me = useStore((s) => s.app?.me);
   const loaded = useStore((s) => !!s.loaded[session.id]);
   const streaming = useStore((s) => s.streaming[session.id]);
   const focusId = useStore((s) => s.focusRequestId);
 
   const items = useMemo(() => buildItems(events ?? [], Date.now()), [events]);
+  // Reactions on each message (w866), kept as one object while they do not change so a message does not redraw for another's.
+  const reactionsKey = useMemo(() => JSON.stringify([...reactionsByMessage((events ?? []).filter((e): e is Extract<TranscriptEvent, { kind: 'user' | 'system' }> => e.kind === 'user' || e.kind === 'system'))]), [events]);
+  const actions = useMemo<ChatActions | undefined>(
+    () => (session.kind === 'orchestrator' ? { sessionId: session.id, me, interactive: !!interactive, reactions: new Map(JSON.parse(reactionsKey) as [number, string[]][]) } : undefined),
+    [session.kind, session.id, me?.userId, me?.displayName, interactive, reactionsKey],
+  );
   // Images in the session's other messages (briefs, notices, a reply still streaming): the files, where it may show them.
   const liveImage = useMemo(() => (p: string) => fileUrl({ session: session.id }, p), [session.id]);
 
@@ -149,32 +213,101 @@ export const Transcript = memo(function Transcript({
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const [jump, setJump] = useState<'none' | 'far' | 'new'>('none');
+  // The place being brought back and held: `pending` until its row is drawn, `hold` while late content may still move it.
+  const pending = useRef<Held | null>(null);
+  const hold = useRef<{ place: Held; until: number } | null>(null);
+  // Size and position at the last scroll event: an event after the content grew, with nothing scrolled up, is the page growing, not the reader leaving the bottom.
+  const lastTop = useRef(0);
+  const lastHeight = useRef(0);
+  const latestSeq = useRef(0);
+  latestSeq.current = events?.at(-1)?.seq ?? 0;
+  const seenLatest = useRef(latestSeq.current);
+  const loadedNow = useRef(loaded);
+  loadedNow.current = loaded;
+
+  const track = (el: HTMLElement) => {
+    lastTop.current = el.scrollTop;
+    lastHeight.current = el.scrollHeight;
+  };
 
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const grew = el.scrollHeight > lastHeight.current;
+    const down = el.scrollTop >= lastTop.current;
+    track(el);
+    if (atBottom.current && grew && down) {
+      // Late content (a lazy image, a diagram) pushed the end away before this event was handled: still following, so follow.
+      el.scrollTo({ top: el.scrollHeight });
+      track(el);
+      return;
+    }
     atBottom.current = dist < 80;
-    scrollMemory.set(session.id, atBottom.current ? 'bottom' : el.scrollTop);
+    // While a place is being brought back, the scrolling is ours: what is remembered stays the place the reader left.
+    if (atBottom.current || !(hold.current || pending.current)) {
+      const at = atBottom.current ? undefined : placeOf(el);
+      scrollMemory.set(session.id, atBottom.current ? 'bottom' : { top: el.scrollTop, seq: at?.seq, off: at?.off ?? 0, latest: latestSeq.current });
+    }
     setJump((j) => (atBottom.current ? 'none' : j === 'new' ? 'new' : dist > el.clientHeight * 0.6 ? 'far' : 'none'));
+  };
+
+  // The reader takes over: nothing is held against them.
+  const released = () => {
+    hold.current = null;
   };
 
   const scrollToBottom = (smooth = false) => {
     const el = scroller.current;
     if (!el) return;
+    pending.current = null;
+    hold.current = null;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     atBottom.current = true;
+    track(el);
     scrollMemory.set(session.id, 'bottom');
     setJump('none');
+  };
+
+  // The remembered place, once its row is drawn; if the chat loaded without it (older than what was fetched), the pixel offset.
+  const restore = () => {
+    const el = scroller.current;
+    const p = pending.current;
+    if (!el || !p) return;
+    if (alignTo(el, p)) {
+      pending.current = null;
+      const h = { place: p, until: performance.now() + HOLD_MS };
+      hold.current = h;
+      track(el);
+      // Content above can change without the chat's size changing (a row grows as another shrinks), and the browser's own
+      // scroll anchoring stands down after a script moved the view: so look at every frame, until the reader takes over.
+      const frame = () => {
+        if (hold.current !== h || performance.now() > h.until) return;
+        alignTo(el, p);
+        requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+      if (p.latest !== undefined && latestSeq.current > p.latest) setJump('new');
+    } else if (loadedNow.current) {
+      pending.current = null;
+      if (el.scrollHeight > el.clientHeight) {
+        el.scrollTop = p.top;
+        atBottom.current = false;
+        track(el);
+      } else scrollToBottom();
+    }
   };
 
   // A chat on screen: where it was left, else the bottom.
   useLayoutEffect(() => {
     const saved = scrollMemory.get(session.id);
-    const el = scroller.current;
-    if (el && typeof saved === 'number' && el.scrollHeight > el.clientHeight) {
-      el.scrollTop = saved;
+    pending.current = null;
+    hold.current = null;
+    seenLatest.current = latestSeq.current;
+    if (saved && saved !== 'bottom') {
       atBottom.current = false;
+      pending.current = saved;
+      restore();
     } else {
       atBottom.current = true;
       scrollToBottom();
@@ -182,9 +315,18 @@ export const Transcript = memo(function Transcript({
   }, [session.id]);
 
   useLayoutEffect(() => {
-    if (atBottom.current) scrollToBottom();
-    else setJump('new');
-  }, [items.length, streaming, orphanPending.length]);
+    const fresh = latestSeq.current > seenLatest.current;
+    seenLatest.current = latestSeq.current;
+    if (pending.current) restore();
+    else if (atBottom.current) scrollToBottom();
+    else if (fresh || streaming || orphanPending.length) setJump('new');
+  }, [items.length, streaming, orphanPending.length, loaded]);
+
+  // Sending a message from this page's composer takes you to it, also from further up the chat where you scrolled to reply to an older message (w866).
+  const showLatest = useStore((st) => st.showLatest[session.id]);
+  useLayoutEffect(() => {
+    if (showLatest) scrollToBottom();
+  }, [showLatest]);
 
   // Content that grows after layout (markdown, images, opened rows), and the box shrinking (a keyboard, the
   // iPad's shortcut bar, the details panel), keep us pinned to the bottom.
@@ -193,7 +335,11 @@ export const Transcript = memo(function Transcript({
     const el = box?.firstElementChild;
     if (!box || !el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      if (atBottom.current) box.scrollTo({ top: box.scrollHeight });
+      if (atBottom.current) {
+        box.scrollTo({ top: box.scrollHeight });
+        track(box);
+      } else if (pending.current) restore();
+      else if (hold.current && performance.now() < hold.current.until) alignTo(box, hold.current.place);
     });
     ro.observe(el);
     ro.observe(box);
@@ -220,6 +366,8 @@ export const Transcript = memo(function Transcript({
     const el = (root?.querySelector(`[data-seq="${focus.seq}"], [data-seq2="${focus.seq}"]`) ?? root?.querySelector(`[data-seqs~="${focus.seq}"]`)) as HTMLElement | null | undefined;
     if (!el) return;
     atBottom.current = false;
+    pending.current = null;
+    hold.current = null;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.add('flash');
     setTimeout(() => el.classList.remove('flash'), 1800);
@@ -230,9 +378,10 @@ export const Transcript = memo(function Transcript({
 
   return (
     <ReadOnly.Provider value={readOnlyFor}>
+    <ChatActionsContext.Provider value={actions}>
     <LocalImages.Provider value={liveImage}>
     <div className={`transcript transcript-${size}`}>
-      <div className="transcript-scroll" ref={scroller} onScroll={onScroll}>
+      <div className="transcript-scroll" ref={scroller} onScroll={onScroll} onWheel={released} onTouchStart={released} onPointerDown={released} onKeyDown={released}>
         <div className="transcript-inner">
           {!loaded && !events && (
             <div className="transcript-loading">
@@ -262,6 +411,7 @@ export const Transcript = memo(function Transcript({
       )}
     </div>
     </LocalImages.Provider>
+    </ChatActionsContext.Provider>
     </ReadOnly.Provider>
   );
 });
@@ -311,8 +461,15 @@ function WorkingIndicator({ detail, since }: { detail?: string; since?: string }
  */
 function UserMessage({ ev, sessionId, owner }: { ev: UserEv; sessionId: string; owner?: string }) {
   const author = ev.requestedBy && ev.requestedBy.userId !== owner ? ev.requestedBy : undefined;
+  const chat = useContext(ChatActionsContext);
+  const host = useActionsHost(!!chat?.interactive);
+  // A reply carries the message it answers after their words (shared/replies.ts): the words are the bubble, the quote sits above it.
+  const { words, quote } = useMemo(() => splitReply(ev.text), [ev.text]);
+  const q = quote && quoteLabel(quote.from, quote.excerpt, chat?.me?.displayName);
+  const mine = !ev.requestedBy || ev.requestedBy.userId === chat?.me?.userId;
   return (
-    <div className="msg msg-user" data-seq={ev.seq}>
+    <div className={`msg msg-user${host.open ? ' actions-open' : ''}`} data-seq={ev.seq} ref={host.ref} onClick={host.onClick}>
+      {chat && <MessageActions seq={ev.seq} from={mine ? 'You' : (ev.requestedBy?.displayName ?? 'Them')} excerpt={glance(words)} onDone={host.close} />}
       <time className="msg-side-time" dateTime={ev.t} title={new Date(ev.t).toLocaleString()}>
         {fmtClock(ev.t)}
       </time>
@@ -322,15 +479,28 @@ function UserMessage({ ev, sessionId, owner }: { ev: UserEv; sessionId: string; 
             {author.displayName}
           </span>
         )}
+        {q && quote && <ReplyQuote sessionId={sessionId} seq={quote.seq} from={q.from} text={q.text} />}
         {ev.images?.length ? <ImageStrip items={ev.images.map((r, i) => ({ src: uploadUrl(sessionId, r), name: `image-${ev.seq}-${i + 1}.${r.mediaType.split('/')[1]}` }))} /> : null}
         {ev.attachments?.length ? <AttachmentList items={ev.attachments} /> : null}
-        {ev.text && (
+        {words && (
           <div className="bubble">
-            <div className="bubble-text">{ev.text}</div>
+            <div className="bubble-text">{words}</div>
           </div>
         )}
+        <Reactions seq={ev.seq} />
       </div>
     </div>
+  );
+}
+
+/** The message a reply answers, above it (w866): who said it and a line of it; pressing it goes to that message. */
+function ReplyQuote({ sessionId, seq, from, text }: { sessionId: string; seq: number; from: string; text: string }) {
+  return (
+    <button type="button" className="reply-quote" data-testid="reply-quote" title="Go to the message" onClick={() => focusEvent(sessionId, seq)}>
+      <Icon name="reply" size={12} />
+      <span className="reply-quote-from">{from}</span>
+      <span className="reply-quote-text">{text || '(no text)'}</span>
+    </button>
   );
 }
 
@@ -371,12 +541,16 @@ function AssistantMessage({ ev, end, sessionId }: { ev: AssistantEv; end?: Resul
     const kept = new Map((ev.images ?? []).flatMap((i) => (i.path ? [[i.path, uploadUrl(sessionId, i)] as const] : [])));
     return (p: string) => kept.get(p) ?? fileUrl({ session: sessionId }, p);
   }, [ev.images, sessionId]);
+  const chat = useContext(ChatActionsContext);
+  const host = useActionsHost(!!chat?.interactive);
   return (
-    <div className="msg msg-assistant" data-seq={ev.seq} data-turn-end={end ? (end.ok ? 'ok' : 'stopped') : undefined}>
+    <div className={`msg msg-assistant${host.open ? ' actions-open' : ''}`} data-seq={ev.seq} data-turn-end={end ? (end.ok ? 'ok' : 'stopped') : undefined} ref={host.ref} onClick={host.onClick}>
+      {chat && <MessageActions seq={ev.seq} from="Orchestrator" excerpt={glance(ev.text)} onDone={host.close} />}
       <LocalImages.Provider value={src}>
         <Markdown text={ev.text} />
       </LocalImages.Provider>
       <MentionedImages text={ev.text} src={src} />
+      <Reactions seq={ev.seq} />
       <div className="msg-meta">
         <time dateTime={ev.t} title={new Date(ev.t).toLocaleString()}>
           {fmtClock(ev.t)}
@@ -517,10 +691,22 @@ function NoticeRow({ ev }: { ev: UserEv }) {
   const d = describeNotice(n, useNoticeRefs(n));
   // A message from another person is to be read, not skimmed: it starts open.
   const [open, setOpen] = useState(n.kind === 'person-message');
+  const chat = useContext(ChatActionsContext);
+  const host = useActionsHost(!!chat?.interactive);
+  const tag = NOTICE_TAG.exec(ev.text)?.[1];
   return (
-    <div className={`notice${n.attention ? ' notice-attn' : ''}${open ? ' open' : ''}`} data-seq={ev.seq}>
+    <div className={`notice${n.attention ? ' notice-attn' : ''}${open ? ' open' : ''}${host.open ? ' actions-open' : ''}`} data-seq={ev.seq} ref={host.ref} onClick={host.onClick}>
+      {chat && <MessageActions seq={ev.seq} from={tag ? tag[0].toUpperCase() + tag.slice(1) : 'Notice'} excerpt={glance(d.text)} onDone={host.close} />}
       <div className="notice-row">
-        <button className="notice-head" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? 'Hide the full text' : 'Show the full text'}>
+        <button
+          className="notice-head"
+          onClick={() => {
+            setOpen(!open);
+            host.toggle?.();
+          }}
+          aria-expanded={open}
+          title={open ? 'Hide the full text' : 'Show the full text'}
+        >
           <Icon name={NOTICE_ICON[n.kind]} size={14} />
           <span className="notice-text">
             {d.text}
@@ -537,6 +723,7 @@ function NoticeRow({ ev }: { ev: UserEv }) {
         )}
       </div>
       {open && <div className="notice-body">{n.kind === 'worker-done' || n.kind === 'auto-finished' ? <Markdown text={n.body ?? ev.text} /> : <div className="pre-wrap">{n.body ?? ev.text}</div>}</div>}
+      <Reactions seq={ev.seq} />
     </div>
   );
 }

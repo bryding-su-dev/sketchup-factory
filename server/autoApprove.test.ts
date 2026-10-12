@@ -92,15 +92,15 @@ function setup(t: { after: (fn: () => void) => void }) {
   return { st, store, sandbox, machine, started, notes, agent, clock, events };
 }
 
-test('auto-approve: defaults are Opus, high effort, 3 per run and per day, never mp-r2', () => {
+test('auto-approve: defaults are Sonnet, high effort, 3 per run and per day, never mp-r2', () => {
   const a = normalizeAutoApprove({ enabled: true }, undefined, ['opus', 'sonnet']);
   assert.deepEqual(a, { ...DEFAULT_AUTO, enabled: true });
-  assert.equal(a.model, 'opus');
+  assert.equal(a.model, 'sonnet');
   assert.equal(a.effort, 'high');
   assert.deepEqual(a.exclude, ['mp-r2']);
-  assert.throws(() => normalizeAutoApprove({ effort: 'extreme' as never }, undefined, ['opus']), /effort/);
-  assert.throws(() => normalizeAutoApprove({ model: 'gpt' }, undefined, ['opus']), /model/);
-  assert.equal(normalizeAutoApprove({ maxPerRun: 9, maxPerDay: 2 }, undefined, ['opus']).maxPerRun, 2, 'per run never above per day');
+  assert.throws(() => normalizeAutoApprove({ effort: 'extreme' as never }, undefined, ['opus', 'sonnet']), /effort/);
+  assert.throws(() => normalizeAutoApprove({ model: 'gpt' }, undefined, ['opus', 'sonnet']), /model/);
+  assert.equal(normalizeAutoApprove({ maxPerRun: 9, maxPerDay: 2 }, undefined, ['opus', 'sonnet']).maxPerRun, 2, 'per run never above per day');
 });
 
 test('auto-approve: starts at once on an unused sandbox, with the safety brief, model and effort; skips mp-r2 and labelled ones', (t) => {
@@ -112,7 +112,7 @@ test('auto-approve: starts at once on an unused sandbox, with the safety brief, 
   assert.equal(d.status, 'approved');
   assert.equal(d.autoApproved, true);
   assert.equal(d.sandboxId, 'sb3');
-  assert.deepEqual([started[0].where, started[0].model, started[0].effort], ['sb3', 'opus', 'high']);
+  assert.deepEqual([started[0].where, started[0].model, started[0].effort], ['sb3', 'sonnet', 'high']);
   assert.match(started[0].prompt, /Do NOT push to develop directly/);
   assert.match(started[0].prompt, /pull request into develop only\. Never merge it/);
   assert.match(free.purpose, /Verify 1a2b3c/);

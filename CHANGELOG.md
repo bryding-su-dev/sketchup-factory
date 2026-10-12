@@ -14,6 +14,13 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ### Changed
 - README rewritten for the SketchUp Factory as it runs (a Mac host, plain worktree sandboxes); `docs/README.md` indexes the docs
   and marks the inherited Final Factory ones. SECURITY.md and CONTRIBUTING.md name this fork.
+- **Workers default to Sonnet 5.5** (port of upstream w680, #230): `defaultModel` (what `start_agent` and standing agents
+  use when no model is named) is `sonnet`, and so are auto-approved delegations and the standing-agent editor's default.
+  Orchestrators and the dispatcher stay on Opus (`orchestrator.model`). A `config.json` that sets `defaultModel` itself
+  keeps its value: set it to `"sonnet"` there (`set_app_config`) to follow.
+- Every worker's report ends a finished piece of work with `Learned: <file or PR>` or `Learned: nothing new`, and a
+  personal orchestrator keeps a tally of its person's corrections and files the harness work on the second of a kind
+  (port of upstream w741, #242, as brief text: this fork has no DONE gate).
 - A new request starts a fresh worker session (docs/orchestrators.md, "A fresh session per request"): `message_agent`
   with a `work_id` the worker is not on yet is refused without `continue_reason`, which is logged in the request and
   told to its people in the `[dispatch]` line. `start_agent` with a `work_id` adds a handoff of the requests and workers
@@ -22,6 +29,12 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
   (the `FFSB` cookie, `FFSB_CONFIG`, `ffsb.*` localStorage keys, the `ffsb-*` helper tasks) are unchanged.
 
 ### Added
+- Second upstream sweep (w31, ff-factory #191-#358): reply to a message and react with an emoji in your own orchestrator
+  chat (w866, #277; a reaction is a harness message, never the person's own turn); a video written as a markdown image
+  plays inline (w1030, #323); a chat keeps its place across a page switch, and the Requests and Intake lists keep their
+  scroll (w1100, #343); the message box empties the moment you send and a resend after a lost answer is taken once
+  (w893, #286). See docs/orchestrators.md, "Replies and reactions".
+- CI runs on pushes and pull requests to `sketchup`.
 - `request_app_update` and `scripts/mac/restart.sh --update` on a macOS host: the LaunchAgent now runs a Node
   supervisor (`scripts/supervise.ts`) that runs the server and updates it between runs. It refuses a modified or
   diverged checkout, health-checks the new server (`/api/health` with the new commit), and rolls back to the previous
@@ -45,6 +58,9 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
   `config.example.mac.json`.
 
 ### Fixed
+- Unit tests that failed or hung on a Mac or a loaded runner (upstream w636, w1095: #209, #212, #336): `macDialogs` and
+  `macUnity` no longer call the real osascript, `durable` and `crashRecovery` wait for the write instead of a fixed time,
+  the usage test no longer waits a minute, and test servers take an OS-given port (`server/testPorts.ts`).
 - `node server/user.ts` before the server's first run created `data/` nowhere and crashed on `users.json.tmp`.
 - `npm run setup` with a shallow `repo.referenceRepo` failed (git refuses a shallow reference); it now clones from
   origin and says why.

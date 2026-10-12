@@ -4,7 +4,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from './store.ts';
@@ -68,16 +67,25 @@ test('store: saves never lose to a steady stream of updates (7,000 sessions)', a
   for (let i = 0; i < 7000; i++) s.sessions.set(`z${i}`, session(`z${i}`, `agent ${i}`));
   const t0 = Date.now();
   let n = 0;
-  // Busy agents: a session update every 30 ms for 2.5 s. The old debounce restarted its 200 ms timer on each one.
-  while (Date.now() - t0 < 2500) {
+  const file = path.join(dir, 'state.json');
+  const look = () => {
+    if (!fs.existsSync(file)) return { saved: { sessions: [] as SessionInfo[] }, behind: Infinity };
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as { sessions: SessionInfo[] };
+    const title = saved.sessions.find((x) => x.id === 'busy')?.title ?? '';
+    return { saved, behind: n - Number(title.split(' ')[1]) };
+  };
+  // Busy agents: a session update every 30 ms for 2.5 s, and on while state.json is 60 or more updates behind (at most
+  // 20 s). The old debounce restarted its 200 ms timer on each one, so nothing was written while they went on. A save
+  // starts every second, but writing and fsyncing these 7,000 sessions can take more than a second on a loaded Windows
+  // runner (w636: 60 behind at 2.5 s on CI), so the stream waits for the next save instead of ending at a fixed time.
+  while (Date.now() - t0 < 2500 || (look().behind >= 60 && Date.now() - t0 < 20_000)) {
     s.putSession({ ...session('busy', `update ${++n}`) });
     await new Promise((r) => setTimeout(r, 30));
   }
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')) as { sessions: SessionInfo[] };
-  const title = saved.sessions.find((x) => x.id === 'busy')?.title ?? '';
-  const behind = n - Number(title.split(' ')[1]);
+  const { saved, behind } = look();
   assert.equal(saved.sessions.length, 7001);
   assert.ok(behind < 60, `state.json is at most ~1.5 s behind while busy (${behind} updates behind)`);
+  assert.ok(Date.now() - t0 < 10_000, `and gets there within 10 s of busy updates (${Date.now() - t0} ms), with a save every second`);
   await s.saved();
   s.flush();
 });
@@ -120,14 +128,6 @@ test('orchestrator memory: backed up when changed, and a zeroed file gets its la
   assert.match(healed[0].label ?? '', /orchestrator memory person-ben\//);
 });
 
-async function freePort(): Promise<number> {
-  const srv = net.createServer();
-  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
-  const port = (srv.address() as net.AddressInfo).port;
-  await new Promise((r) => srv.close(r));
-  return port;
-}
-
 test('the real server comes back by itself from a zeroed state.json and users.json', { timeout: 90_000 }, async (t) => {
   const base = tmp(t, 'ffsb-crash-boot-');
   const data = path.join(base, 'data');
@@ -137,11 +137,12 @@ test('the real server comes back by itself from a zeroed state.json and users.js
   fs.mkdirSync(repo);
   execFileSync('git', ['init', '-q', '-b', 'develop'], { cwd: repo });
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@users.noreply.github.com', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo });
-  const port = await freePort();
+  // Port 0: the server takes the one the OS gives and says it in its log (w1095: a port picked here and closed again went to
+  // another test before the server bound it, EADDRINUSE on PR #335).
   fs.writeFileSync(
     path.join(base, 'config.json'),
     JSON.stringify({
-      port,
+      port: 0,
       host: '127.0.0.1',
       trustProxy: false,
       dataDir: data,
@@ -181,7 +182,9 @@ test('the real server comes back by itself from a zeroed state.json and users.js
       await new Promise((r) => setTimeout(r, 100));
     }
   };
-  await until(new RegExp(`on http://127\\.0\\.0\\.1:${port}`), 60_000);
+  await until(/on http:\/\/127\.0\.0\.1:\d+ /, 60_000);
+  const port = Number(/on http:\/\/127\.0\.0\.1:(\d+) /.exec(log)![1]);
+  assert.ok(port > 0, `the server says its port: ${port}`);
   const res = await fetch(`http://127.0.0.1:${port}/api/state`);
   assert.equal(res.status, 401, 'up and answering (a login is needed)');
   await until(/DATA RESTORED AFTER A CRASH/, 20_000);

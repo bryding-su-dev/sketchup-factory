@@ -1471,6 +1471,190 @@ select.input {
   50% { opacity: 0.2; }
 }
 
+/* ---------- replies and reactions in your orchestrator chat (w866) ---------- */
+
+.msg,
+.notice {
+  position: relative;
+}
+
+/* Reply and React float at a message's top corner: on hover with a pointer, once the message is tapped on a touch screen. */
+.msg-actions {
+  position: absolute;
+  top: -24px;
+  right: 6px;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+}
+
+.msg-actions[data-picking],
+.actions-open > .msg-actions {
+  display: flex;
+}
+
+@media (hover: hover) {
+  .msg:hover > .msg-actions,
+  .notice:hover > .msg-actions,
+  .msg:focus-within > .msg-actions,
+  .notice:focus-within > .msg-actions {
+    display: flex;
+  }
+}
+
+.msg-action {
+  min-width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1;
+  transition: background 0.12s, color 0.12s, transform 0.12s var(--ease);
+}
+
+.msg-action:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.msg-action:active {
+  transform: scale(0.92);
+}
+
+.react-pick.on {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+@media (hover: none) {
+  .msg-action {
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
+.msg-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.msg-user-body .msg-reactions {
+  justify-content: flex-end;
+}
+
+.notice .msg-reactions {
+  margin: 0 0 var(--s-1) calc(var(--s-2) + 22px);
+}
+
+.react-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  animation: rise 0.2s var(--ease);
+}
+
+button.react-chip:hover {
+  background: rgba(255, 159, 28, 0.22);
+}
+
+/* What a reply answers: a line above the bubble that goes to the message when pressed. */
+.reply-quote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.reply-quote:hover {
+  background: var(--hover);
+  color: var(--text-2);
+}
+
+.reply-quote .icon {
+  flex: none;
+}
+
+.reply-quote-from {
+  flex: none;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.reply-quote-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The composer says what is being replied to, inside its box. */
+.composer-reply {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0 var(--s-1) 4px 0;
+  padding: 6px 6px 6px 10px;
+  border-left: 2px solid var(--accent-line);
+  border-radius: 6px 12px 12px 6px;
+  background: var(--accent-soft);
+  color: var(--text-3);
+}
+
+.composer-reply-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.composer-reply-to {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.composer-reply-text {
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A message from the orchestrator to this agent: set apart by a rule, folded when long. */
 .brief {
   border-left: 2px solid var(--accent-line);
@@ -2103,6 +2287,29 @@ select.input {
   max-height: 480px;
   height: auto;
   object-fit: contain;
+}
+
+.md .md-video {
+  display: block;
+  width: min(100%, 480px);
+  margin: 4px 0;
+}
+.md .md-video video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 8px;
+}
+.md .md-video-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.md .md-video-cap .ellipsis {
+  flex: 1;
+  min-width: 0;
 }
 
 .md-code-actions {

@@ -19,10 +19,17 @@ export type IconName =
   | 'menu' | 'plus' | 'send' | 'stop' | 'trash' | 'copy' | 'check' | 'x' | 'chevron' | 'back'
   | 'expand' | 'play' | 'power' | 'log' | 'refresh' | 'bell' | 'chat' | 'branch' | 'folder' | 'bot' | 'logout'
   | 'clock' | 'pause' | 'edit' | 'wallet' | 'image' | 'download' | 'paperclip' | 'bellOff' | 'search' | 'mic' | 'wave' | 'more'
-  | 'pulse' | 'alert' | 'inbox' | 'info' | 'tools' | 'arrowDown' | 'bulb' | 'settings' | 'monitor' | 'file' | 'camera';
+  | 'pulse' | 'alert' | 'inbox' | 'info' | 'tools' | 'arrowDown' | 'bulb' | 'settings' | 'monitor' | 'file' | 'camera' | 'reply' | 'smile';
 
 const PATHS: Record<IconName, ReactNode> = {
   pulse: <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />,
+  reply: <path d="M10 7L4.5 12 10 17M5 12h9a5.5 5.5 0 0 1 5.5 5.5V19" />,
+  smile: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8.7 14.2c.8 1.1 2 1.8 3.3 1.8s2.5-.7 3.3-1.8M9.3 9.8h.01M14.7 9.8h.01" />
+    </>
+  ),
   alert: (
     <>
       <path d="M12 4.5l8.5 15h-17z" />

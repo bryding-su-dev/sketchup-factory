@@ -96,6 +96,12 @@ export async function sendMessage(request: APIRequestContext, sessionId: string,
   expect(r.ok(), await r.text()).toBeTruthy();
 }
 
+/** Send a message to any chat, the dispatcher's included (this fork's people chat with the dispatcher directly). */
+export const sendToChat = sendMessage;
+
+/** The e2e server's main host sandbox (upstream names it by machine, "pc/alpha"). */
+export const ALPHA = 'alpha';
+
 /** Change the route without reloading the page (the app's routes live in the hash). */
 export async function go(page: Page, hash: string) {
   await page.evaluate((h) => {

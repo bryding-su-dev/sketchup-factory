@@ -598,12 +598,16 @@ test('tracker: every token shows numbers or "usage unknown: <reason>" after one 
   fs.rmSync(dir, { recursive: true });
 });
 
-test('tracker: a poll that has run longer than 5 minutes no longer blocks the next one', async () => {
+test('tracker: a poll that has run longer than 5 minutes no longer blocks the next one', async (tc) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-stuck-'));
   const logs: string[] = [];
   let calls = 0;
+  // The login's request hangs for the whole test, then fails: left hanging, its 60 s deadline kept this file's process
+  // alive for a minute on a Mac (where the stored-login check lets it start; w636).
+  const hung: ((e: Error) => void)[] = [];
+  tc.after(() => hung.forEach((fail) => fail(new Error('the test is over'))));
   const t = new UsageTracker({ dataDir: dir, claudeEnv: { CLAUDE_CODE_OAUTH_TOKEN: TOKEN, CLAUDE_CONFIG_DIR: dir } } as never, () => undefined, {
-    fetchLogin: () => new Promise(() => undefined),
+    fetchLogin: () => new Promise((_, fail) => hung.push(fail)),
     fetchToken: async () => {
       calls++;
       return { rate_limits_available: true, rate_limits: endpointBody(41, 33, 0) };
