@@ -1469,6 +1469,8 @@ let backendTimer: NodeJS.Timeout | undefined;
 const backend: BedrockBackend = new BedrockBackend({
   cfg,
   usage: () => usage.entries,
+  // The E2E harness (e2e/server.ts) never calls AWS: its login always "works".
+  ...(process.env.FFSB_BEDROCK_PROBE === 'ok' ? { probe: async () => ({ ok: true as const }) } : {}),
   notify: (text) => agents.orchestrators.toPeople([identity.owner()], text, { bypassGate: true }),
   // Status and spend are broadcast at most once a second.
   changed: () => {
