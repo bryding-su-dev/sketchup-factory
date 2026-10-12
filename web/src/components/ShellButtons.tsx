@@ -3,12 +3,14 @@
 import { useAttention } from '../attention';
 import { setDrawer, useStore } from '../store';
 import { Icon } from './ui';
+import { BackendMark } from './Backend';
 
 export function DrawerButton() {
   const count = useAttention(useStore((s) => s.app)).length;
   return (
     <button className="btn btn-ghost btn-icon drawer-btn show-phone" onClick={() => setDrawer(true)} aria-label="Menu" title="Sandboxes, machines and agents">
       <Icon name="menu" />
+      <BackendMark />
       {count > 0 && <span className="drawer-dot" aria-hidden />}
     </button>
   );

@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { AccountUsage, AppState, CleanupSummary, HostHealth, HostStats, PlanUsage, SessionInfo, SystemStats, UsageMeter } from '../../../shared/types';
 import { memUsed as memUsedOf } from '../../../shared/stats';
 import { fmtBytes, fmtClock, fmtCost, fmtRelative, lsGet, lsSet, useNow } from '../util';
 import { Icon } from './ui';
-import { api } from '../api';
+import { api, type BackendDetail } from '../api';
+import { usd2 } from './Backend';
 import { attempt, sessionIndex } from '../store';
 
 // The sidebar's footer: the load of every computer and the plan usage of every Claude account, in two
@@ -121,6 +122,7 @@ export function SystemFooter({ app }: { app: AppState }) {
           <CleanupLines computers={computers} />
           {hasPlan && <UsageRefresh />}
           {app.accounts ? <AccountsMeters app={app} /> : app.usage && <PlanMeters usage={app.usage} />}
+          <BackendSpend app={app} />
         </div>
       )}
       <button className="sys-toggle" onClick={toggle} aria-expanded={open} title={many ? 'Every computer and Claude account. Tap for the meters.' : `${sys.cpuModel} · ${sys.cpuCount} threads. Tap for the meters.`}>
@@ -369,6 +371,49 @@ function UsageRefresh() {
         <Icon name="refresh" size={12} /> {busy ? 'Refreshing…' : 'Refresh usage'}
       </button>
     </div>
+  );
+}
+
+/** Bedrock's estimated spend: today against the daily cap, this week, why, and the costliest sessions (fetched when opened). */
+function BackendSpend({ app }: { app: AppState }) {
+  const b = app.backend;
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<BackendDetail>();
+  const today = b?.spend.todayUsd;
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    void attempt(api.backend()).then((d) => live && d && setDetail(d));
+    return () => {
+      live = false;
+    };
+  }, [open, today]);
+  if (!b?.configured) return null;
+  const pct = b.spend.dailyBudgetUsd > 0 ? (b.spend.todayUsd / b.spend.dailyBudgetUsd) * 100 : 0;
+  return (
+    <details className="bk-spend-block" data-testid="bedrock-spend" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>Bedrock · {usd2(b.spend.todayUsd)} today</summary>
+      <div className="meters">
+        <Meter label="Today" pct={pct} value={`${usd2(b.spend.todayUsd)} of $${b.spend.dailyBudgetUsd.toFixed(0)}`} lvl={pct >= 100 ? 'crit' : pct >= 80 ? 'warn' : 'ok'} />
+        <div className="meter-row">
+          <span className="meter-label">This week</span>
+          <span className="meter-value">{usd2(b.spend.weekUsd)}</span>
+        </div>
+      </div>
+      <div className="plan-asof">{b.reason}</div>
+      {b.problem && <div className="plan-asof lvl-warn">{b.problem}</div>}
+      {detail && detail.sessions.length > 0 && (
+        <ol className="bk-top" data-testid="bedrock-top">
+          {detail.sessions.slice(0, 5).map((s) => (
+            <li key={s.session}>
+              <span className="bk-top-title">{s.title}</span>
+              <span>{usd2(s.usd)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      <div className="plan-asof">Estimated from token counts at Bedrock list prices</div>
+    </details>
   );
 }
 

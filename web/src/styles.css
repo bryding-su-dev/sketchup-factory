@@ -5615,3 +5615,150 @@ button.board-head-link:hover {
 .timer-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
 .timer-note { white-space: pre-wrap; overflow-wrap: anywhere; }
 .timer-actions { display: flex; flex-wrap: wrap; gap: 4px; flex-shrink: 0; margin-left: auto; }
+
+/* ---------- the backend (w38, docs/bedrock.md) ---------- */
+
+.backend-badge {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin: 0 var(--s-3) var(--s-2);
+  padding: 4px var(--s-3);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.backend-badge .bk-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backend-badge .bk-spend {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backend-badge.bk-bedrock {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.backend-badge.bk-blocked {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.bk-problem {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.backend-mode {
+  flex: none;
+  display: flex;
+  margin: 0 var(--s-3) var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.backend-mode button {
+  flex: 1;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.backend-mode button + button {
+  border-left: 1px solid var(--border);
+}
+
+.backend-mode button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.backend-mode button.active {
+  background: var(--accent);
+  color: #1a1206;
+  font-weight: 600;
+}
+
+.drawer-bk {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  color: #1a1206;
+}
+
+.drawer-bk.bk-bedrock {
+  background: var(--accent);
+}
+
+.drawer-bk.bk-blocked {
+  background: var(--amber);
+}
+
+.fl-agent-bk {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #1a1206;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+}
+
+.bk-spend-block {
+  padding: var(--s-2) 0;
+  font-size: var(--fs-xs);
+}
+
+.bk-spend-block summary {
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.bk-top {
+  margin: var(--s-1) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bk-top li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-2);
+  color: var(--text-3);
+}
+
+.bk-top-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

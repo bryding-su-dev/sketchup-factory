@@ -10,6 +10,7 @@ import { displayName, fmtBytes, fmtRelative, isUnused, lsGet, lsSet, machineGlan
 import { AttentionButton, DrawerButton } from './ShellButtons';
 import { describe, gpuPct, level, ramLvl, ramPct, type Lvl } from './SystemMeters';
 import { Dot, Icon } from './ui';
+import { onBedrock } from './Backend';
 import { useKeepScroll } from '../scrollKeep';
 
 type Variant = 'side' | 'board';
@@ -153,11 +154,16 @@ function AgentLine({ s, now, active, variant, onOpen }: { s: SessionInfo; now: n
     <button
       className={`fl-agent${active ? ' active' : ''}`}
       onClick={onOpen}
-      title={`${s.title}: ${st.word}, last active ${fmtRelative(s.lastActivityAt, now)}${s.requestedBy ? ` · for ${s.requestedBy.displayName}` : ''}${s.model ? ` · ${s.model}` : ''}`}
+      title={`${s.title}: ${st.word}, last active ${fmtRelative(s.lastActivityAt, now)}${s.requestedBy ? ` · for ${s.requestedBy.displayName}` : ''}${s.model ? ` · ${s.model}` : ''}${onBedrock(s) ? ' · on Bedrock' : ''}`}
       data-testid="fl-agent"
     >
       <Dot tone={st.tone} pulse={s.status === 'running'} />
       <span className="fl-agent-title">{s.title}</span>
+      {onBedrock(s) && (
+        <span className="fl-agent-bk" title="Runs on Amazon Bedrock" data-testid="fl-agent-bedrock">
+          B
+        </span>
+      )}
       {variant === 'board' && s.requestedBy && <span className="fl-agent-for">{s.requestedBy.displayName}</span>}
       <span className={`fl-agent-state tone-${st.tone}`}>{st.word}</span>
       <span className="fl-agent-age">{ago(s.lastActivityAt, now)}</span>

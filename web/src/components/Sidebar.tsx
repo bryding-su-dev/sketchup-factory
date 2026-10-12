@@ -24,6 +24,7 @@ import { Dot, Icon, type IconName } from './ui';
 import { usePush } from '../notify';
 import { SettingsModal } from './Settings';
 import { SystemFooter } from './SystemMeters';
+import { BackendBadge, BackendMode } from './Backend';
 import { ExternalStrip } from './External';
 import { FleetGroups, fleetFor, type FleetSelection } from './Fleet';
 
@@ -81,6 +82,7 @@ export function Sidebar({
           <Icon name={push.endpoint ? 'bell' : 'bellOff'} size={17} />
         </button>
       </div>
+      <BackendBadge backend={app.backend} />
 
       <div className="side-scroll">
         {orch && (
@@ -191,6 +193,7 @@ export function Sidebar({
       </div>
 
       <ExternalStrip app={app} route={route} onNavigate={onNavigate} />
+      <BackendMode backend={app.backend} />
       <SystemFooter app={app} />
       {app.app && (
         <div className="side-foot" data-testid="app-version" title="SketchUp Factory version and git commit">
