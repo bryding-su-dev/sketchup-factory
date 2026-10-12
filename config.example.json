@@ -55,6 +55,7 @@
     "fable"
   ],
   "defaultModel": "sonnet",
+  "modelPins": { "haiku": "claude-haiku-5-5" },
   "orchestrator": {
     "model": "opus",
     "effort": "medium",
@@ -64,7 +65,8 @@
   },
   "worker": {
     "permissionMode": "bypassPermissions",
-    "effort": "high"
+    "effort": "high",
+    "subagentModels": { "planner": "opus", "reviewer": "opus", "scout": "haiku" }
   },
   "hostDiskPaths": [
     "C:/"

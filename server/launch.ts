@@ -61,6 +61,8 @@ export interface LaunchSpec {
   /** An in-process MCP server whose tool calls are answered by `handlers` (on a machine: the portal). */
   mcp?: { server: string; tools: { name: CatalogTool; description: string }[] };
   maxBudgetUsd?: number;
+  /** Subagents the session can hand work to (server/models.ts workerAgents). An older daemon ignores them. */
+  agents?: Options['agents'];
   guard: {
     /** Unity instance prefix (project folder name) and the agent's own folder. */
     id: string;
@@ -178,6 +180,7 @@ export function buildOptions(spec: LaunchSpec, handlers: Partial<Record<CatalogT
     strictMcpConfig: spec.strictMcp,
     mcpServers,
     ...(spec.maxBudgetUsd !== undefined ? { maxBudgetUsd: spec.maxBudgetUsd } : {}),
+    ...(spec.agents ? { agents: spec.agents } : {}),
     hooks: { PreToolUse: [{ hooks }] },
     // Git fails fast instead of waiting on a credential prompt nobody will answer.
     env: { MCP_TIMEOUT: '120000', ...baseEnv, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', ...publicGitEnvFor(spec, baseEnv), ...spec.env },

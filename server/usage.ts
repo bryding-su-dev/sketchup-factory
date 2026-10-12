@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { MODEL_IDS } from './models.ts';
 import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { HOST_ROLES, roleNames, type Config, type HostRole } from './config.ts';
 import type { AccountUsage, PlanUsage, SessionInfo, SessionKind, UsageMeter } from '../shared/types.ts';
@@ -524,7 +525,7 @@ export async function fetchTokenLimits(token: string, fetchImpl: typeof fetch = 
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: MODEL_IDS.haiku,
         max_tokens: 1,
         system: "You are Claude Code, Anthropic's official CLI for Claude.",
         messages: [{ role: 'user', content: 'hi' }],

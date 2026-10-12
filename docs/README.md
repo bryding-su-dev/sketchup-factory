@@ -9,6 +9,7 @@ How SketchUp Factory works. Start with the [README](../README.md).
 | [orchestrators.md](orchestrators.md) | personal orchestrators, the dispatcher, the work ledger, timers, compaction, a fresh session per request |
 | [standing-agents.md](standing-agents.md) | scheduled long-lived agents and delegation requests |
 | [restart.md](restart.md) | restarts and updates; [the macOS Node supervisor](restart.md#macos-the-node-supervisor) is the one in use |
+| [models.md](models.md) | which model each role runs on (Opus plans and checks, Sonnet implements, Haiku 5.5 for cheap work) and how to change it |
 | [accounts.md](accounts.md) | which Claude account each agent runs on; Artifact tools and the Claude Docs connector |
 | [identity.md](identity.md) | people, attribution and whose account pays |
 | [attachments.md](attachments.md) | files sent with a message |

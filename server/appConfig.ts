@@ -7,6 +7,7 @@ import { PROVIDER_TOKEN, tokenSha256 } from './providerProtocol.ts';
 import { USER_ID } from './identity.ts';
 import { writeFileDurable } from './durable.ts';
 import { AUTO_COMPACT_LIMITS } from './autoCompact.ts';
+import { MODEL_ALIASES, MODEL_ID, type ModelAlias, type SubagentRole } from './models.ts';
 
 /**
  * The config.json keys an agent may change (the set_app_config tool). Only cosmetic ones, plus the public
@@ -63,6 +64,16 @@ export const SETTABLE_KEYS = [
   // The one permission among them: whether this app's own checkout is a protected path for the agents (default true).
   // false lets workers update and change the app in place; its data directory stays protected regardless.
   'guard.protectFactoryCheckout',
+  // The model policy (docs/models.md): the workers' main loop, the orchestrators', each worker subagent's, and the full
+  // ids the aliases resolve to.
+  'defaultModel',
+  'orchestrator.model',
+  'worker.subagentModels.planner',
+  'worker.subagentModels.reviewer',
+  'worker.subagentModels.scout',
+  'modelPins.opus',
+  'modelPins.sonnet',
+  'modelPins.haiku',
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
@@ -221,6 +232,27 @@ export function normalizeSetting(key: SettableKey, value: unknown, cfg?: Config)
       if (typeof value !== 'string' || !PROVIDER_TOKEN.test(value.trim())) throw new Error('providers.ffbox.token must be a connector token (ffpv1_ and 43 characters, from `node server/providerToken.ts`); the value given is not one (not shown)');
       return tokenSha256(value.trim());
     }
+    case 'defaultModel':
+    case 'orchestrator.model': {
+      const models = cfg?.models ?? MODEL_ALIASES;
+      if (typeof value !== 'string' || !models.includes(value.trim())) throw new Error(`${key} is one of ${models.join(', ')}`);
+      return value.trim();
+    }
+    case 'worker.subagentModels.planner':
+    case 'worker.subagentModels.reviewer':
+    case 'worker.subagentModels.scout': {
+      const models = cfg?.models ?? MODEL_ALIASES;
+      const m = typeof value === 'string' ? value.trim() : '';
+      if (!(models.includes(m) || MODEL_ID.test(m) || m === 'inherit' || m === 'off')) throw new Error(`${key} is one of ${models.join(', ')}, a full model id ("claude-haiku-5-5"), "inherit" (the worker's own model) or "off" (no such subagent)`);
+      return m;
+    }
+    case 'modelPins.opus':
+    case 'modelPins.sonnet':
+    case 'modelPins.haiku': {
+      const m = typeof value === 'string' ? value.trim() : '';
+      if (m !== '' && !MODEL_ID.test(m)) throw new Error(`${key} is a full model id such as "claude-haiku-5-5", or "" for Claude Code's own choice`);
+      return m;
+    }
     case 'voice.ttsVoice': {
       if (typeof value !== 'string' || !/^[a-z]{2}_[a-z]+$/.test(value.trim())) throw new Error('voice.ttsVoice is a Kokoro voice name such as "af_heart" or "bm_george"');
       return value.trim();
@@ -332,6 +364,21 @@ export function setAppConfig(file: string, cfg: Config, key: SettableKey, value:
     if (key === 'providers.ffbox.enabled') ffbox.enabled = v as boolean | undefined;
     else ffbox.tokenSha256 = v as string | undefined;
     cfg.providers = { ...cfg.providers, ffbox };
+  }
+  else if (key === 'defaultModel') cfg.defaultModel = (v as string | undefined) ?? 'sonnet';
+  else if (key === 'orchestrator.model') cfg.orchestrator = { ...cfg.orchestrator, model: (v as string | undefined) ?? 'opus' };
+  else if (key.startsWith('worker.subagentModels.')) {
+    const role = key.slice('worker.subagentModels.'.length) as SubagentRole;
+    const models = { ...cfg.worker.subagentModels };
+    if (v === undefined) delete models[role];
+    else models[role] = v as string;
+    cfg.worker = { ...cfg.worker, subagentModels: models };
+  } else if (key.startsWith('modelPins.')) {
+    const alias = key.slice('modelPins.'.length) as ModelAlias;
+    const pins = { ...cfg.modelPins };
+    if (v === undefined) delete pins[alias];
+    else pins[alias] = v as string;
+    cfg.modelPins = pins;
   }
   else if (key === 'guard.protectFactoryCheckout') cfg.guard = { ...cfg.guard, protectFactoryCheckout: v as boolean | undefined };
   else if (key === 'hostGuard.cleanup.ageRules') cfg.hostGuard.cleanup.ageRules = (v as { path: string; olderThanDays: number }[] | undefined) ?? [];

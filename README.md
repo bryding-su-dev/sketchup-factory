@@ -102,10 +102,10 @@ you own outright, and workers may run commands and edit files there to change or
 protected either way. They can then edit the guard itself, so the seatbelt is only as good as the agent
 ([SECURITY.md](SECURITY.md)).
 
-**Models.** *In progress, not merged yet (w33):* Opus plans and checks (orchestrators, dispatcher, review), Sonnet
-implements (workers), Haiku does cheap work. Today `defaultModel` and `orchestrator.model` are `opus` in
-`config.example.mac.json`, and `config.models` lists what agents may choose from; the upstream sweep (PR #6) moves the
-worker default to Sonnet.
+**Models** ([docs/models.md](docs/models.md)). Opus 5.5 plans and checks: the orchestrators, the dispatcher (`orchestrator.model`)
+and every worker's `planner` and `reviewer` subagents. Sonnet 5.5 implements: every worker's main loop (`defaultModel`). Haiku 5.5
+does cheap work: every worker's `scout` subagent, and Claude Code's own background calls (`modelPins.haiku`, since the pinned SDK maps
+`haiku` to 4.5). All of these keys can be set with `set_app_config`.
 
 **Accounts and usage.** The sidebar's "Claude plan" meters show each Claude account in use, polled every
 `usagePollMinutes` (default 15), and the footer shows the Mac's load. `claudeAccounts` picks, per role

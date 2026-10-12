@@ -29,6 +29,14 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
   (the `FFSB` cookie, `FFSB_CONFIG`, `ffsb.*` localStorage keys, the `ffsb-*` helper tasks) are unchanged.
 
 ### Added
+- **One model policy for the whole factory** (w33, docs/models.md; Ben: "opus 5.5 ... the brains of the operations, it
+  should be checking important work and making plans", Sonnet 5.5 and Haiku 5.5 for the rest). Every worker gets three
+  subagents (SDK `agents`): `planner` and `reviewer` on Opus (read-only) and `scout` on Haiku, and a "Models" section in
+  its brief saying when to use each. The dispatcher's brief and `start_agent` say Sonnet implements, Opus takes planning
+  and review/verification requests, Haiku takes pure lookups. Every Claude process the app starts gets
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-5-5`: the pinned Agent SDK (Claude Code 2.1.284) otherwise resolves `haiku`
+  to Haiku 4.5. The usage poll's probe uses Haiku 5.5. New config `modelPins` and `worker.subagentModels`; `set_app_config`
+  now takes `defaultModel`, `orchestrator.model`, `worker.subagentModels.*` and `modelPins.*`.
 - Second upstream sweep (w31, ff-factory #191-#358): reply to a message and react with an emoji in your own orchestrator
   chat (w866, #277; a reaction is a harness message, never the person's own turn); a video written as a markdown image
   plays inline (w1030, #323); a chat keeps its place across a page switch, and the Requests and Intake lists keep their
