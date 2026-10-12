@@ -95,3 +95,28 @@ test('claudeAiConnectors per role: workers off keeps strict MCP config; orchestr
   const on = harness(t, { claudeAiConnectors: { orchestrator: true } } as Partial<Config>);
   assert.equal((orch(on).settings as { disableClaudeAiConnectors?: boolean }).disableClaudeAiConnectors, undefined);
 });
+
+test('w33: workers get the Opus planner and reviewer and the Haiku scout, the haiku pin, and the Models brief; claudeEnv can override the pin', (t) => {
+  const { agents, info } = harness(t);
+  const o = agents.workerOptions(info({ model: 'sonnet' }));
+  assert.deepEqual(Object.fromEntries(Object.entries(o.agents ?? {}).map(([k, v]) => [k, v.model])), { planner: 'opus', reviewer: 'opus', scout: 'haiku' });
+  assert.equal(o.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-5-5');
+  assert.match((o.systemPrompt as { append: string }).append, /## Models\nYou run on Sonnet 5\.5\./);
+  const own = harness(t, { claudeEnv: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001' } } as Partial<Config>);
+  assert.equal(own.agents.workerOptions(own.info()).env?.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-4-5-20251001');
+});
+
+test('w33: orchestrators run on the haiku pin too (their background calls); machine agents carry the subagents to the SDK', (t) => {
+  const { agents, machines, info } = harness(t);
+  const orch = agents.orchestratorOptions(info({ kind: 'orchestrator', sandboxId: undefined }));
+  assert.equal(orch.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-5-5');
+  assert.equal(orch.agents, undefined, 'orchestrators delegate to workers, not subagents');
+  const sb = { id: 'msb', branch: 'sandbox/msb', base: 'origin/develop', path: 'D:\\work\\ffsb\\msb', createdAt: '', status: 'ready', purpose: 'unused', sessionIds: [], unity: { state: 'stopped' } };
+  const { machine } = machines.register({ id: 'pc', host: 'pc', purpose: 'unused', status: 'ready', repoPath: 'D:\\work\\FFFRepo', home: 'C:\\Users\\u', portalUrl: 'http://x', maxSessions: 2, platform: 'win32', sandboxes: [sb] } as never);
+  for (const spec of [machines.hooks!.specFor(info({ sandboxId: undefined, machineId: 'pc' }), machine), machines.hooks!.specFor(info({ sandboxId: undefined, machineId: 'pc', machineSandbox: 'msb' }), machine)]) {
+    const o = buildOptions(spec, {}, {});
+    assert.deepEqual(Object.keys(o.agents ?? {}), ['planner', 'reviewer', 'scout']);
+    assert.equal(o.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-5-5');
+    assert.match(spec.append, /## Models/);
+  }
+});

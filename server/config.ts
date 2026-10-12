@@ -338,7 +338,13 @@ export interface Config {
     minFreeRamGB: number;
   };
   models: string[];
+  /** The main loop of every worker and standing agent started without a model (docs/models.md): Sonnet 5.5 by default. */
   defaultModel: string;
+  /**
+   * Full model ids the aliases resolve to in every Claude process this app starts (server/models.ts modelPins), laid in
+   * as Claude Code's ANTHROPIC_DEFAULT_<ALIAS>_MODEL. Default: haiku pinned to claude-haiku-5-5. "" removes a pin.
+   */
+  modelPins?: Partial<Record<'opus' | 'sonnet' | 'haiku', string>>;
   orchestrator: {
     model: string;
     effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -365,6 +371,11 @@ export interface Config {
   };
   worker: {
     permissionMode: PermissionMode;
+    /**
+     * The models of every worker's subagents (server/models.ts, docs/models.md): planner and reviewer on opus, scout on
+     * haiku by default. "off" leaves that subagent out.
+     */
+    subagentModels?: Partial<Record<'planner' | 'reviewer' | 'scout', string>>;
     effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     /**
      * The claude.ai connectors sandbox workers on this host load, by upstream URL (wildcards allowed; docs/accounts.md,
