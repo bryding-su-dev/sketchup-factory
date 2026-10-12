@@ -60,7 +60,7 @@ test('permission prompt: Allow lets the tool run, Deny stops it', async ({ authe
     await expect(strip).toContainText('Waiting for your OK');
     await expect(strip).toContainText('rm -rf build');
     if (!isMobile(page)) await expect(page.locator('.sidebar .attn-item', { hasText: `Perm ${tag}` })).toContainText('Allow Bash');
-    await expect(page).toHaveTitle(/^\(\d+\) FF Factory$/);
+    await expect(page).toHaveTitle(/^\(\d+\) SketchUp Factory$/);
 
     await card.getByRole('button', { name: choice, exact: true }).click();
     if (choice === 'Allow') {
