@@ -39,6 +39,9 @@
   "protectedPaths": [
     "C:/path/to/a/checkout/agents/must/not/touch"
   ],
+  "guard": {
+    "protectFactoryCheckout": true
+  },
   "limits": {
     "maxUnity": 3,
     "maxSessions": 6,

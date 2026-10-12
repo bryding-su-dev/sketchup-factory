@@ -60,6 +60,9 @@ export const SETTABLE_KEYS = [
   // tokens, and a turn's cost in USD. 0 turns either trigger off.
   'orchestrator.compactAtTokens',
   'orchestrator.compactAtTurnUsd',
+  // The one permission among them: whether this app's own checkout is a protected path for the agents (default true).
+  // false lets workers update and change the app in place; its data directory stays protected regardless.
+  'guard.protectFactoryCheckout',
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
@@ -203,6 +206,11 @@ export function normalizeSetting(key: SettableKey, value: unknown, cfg?: Config)
       if (!Number.isInteger(n) || n < floor || n > 2000) throw new Error(`${key} is a whole number of GB from ${floor} to 2000${floor > 10 ? ' (above hostGuard.warnFreeGB, where new work is refused)' : ''}`);
       return n;
     }
+    case 'guard.protectFactoryCheckout': {
+      if (value === true || value === 'true') return true;
+      if (value === false || value === 'false') return false;
+      throw new Error('guard.protectFactoryCheckout is true (agents may not touch this app\'s checkout) or false (they may; its data stays protected)');
+    }
     case 'providers.ffbox.enabled': {
       if (value === true || value === 'true') return true;
       if (value === false || value === 'false') return false;
@@ -325,6 +333,7 @@ export function setAppConfig(file: string, cfg: Config, key: SettableKey, value:
     else ffbox.tokenSha256 = v as string | undefined;
     cfg.providers = { ...cfg.providers, ffbox };
   }
+  else if (key === 'guard.protectFactoryCheckout') cfg.guard = { ...cfg.guard, protectFactoryCheckout: v as boolean | undefined };
   else if (key === 'hostGuard.cleanup.ageRules') cfg.hostGuard.cleanup.ageRules = (v as { path: string; olderThanDays: number }[] | undefined) ?? [];
   else if (key === 'orchestrator.compactAtTokens') cfg.orchestrator = { ...cfg.orchestrator, compactAtTokens: v as number | undefined };
   else if (key === 'orchestrator.compactAtTurnUsd') cfg.orchestrator = { ...cfg.orchestrator, compactAtTurnUsd: v as number | undefined };

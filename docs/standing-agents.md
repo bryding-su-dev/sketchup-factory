@@ -60,7 +60,7 @@ except its own. Permission mode is `bypassPermissions`, bounded by two `PreToolU
 
 1. `sandboxGuard`, the same one workers get: no push to the game repo's master/main, no force push,
    no remote branch deletion, no killing processes, no protected paths (the live checkout, this
-   server's code and data).
+   server's code unless `guard.protectFactoryCheckout` is `false`, and its data).
 2. `standingGuard`: Write/Edit only in its own folder; shell commands must be on an allowlist
    that depends on the groups, and may not name another sandbox, the base clone, or use command
    substitution, heredocs or output redirection (write files with the Write tool instead).

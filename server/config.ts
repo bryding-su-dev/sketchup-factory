@@ -318,6 +318,12 @@ export interface Config {
   attachments?: Partial<AttachmentConfig>;
   /** Paths no sandbox agent may write to or mention in a shell command (e.g. the live co-op checkout). */
   protectedPaths: string[];
+  /**
+   * The agents' guard (server/guard.ts). `protectFactoryCheckout` (default true): this app's own checkout is a
+   * protected path. false lets agents run commands and write files there (to update or change the app itself);
+   * dataDir (state, transcripts, memories, secrets) stays protected whatever this says. Settable with set_app_config.
+   */
+  guard?: { protectFactoryCheckout?: boolean };
   limits: {
     maxUnity: number;
     /** Agents mid-turn at once on this host (w384: idle ones do not count; a message past it is queued). */
@@ -629,7 +635,29 @@ export function loadConfig(): Config {
   cfg.repo.basePath = path.resolve(cfg.repo.basePath);
   cfg.voice.toolsDir = cfg.voice.toolsDir ? path.resolve(ROOT, cfg.voice.toolsDir) : path.join(cfg.dataDir, 'tools', 'whisper');
   cfg.protectedPaths = cfg.protectedPaths.map((p) => path.resolve(p));
+  checkGuardConfig(cfg);
   return cfg;
+}
+
+/** Throws when config guard is malformed: { "protectFactoryCheckout": true | false }. */
+export function checkGuardConfig(cfg: Pick<Config, 'guard'>) {
+  const g: unknown = cfg.guard;
+  if (g === undefined) return;
+  if (typeof g !== 'object' || g === null || Array.isArray(g)) throw new Error('config guard is an object, e.g. { "protectFactoryCheckout": true }');
+  for (const [key, v] of Object.entries(g)) {
+    if (key !== 'protectFactoryCheckout') throw new Error(`config guard.${key}: no such setting (protectFactoryCheckout)`);
+    if (typeof v !== 'boolean') throw new Error('config guard.protectFactoryCheckout is true or false');
+  }
+}
+
+/**
+ * The paths this host's agents may not touch (server/guard.ts): config protectedPaths, this app's checkout unless
+ * guard.protectFactoryCheckout is false, and dataDir always (it sits inside the checkout; the guard refuses a
+ * nested protected path even where its parent is open).
+ */
+export function guardedPaths(cfg: Pick<Config, 'protectedPaths' | 'dataDir' | 'guard'>, root = ROOT): string[] {
+  const own = cfg.guard?.protectFactoryCheckout === false ? [] : [root];
+  return [...new Set([...cfg.protectedPaths, ...own, cfg.dataDir].filter(Boolean))];
 }
 
 /**

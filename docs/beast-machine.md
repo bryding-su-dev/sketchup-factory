@@ -36,7 +36,7 @@ Machine.local`; at most one, Windows hosts only). A local machine:
   administrator command that registers it; a task registered once keeps working for later deploys.
 - **Takes its settings from the portal's config** (`localMachineDefaults`, `server/machines.ts`): main clone =
   `repo.basePath` (`C:\ffsb\_base`), `sandbox_root` = `sandboxRoot` (`F:\ffsb`), limits from `limits.*`, disk guard from
-  `hostGuard.warnFreeGB`/`criticalFreeGB`, protected paths = `protectedPaths` + this app + its data, Library seed =
+  `hostGuard.warnFreeGB`/`criticalFreeGB`, protected paths = `protectedPaths` + this app (unless `guard.protectFactoryCheckout` is `false`) + its data, Library seed =
   `librarySeed` with `librarySeedCopy` (`F:\ffsb\_seed\Library`, block clone on the Dev Drive), editors below normal
   priority (the live game wins), portal URL `http://127.0.0.1:<port>` (no Funnel round trip), the MCP-for-Unity server
   from `unity.mcpServer`. Anything given to `add_machine` wins.
@@ -60,7 +60,7 @@ sandbox form default to the local machine (`defaultSandboxMachine`). Standing ag
 `beast/<name>` sandboxes too. `list_sandboxes` shows the host group only while the host still has sandboxes of its own.
 
 **The guard** of a BEAST sandbox agent is the machine sandbox guard plus the protected paths (the live game, this app
-and its data). Ending or changing the daemon's scheduled task is refused for every agent (`server/guard.ts`), and the
+unless `guard.protectFactoryCheckout` is `false`, and its data). Ending or changing the daemon's scheduled task is refused for every agent (`server/guard.ts`), and the
 reaper never touches a daemon (`server/reaper.ts isProtected`).
 
 **The UI.** The host's group in the sidebar and on the Overview lists the daemon's sandboxes as its own; the daemon has
