@@ -28,7 +28,8 @@ You talk to your own **orchestrator** on the main page ("start work on spec 098"
 single-player and log the bugs", "read the Discord forums and find bugs"). It files the work with the
 **dispatcher**, which checks it against what everyone else has in flight, creates sandboxes, starts
 editors, launches **worker** agents with a full brief, and reports back when they finish
-([docs/orchestrators.md](docs/orchestrators.md)).
+([docs/orchestrators.md](docs/orchestrators.md)). Orchestrators run on Opus 5.5, workers on Sonnet 5.5 with Opus
+planner/reviewer and Haiku 5.5 scout subagents ([docs/models.md](docs/models.md)).
 Everything it does is also a button: the sidebar lists every sandbox, and opening one shows its
 agents' live transcripts, where you can type to them directly, interrupt them, approve their tool
 requests and start or stop Unity.
