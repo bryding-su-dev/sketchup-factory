@@ -24,3 +24,9 @@ untrusted text can be steered by it.
 - Prefer a private network (Tailscale) over a public URL; if you publish it, the login page is on
   the internet.
 - List every checkout agents must never touch in `protectedPaths`.
+- This app's own checkout is protected too, unless you set `guard.protectFactoryCheckout` to `false`
+  (also settable with `set_app_config`). Turn it off only on an install you own outright, where you
+  want agents to update and change the app in place: they can then run any command and edit any file
+  in its code, including the guard itself, so the seatbelt there is only as good as the agent. `data/`
+  stays protected either way, by absolute or relative name (`cd <checkout> && cat data/…`) and against
+  `git clean -x` in the checkout; a script file or a glob can still reach it, as with every guard rule.

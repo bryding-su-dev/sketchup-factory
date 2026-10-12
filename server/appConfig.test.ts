@@ -154,3 +154,15 @@ test('app config: limits.maxSandboxes (1-8) and limits.maxSessions (1-12), live'
   setAppConfig(file, full, 'limits.maxSandboxes', null);
   assert.equal(full.limits.maxSandboxes, 4, 'null: the default');
 });
+
+test("app config: guard.protectFactoryCheckout opens or closes this app's checkout, live", (t) => {
+  const { file, cfg } = setup(t);
+  assert.deepEqual(setAppConfig(file, cfg, 'guard.protectFactoryCheckout', false), { before: undefined, after: false });
+  assert.deepEqual(cfg.guard, { protectFactoryCheckout: false });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).guard, { protectFactoryCheckout: false });
+  setAppConfig(file, cfg, 'guard.protectFactoryCheckout', 'true');
+  assert.equal(cfg.guard?.protectFactoryCheckout, true);
+  setAppConfig(file, cfg, 'guard.protectFactoryCheckout', null);
+  assert.equal(cfg.guard?.protectFactoryCheckout, undefined);
+  assert.throws(() => normalizeSetting('guard.protectFactoryCheckout', 'off'), /true .* or false/);
+});

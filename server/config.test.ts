@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CLAUDE_DOCS_CONNECTOR, ROOT, checkRoleConnectorConfig, claudeAiConnectorsFor, SENDER_RULE, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
+import { CLAUDE_DOCS_CONNECTOR, ROOT, checkGuardConfig, checkRoleConnectorConfig, claudeAiConnectorsFor, SENDER_RULE, VOICE_DEFAULTS, loadConfig, ownerLine } from './config.ts';
 import { gitIsClean, gitRemotes } from './guard.ts';
 import { appVersion, formatVersion, readSha, readVersion } from './version.ts';
 
@@ -142,4 +142,18 @@ test('claudeAiConnectors: role booleans, off for orchestrators by default; malfo
   assert.throws(() => checkRoleConnectorConfig({ claudeAiConnectors: { dispatcher: true } as never }), /no such role/);
   assert.throws(() => checkRoleConnectorConfig({ claudeAiConnectors: { workers: 'yes' } as never }), /true or false/);
   checkRoleConnectorConfig({});
+});
+
+test('config guard: protectFactoryCheckout is true or false; anything else is refused', (t) => {
+  checkGuardConfig({});
+  checkGuardConfig({ guard: { protectFactoryCheckout: false } });
+  assert.throws(() => checkGuardConfig({ guard: { protectFactoryCheckout: 'no' } } as never), /true or false/);
+  assert.throws(() => checkGuardConfig({ guard: { protectDataDir: false } } as never), /no such setting/);
+  assert.throws(() => checkGuardConfig({ guard: [] } as never), /is an object/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffsb-config-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  withConfig(t, { ...minimal(dir), dataDir: path.join(dir, 'data') });
+  assert.equal(loadConfig().guard, undefined, 'absent: the checkout stays protected');
+  withConfig(t, { ...minimal(dir), dataDir: path.join(dir, 'data'), guard: { protectFactoryCheckout: 0 } });
+  assert.throws(() => loadConfig(), /guard.protectFactoryCheckout is true or false/);
 });

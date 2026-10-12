@@ -6,7 +6,7 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { ROOT, ownerLine, publicIdentityOf, type Config } from './config.ts';
+import { guardedPaths, ownerLine, publicIdentityOf, type Config } from './config.ts';
 import { buildOptions, type CatalogTool, type LaunchSpec, type ToolHandler } from './launch.ts';
 import type { Store } from './store.ts';
 import type { OptionsFactory } from './sessions.ts';
@@ -834,7 +834,7 @@ export class StandingAgents {
     return {
       where: os.hostname(),
       repoNote: `The game repo's base clone is at \`${this.cfg.repo.basePath}\` (it may lag origin). Read it with Read/Grep; do not run commands in it or in any sandbox under \`${this.cfg.sandboxRoot}\`.`,
-      protectedPaths: [...this.cfg.protectedPaths, ROOT, this.cfg.dataDir],
+      protectedPaths: guardedPaths(this.cfg),
       offLimits: [this.cfg.sandboxRoot, this.cfg.repo.basePath],
       gameRepos: [this.cfg.repo.url, this.cfg.repo.basePath],
       // Config claudeAccounts.standing: the host token or this host's stored login (docs/accounts.md); the run's
