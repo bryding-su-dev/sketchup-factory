@@ -8,7 +8,7 @@ import type { CompactionTrigger, DeliveredAttachment, EffortLevel, ImageInput, I
 import { attachmentBlock } from '../shared/attachments.ts';
 import { emit } from './store.ts';
 import { accountKeyOf } from './usage.ts';
-import { bedrockAccountKey, isBedrockEnv, type Backend } from './bedrock.ts';
+import { bedrockAccountKey, isBedrockEnv, startModel, type Backend } from './bedrock.ts';
 import { senderOf, type SessionSnapshot, type Unanswered } from './restart.ts';
 import { checkObject, readJsonDurable, writeJsonDurable } from './durable.ts';
 
@@ -397,11 +397,11 @@ export class AgentSession implements SessionHandle {
 
   private start() {
     this.input = new InputQueue();
-    this.abort = new AbortController();
+    const abort = (this.abort = new AbortController());
     const base = this.makeOptions(this.info);
     const options: Options = {
       ...base,
-      model: this.info.model ?? base.model,
+      model: startModel(this.info.model ?? base.model),
       permissionMode: this.info.permissionMode,
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
@@ -425,10 +425,10 @@ export class AgentSession implements SessionHandle {
     const env = options.env ?? process.env;
     const backend: Backend = isBedrockEnv(env) ? 'bedrock' : 'plan';
     this.update({ status: 'starting', account: backend === 'bedrock' ? bedrockAccountKey(env) : accountKeyOf(env), backend, bedrockRegion: backend === 'bedrock' ? env.AWS_REGION : undefined });
-    void this.consume(this.q);
+    void this.consume(this.q, abort);
   }
 
-  private async consume(q: Query) {
+  private async consume(q: Query, abort: AbortController) {
     try {
       for await (const m of q) {
         // After stop() this query is no longer the session's: a buffered state event must not mark a stopped session idle.
@@ -438,7 +438,8 @@ export class AgentSession implements SessionHandle {
       if (this.q === q) this.update({ status: 'stopped', statusDetail: undefined });
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
-      const aborted = this.abort?.signal.aborted;
+      // This query's own controller: a restart onto another backend has already replaced this.abort.
+      const aborted = abort.signal.aborted;
       if (!aborted) this.store.append(this.info.id, { kind: 'error', text: msg });
       if (!aborted && this.info.backend === 'bedrock') this.events.emit('bedrockError', this, msg);
       if (this.q === q) this.update({ status: aborted ? 'stopped' : 'error', statusDetail: aborted ? undefined : clip(msg, 300) });

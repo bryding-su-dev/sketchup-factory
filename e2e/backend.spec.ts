@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { appState, expect, expectNoHorizontalOverflow, openSidebar, signIn, startWorker, test, uniq } from './fixtures.ts';
 
 // The Bedrock backend in the UI (docs/bedrock.md): the badge, the Plan | Bedrock | Auto control, an agent's tag.
@@ -72,4 +75,31 @@ test('Bedrock: confirm, the badge turns Bedrock, an agent shows its tag; Plan re
   await expect(sidebar.getByTestId('backend-badge')).toHaveAttribute('data-active', 'plan');
   await expect(sidebar.getByTestId('backend-mode-plan')).toHaveAttribute('aria-pressed', 'true');
   expect((await appState(request)).backend?.mode).toBe('plan');
+});
+
+// The script's way in (scripts/backend.ts): a key minted --scope backend, no login, reaches the switch and nothing else.
+test('a backend-scoped key switches the mode without a login, and reaches nothing else', async ({ playwright, baseURL }, info) => {
+  const port = new URL(baseURL!).port;
+  const key = fs.readFileSync(path.join(os.tmpdir(), `ffsb-e2e-${port}`, 'backend-key.txt'), 'utf8').trim();
+  const bare = await playwright.request.newContext({ baseURL: baseURL!, extraHTTPHeaders: { authorization: `Bearer ${key}` } });
+  try {
+    const set = await bare.post('/api/backend/mode', { data: { mode: 'bedrock' } });
+    expect(set.ok(), info.project.name).toBeTruthy();
+    expect((await set.json()).mode).toBe('bedrock');
+    const got = await bare.get('/api/backend');
+    expect((await got.json()).backend.mode).toBe('bedrock');
+    expect((await bare.post('/api/backend/mode', { data: { mode: 'sideways' } })).status()).toBe(400);
+    expect((await bare.get('/api/sessions')).status()).toBe(401); // the key opens the switch only
+    const back = await bare.post('/api/backend/mode', { data: { mode: 'plan' } });
+    expect((await back.json()).mode).toBe('plan');
+  } finally {
+    await bare.dispose();
+  }
+  const mate = fs.readFileSync(path.join(os.tmpdir(), `ffsb-e2e-${port}`, 'teammate-key.txt'), 'utf8').trim();
+  const other = await playwright.request.newContext({ baseURL: baseURL!, extraHTTPHeaders: { authorization: `Bearer ${mate}` } });
+  try {
+    expect((await other.post('/api/backend/mode', { data: { mode: 'bedrock' } })).status()).toBe(403); // an MCP key is not a backend key
+  } finally {
+    await other.dispose();
+  }
 });

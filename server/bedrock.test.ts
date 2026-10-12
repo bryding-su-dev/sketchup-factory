@@ -335,3 +335,15 @@ test('set_app_config and config.json refuse a resume margin that is not under th
   const cfg = { bedrock: { thresholdPercent: 10 } } as Config;
   assert.throws(() => normalizeSetting('bedrock.resumeMarginPercent', 10, cfg), /under bedrock\.thresholdPercent \(10\)/);
 });
+
+test('a model recorded on Bedrock starts as its alias on either backend', async () => {
+  const { startModel } = await import('./bedrock.ts');
+  assert.equal(startModel('us.anthropic.claude-haiku-5-5'), 'haiku');
+  assert.equal(startModel('global.anthropic.claude-opus-5-5'), 'opus');
+  assert.equal(startModel('anthropic.claude-sonnet-5-5'), 'sonnet');
+  assert.equal(startModel('us.anthropic.claude-haiku-4-5-20251001-v1:0'), 'us.anthropic.claude-haiku-4-5-20251001-v1:0');
+  assert.equal(startModel('claude-haiku-5-5'), 'haiku');
+  assert.equal(startModel('claude-opus-5-5'), 'opus');
+  assert.equal(startModel('haiku'), 'haiku');
+  assert.equal(startModel(undefined), undefined);
+});

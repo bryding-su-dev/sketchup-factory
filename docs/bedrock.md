@@ -170,3 +170,22 @@ set_app_config bedrock.mode auto
 
 Optional: `bedrock.regionPrefix global`, `bedrock.thresholdPercent`, `bedrock.weeklyThresholdPercent`,
 `bedrock.resumeMarginPercent`, `bedrock.dailyBudgetUsd`.
+
+## Switching without an agent (no tokens needed)
+
+The sidebar's Plan | Bedrock | Auto control and `scripts/backend.ts` are plain code: no model is involved, so they work when
+the plan has no tokens left and no agent can be asked. Both set `bedrock.mode`, and it applies to the very next message of
+every agent (an idle process restarts on the new backend, history resumed; a running turn finishes where it is).
+
+```
+node server/apikey.ts backend-switch --scope backend      # once: prints a key (shown once), good for these two endpoints only
+echo 'ffsb_…' > ~/.sketchup-factory-backend-key && chmod 600 ~/.sketchup-factory-backend-key
+node scripts/backend.ts status | plan | bedrock | auto [--url http://127.0.0.1:8790] [--key-file <file>]
+```
+
+The key may also come from `FF_BACKEND_KEY`. A `backend`-scoped key reaches `GET /api/backend` and `POST /api/backend/mode` and
+nothing else (not `/mcp`, not the rest of the API). With the server down, the script edits `bedrock.mode` in `config.json`
+instead and says so; it holds from the next start. `server/backendSwitch.ts` is the logic, `server/backendSwitch.test.ts` its tests.
+
+A model recorded on one backend ("us.anthropic.claude-haiku-5-5" on Bedrock, "claude-haiku-5-5" on the plan) is refused by the
+other, so a session restarted onto another backend starts with its alias (`startModel`).

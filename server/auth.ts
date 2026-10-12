@@ -84,10 +84,11 @@ function checkProfile(p: UserProfile): Partial<UserRecord> {
 
 /**
  * What a scoped API key may reach, and nothing else (docs/intake.md): "nightly" the nightly e2e lab's report endpoint,
- * "ffbox" FFBox's escalations from Max (POST /api/intake/ffbox).
+ * "ffbox" FFBox's escalations from Max (POST /api/intake/ffbox), "backend" the Plan / Bedrock / Auto switch (GET /api/backend, POST
+ * /api/backend/mode: scripts/backend.ts, for when no agent can be asked).
  */
-export type ApiKeyScope = 'nightly' | 'ffbox';
-export const API_KEY_SCOPES: readonly ApiKeyScope[] = ['nightly', 'ffbox'];
+export type ApiKeyScope = 'nightly' | 'ffbox' | 'backend';
+export const API_KEY_SCOPES: readonly ApiKeyScope[] = ['nightly', 'ffbox', 'backend'];
 
 /** users.json: a list of logins, each with a name and a password hash. */
 const checkUsers: Check = (v) => (Array.isArray(v) && v.every((u) => isObject(u) && typeof u.username === 'string' && typeof u.hash === 'string') ? undefined : 'not a list of logins');

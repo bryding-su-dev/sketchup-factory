@@ -547,16 +547,18 @@ route('POST', '/api/work/(w[0-9]+)/decline', async (req, [id]) => {
 // The usage meters' Refresh: poll every account now, here and on each connected machine (docs/accounts.md).
 // The Bedrock backend (docs/bedrock.md): where the agents run, what it costs, and the Plan / Bedrock / Auto switch.
 route('GET', '/api/backend', async () => ({ backend: backend.status(), sessions: backend.topSessions(20), recent: backend.recentSpend(30) }));
-route('POST', '/api/backend/mode', async (req) => {
-  requesterOf(req); // signed in: any person may switch, as with the other app settings
-  const b = await readJson<{ mode?: unknown }>(req);
+const setBackendMode = (mode: unknown) => {
   try {
-    setAppConfig(configPath(), cfg, 'bedrock.mode', b.mode);
+    setAppConfig(configPath(), cfg, 'bedrock.mode', mode);
   } catch (e) {
     throw new HttpError(400, (e as Error).message);
   }
   backend.evaluate();
   return backend.status();
+};
+route('POST', '/api/backend/mode', async (req) => {
+  requesterOf(req); // signed in: any person may switch, as with the other app settings
+  return setBackendMode((await readJson<{ mode?: unknown }>(req)).mode);
 });
 route('POST', '/api/usage/refresh', async () => ({ started: usage.refreshNow(), machines: machines.requestUsage() }));
 
@@ -1231,6 +1233,20 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/logout' && req.method === 'POST') {
       return send(res, 200, {}, { 'set-cookie': auth.logout(req) });
+    }
+    // The Plan / Bedrock / Auto switch for scripts (scripts/backend.ts): a key minted --scope backend reaches these two
+    // endpoints and nothing else, so the switch works when no agent (and no browser session) can be had.
+    const backendRoute = (url.pathname === '/api/backend' && req.method === 'GET') || (url.pathname === '/api/backend/mode' && req.method === 'POST');
+    if (backendRoute && /^Bearer\s/.test(String(req.headers.authorization ?? ''))) {
+      const who = auth.bearer(req);
+      if (!who.ok) return send(res, who.status, { error: who.status === 429 ? 'too many failures' : 'API key required' });
+      if (who.scope !== 'backend') return send(res, 403, { error: 'a backend-scoped key is required (node server/apikey.ts <name> --scope backend)' });
+      try {
+        if (req.method === 'GET') return send(res, 200, { backend: backend.status() });
+        return send(res, 200, setBackendMode((await readJson<{ mode?: unknown }>(req)).mode));
+      } catch (e) {
+        return send(res, e instanceof HttpError ? e.status : 500, { error: (e as Error).message });
+      }
     }
     if (url.pathname.startsWith('/api/')) {
       if (!auth.user(req)) return send(res, 401, { error: 'login required' });

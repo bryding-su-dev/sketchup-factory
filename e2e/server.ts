@@ -205,6 +205,8 @@ await auth.setUser(MATE, MATE_PASSWORD, { displayName: 'Team Mate', role: 'membe
 await auth.setUser(COMPACTOR, COMPACTOR_PASSWORD, { displayName: 'Compact Tester', role: 'member' });
 await auth.setUser(SCROLLER, SCROLLER_PASSWORD, { displayName: 'Scroll Tester', role: 'member' });
 fs.writeFileSync(path.join(base, 'teammate-key.txt'), auth.createApiKey('teammate-laptop', MATE));
+// The key for scripts/backend.ts, scoped to the Plan / Bedrock / Auto switch (e2e/backend.spec.ts).
+fs.writeFileSync(path.join(base, 'backend-key.txt'), auth.createApiKey('backend-switch', undefined, 'backend'));
 // FFBox's key for Max's escalations (docs/intake.md), scoped to POST /api/intake/ffbox (e2e/provider.spec.ts).
 if (withProvider) fs.writeFileSync(path.join(base, 'ffbox-key.txt'), auth.createApiKey('ffbox', undefined, 'ffbox'));
 
