@@ -18,7 +18,7 @@ the server.
 
 ## Tests
 
-CI runs everything below on every push and pull request to `main`
+CI runs everything below on every push and pull request to `sketchup`
 ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 ### Unit tests

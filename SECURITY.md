@@ -1,6 +1,6 @@
 # Security
 
-FF Factory runs AI agents with shell access on the machine that hosts it. Read the
+SketchUp Factory runs AI agents with shell access on the machine that hosts it. Read the
 [Security model](README.md#security-model) and [Known gaps](README.md#known-gaps) sections of the
 README before exposing it beyond your own network.
 
