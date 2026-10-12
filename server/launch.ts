@@ -6,6 +6,7 @@ import { sandboxGuard } from './guard.ts';
 import { standingGuard } from './standingGuard.ts';
 import { publicIdentityEnv } from './publicGit.ts';
 import { usageEnv } from './usage.ts';
+import { BEDROCK_STRIPPED_ENV, isBedrockEnv } from './bedrock.ts';
 import type { StandingToolGroup } from '../shared/types.ts';
 
 /**
@@ -134,7 +135,9 @@ function publicGitEnvFor(spec: LaunchSpec, baseEnv: NodeJS.ProcessEnv): Record<s
  * refused then).
  */
 export function buildOptions(spec: LaunchSpec, handlers: Partial<Record<CatalogTool, ToolHandler>>, processEnv: NodeJS.ProcessEnv = process.env, editorRunning?: () => boolean): Options {
-  const baseEnv = spec.login ? usageEnv(processEnv) : processEnv;
+  const fromLogin = spec.login ? usageEnv(processEnv) : processEnv;
+  // A Bedrock launch (w38) runs on its AWS profile alone: no key or plan token of the process it starts from may win.
+  const baseEnv = spec.env && isBedrockEnv(spec.env) ? Object.fromEntries(Object.entries(fromLogin).filter(([k]) => !(BEDROCK_STRIPPED_ENV as readonly string[]).includes(k))) : fromLogin;
   const g = spec.guard;
   const hooks = [
     sandboxGuard({
