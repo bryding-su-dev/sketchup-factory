@@ -1,10 +1,11 @@
 name: CI
 
 on:
+  # sketchup is this fork's integration branch (SketchUp Factory); main follows upstream.
   push:
-    branches: [main]
+    branches: [main, sketchup]
   pull_request:
-    branches: [main]
+    branches: [main, sketchup]
   workflow_dispatch:
     inputs:
       update_snapshots:
