@@ -51,14 +51,16 @@ export interface BedrockSettings {
 
 export function bedrockSettings(cfg: Pick<Config, 'bedrock'>): BedrockSettings {
   const b = cfg.bedrock ?? {};
+  const thresholdPercent = b.thresholdPercent ?? BEDROCK_DEFAULTS.thresholdPercent;
   return {
     mode: b.mode && BACKEND_MODES.includes(b.mode) ? b.mode : BEDROCK_DEFAULTS.mode,
     ...(b.profile ? { profile: b.profile } : {}),
     region: b.region || BEDROCK_DEFAULTS.region,
     regionPrefix: b.regionPrefix ?? BEDROCK_DEFAULTS.regionPrefix,
-    thresholdPercent: b.thresholdPercent ?? BEDROCK_DEFAULTS.thresholdPercent,
+    thresholdPercent,
     ...(b.weeklyThresholdPercent ? { weeklyThresholdPercent: b.weeklyThresholdPercent } : {}),
-    resumeMarginPercent: b.resumeMarginPercent ?? BEDROCK_DEFAULTS.resumeMarginPercent,
+    // At most threshold-1: the resume line stays above 0, so a meter that has reset (0%) always comes back to the plan.
+    resumeMarginPercent: Math.max(0, Math.min(b.resumeMarginPercent ?? BEDROCK_DEFAULTS.resumeMarginPercent, thresholdPercent - 1)),
     dailyBudgetUsd: b.dailyBudgetUsd ?? BEDROCK_DEFAULTS.dailyBudgetUsd,
   };
 }
@@ -83,8 +85,8 @@ const pct = (key: string, v: unknown, min: number, max: number) => {
   return n;
 };
 
-/** Validate one bedrock.* setting (set_app_config); null/undefined removes it (back to the default). Never echoes a rejected profile. */
-export function normalizeBedrockSetting(key: BedrockKey, value: unknown): unknown {
+/** Validate one bedrock.* setting (set_app_config); null/undefined removes it (back to the default). Never echoes a rejected profile. `current` is the config in force, for the margin-under-threshold check. */
+export function normalizeBedrockSetting(key: BedrockKey, value: unknown, current?: BedrockConfig): unknown {
   if (value === undefined || value === null) return undefined;
   switch (key) {
     case 'bedrock.mode': {
@@ -107,12 +109,20 @@ export function normalizeBedrockSetting(key: BedrockKey, value: unknown): unknow
       if (!PREFIXES.includes(r)) throw new Error(`bedrock.regionPrefix is one of ${PREFIXES.join(', ')} ("global" is about 10% cheaper; "us" keeps requests in US regions)`);
       return r;
     }
-    case 'bedrock.thresholdPercent':
-      return pct(key, value, 1, 100);
+    case 'bedrock.thresholdPercent': {
+      const n = pct(key, value, 1, 100);
+      const margin = current?.resumeMarginPercent;
+      if (margin !== undefined && margin >= n) throw new Error(`bedrock.thresholdPercent must stay above bedrock.resumeMarginPercent (${margin}), or the agents would never come back to the plan; lower the margin first`);
+      return n;
+    }
     case 'bedrock.weeklyThresholdPercent':
       return pct(key, value, 1, 100);
-    case 'bedrock.resumeMarginPercent':
-      return pct(key, value, 1, 99);
+    case 'bedrock.resumeMarginPercent': {
+      const n = pct(key, value, 1, 99);
+      const threshold = current?.thresholdPercent ?? BEDROCK_DEFAULTS.thresholdPercent;
+      if (n >= threshold) throw new Error(`bedrock.resumeMarginPercent (${n}) must be under bedrock.thresholdPercent (${threshold}): the plan's usage would have to fall to 0 or below to resume`);
+      return n;
+    }
     case 'bedrock.dailyBudgetUsd':
       return pct(key, value, 0, 100000);
   }
@@ -129,6 +139,8 @@ export function checkBedrockConfig(cfg: Pick<Config, 'bedrock'>) {
     if (v === undefined || v === null) continue;
     normalizeBedrockSetting(key, v);
   }
+  const { thresholdPercent: threshold = BEDROCK_DEFAULTS.thresholdPercent, resumeMarginPercent: margin } = cfg.bedrock ?? {};
+  if (typeof margin === 'number' && margin >= threshold) throw new Error(`config bedrock.resumeMarginPercent (${margin}) must be under bedrock.thresholdPercent (${threshold})`);
 }
 
 // ---------------------------------------------------------------- what a Bedrock process runs with
@@ -183,8 +195,36 @@ export function withBedrock<E extends Record<string, string | undefined>>(env: E
   return { ...out, ...bedrockEnv(s) } as E;
 }
 
+/** What a plan process must not inherit from a server started in a Bedrock shell: it would run on Bedrock past the cap, or on the wrong model ids. */
+export const PLAN_STRIPPED_ENV = [
+  'CLAUDE_CODE_USE_BEDROCK',
+  'AWS_PROFILE',
+  'AWS_REGION',
+  'AWS_DEFAULT_REGION',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+] as const;
+
+/** `env` as a plan process gets it: none of the Bedrock variables (the caller puts the model pins back). */
+export function withPlan<E extends Record<string, string | undefined>>(env: E): E {
+  const out: Record<string, string | undefined> = { ...env };
+  for (const k of PLAN_STRIPPED_ENV) delete out[k];
+  return out as E;
+}
+
 /** Whether a process environment is a Bedrock one. */
 export const isBedrockEnv = (env: Record<string, string | undefined>) => env.CLAUDE_CODE_USE_BEDROCK === '1' || env.CLAUDE_CODE_USE_BEDROCK === 'true';
+
+/** Whether a session's model can run on Bedrock: an alias with a pinned id and a price (opus, sonnet, haiku) or one of their ids. Anything else (fable…) stays on the plan. */
+export function bedrockSupportsModel(model: string | undefined): boolean {
+  const m = (model ?? '').trim().toLowerCase();
+  return Object.hasOwn(MODEL_IDS, m) || !!aliasOf(m);
+}
 
 /** The account key of a Bedrock process (SessionInfo.account), with the profile NAME only. */
 export const bedrockAccountKey = (env: Record<string, string | undefined>) => `bedrock:${env.AWS_PROFILE ?? 'default'}`;
@@ -360,9 +400,12 @@ export function estimateUsd(modelId: string, u: TokenUsage, prefix: string, sdkU
   return Math.max(table, (sdkUsd ?? 0) * mult);
 }
 
-/** `cur` minus `prev` per field (a counter that went down restarted: its whole value counts). */
+/** Whether `cur` is a counter that started over: smaller than `prev` in any field (a new process, a reset). */
+export const counterRestarted = (cur: TokenUsage, prev: TokenUsage | undefined) => !prev || cur.inputTokens < prev.inputTokens || cur.outputTokens < prev.outputTokens || cur.cacheReadInputTokens < prev.cacheReadInputTokens || cur.cacheCreationInputTokens < prev.cacheCreationInputTokens;
+
+/** `cur` minus `prev` per field (a counter that restarted: its whole value counts, on top of what was counted before). */
 export function tokenDelta(cur: TokenUsage, prev: TokenUsage | undefined): TokenUsage {
-  if (!prev || cur.inputTokens < prev.inputTokens || cur.outputTokens < prev.outputTokens) return { ...cur };
+  if (!prev || counterRestarted(cur, prev)) return { ...cur };
   const d = (a: number, b: number) => Math.max(0, a - b);
   return { inputTokens: d(cur.inputTokens, prev.inputTokens), outputTokens: d(cur.outputTokens, prev.outputTokens), cacheReadInputTokens: d(cur.cacheReadInputTokens, prev.cacheReadInputTokens), cacheCreationInputTokens: d(cur.cacheCreationInputTokens, prev.cacheCreationInputTokens) };
 }

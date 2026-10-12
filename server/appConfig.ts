@@ -111,7 +111,7 @@ export function checkAgeRules(value: unknown, cfg?: Pick<Config, 'protectedPaths
 /** The value to store for `key`, or throws with what is wrong. `null` removes the key (back to the default). */
 export function normalizeSetting(key: SettableKey, value: unknown, cfg?: Config): unknown {
   if (value === null || value === undefined) return undefined;
-  if (isBedrockKey(key)) return normalizeBedrockSetting(key, value);
+  if (isBedrockKey(key)) return normalizeBedrockSetting(key, value, cfg?.bedrock);
   switch (key) {
     case 'ownerName': {
       if (typeof value !== 'string') throw new Error('ownerName is a string');

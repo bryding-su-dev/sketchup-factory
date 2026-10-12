@@ -1206,7 +1206,7 @@ To show the user an image (a screenshot, a proof, a chart), save it as PNG, JPG 
       // The Claude account: the person's own (config userClaudeEnv) when they have one, else what config
       // claudeAccounts.workers picks (docs/accounts.md).
       // On Bedrock instead (w38, docs/bedrock.md) when the backend says so and the person has no token of their own.
-      env: this.onBackend('workers', { MCP_TIMEOUT: '120000', ...ARTIFACT_ENV, ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, info.requestedBy, hostProcessEnv(this.cfg, 'workers')), ...this.publicGitEnv(), FF_SANDBOX_ID: sb.id, FF_SANDBOX_PATH: sb.path, ...maxEnv(this.cfg, info.id), ...sessionTempEnv(os.tmpdir(), info.id) }, info.requestedBy),
+      env: this.onBackend('workers', { MCP_TIMEOUT: '120000', ...ARTIFACT_ENV, ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, info.requestedBy, hostProcessEnv(this.cfg, 'workers')), ...this.publicGitEnv(), FF_SANDBOX_ID: sb.id, FF_SANDBOX_PATH: sb.path, ...maxEnv(this.cfg, info.id), ...sessionTempEnv(os.tmpdir(), info.id) }, info.requestedBy, info.model),
       ...(this.cfg.claudeExecutable ? { pathToClaudeCodeExecutable: this.cfg.claudeExecutable } : {}),
     };
   };
@@ -2808,8 +2808,8 @@ ${this.worldBrief(false)}
   }
 
   /** `env` for an agent of `role` on this host, on Bedrock when the backend says so (w38); a person's own token keeps the plan. */
-  private onBackend<E extends Record<string, string | undefined>>(role: HostRole, env: E, who: { userId: string } | undefined): E {
-    return this.backend ? this.backend.apply(role, env, who) : env;
+  private onBackend<E extends Record<string, string | undefined>>(role: HostRole, env: E, who: { userId: string } | undefined, model: string | undefined): E {
+    return this.backend ? this.backend.apply(role, env, who, model) : env;
   }
 
   readonly orchestratorOptions: OptionsFactory = (info: SessionInfo): Options => {
@@ -2836,7 +2836,7 @@ ${this.worldBrief(false)}
       // Who pays (docs/orchestrators.md, docs/accounts.md): a person's own orchestrator runs on their own Claude account
       // when they have one here (config userClaudeEnv); the dispatcher on the system payer's. Without one, what config
       // claudeAccounts.orchestrator picks: the host token, or this host's stored claude.ai login.
-      env: this.onBackend('orchestrator', { ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, owner ?? this.identity.systemPayer(), hostProcessEnv(this.cfg, 'orchestrator')) }, owner ?? this.identity.systemPayer()),
+      env: this.onBackend('orchestrator', { ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, owner ?? this.identity.systemPayer(), hostProcessEnv(this.cfg, 'orchestrator')) }, owner ?? this.identity.systemPayer(), info.model ?? this.cfg.orchestrator.model),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: `${owner ? this.personalBrief(owner) : this.dispatcherBrief()}\n\n${memoryBrief(memory, owner?.displayName)}` },
       ...(this.cfg.claudeExecutable ? { pathToClaudeCodeExecutable: this.cfg.claudeExecutable } : {}),
     };

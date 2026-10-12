@@ -12,6 +12,7 @@ import {
   bedrockEnv,
   bedrockModels,
   bedrockSettings,
+  bedrockSupportsModel,
   checkBedrockConfig,
   decideBackend,
   estimateUsd,
@@ -23,6 +24,7 @@ import {
   percentNow,
   tokenDelta,
   withBedrock,
+  withPlan,
   type AutoState,
   type BedrockConfig,
   type DecideInput,
@@ -179,7 +181,8 @@ test('tokenDelta: a result is cumulative, so a turn is the difference; a resumed
   assert.deepEqual(tokenDelta(t(100, 30), t(100, 30)), noTokens(), 'nothing new');
   assert.deepEqual(tokenDelta(t(5, 3), t(100, 30)), t(5, 3), 'a counter that went down restarted: all of it counts');
   assert.deepEqual(tokenDelta(t(5, 3), undefined), t(5, 3), 'the first sight counts whole');
-  assert.deepEqual(tokenDelta(t(100, 30, 2), t(100, 30, 9)).cacheReadInputTokens, 0, 'never negative');
+  assert.deepEqual(tokenDelta(t(100, 30, 2), t(100, 30, 9)), t(100, 30, 2), 'a counter that went down in any one field restarted: all of it counts, nothing is lost');
+  assert.deepEqual(tokenDelta(t(100, 30, 12), t(100, 30, 9)), t(0, 0, 3), 'and one that did not is the difference');
 });
 
 test('a Bedrock process gets the profile, the region and the three model ids, and none of the plan or AWS credentials', () => {
@@ -297,4 +300,38 @@ test('AWS_AUTH_ERROR and awsFix: an expired SSO session is told with the command
   assert.equal(awsFix('p', 'the AWS SSO session has expired'), 'run `aws sso login --profile p`');
   assert.match(awsFix('p', 'AWS denied access (AccessDenied)'), /bedrock:InvokeModel/);
   assert.match(awsFix(undefined, 'something else'), /aws sts get-caller-identity --profile <profile>/);
+});
+
+test('withPlan: a plan process loses every Bedrock variable it inherited, whatever the value', () => {
+  const env = { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: 'yes', AWS_PROFILE: 'p', AWS_REGION: 'r', AWS_DEFAULT_REGION: 'r', AWS_ACCESS_KEY_ID: 'k', AWS_SECRET_ACCESS_KEY: 's', AWS_SESSION_TOKEN: 't', AWS_BEARER_TOKEN_BEDROCK: 'b', ANTHROPIC_DEFAULT_OPUS_MODEL: 'o', ANTHROPIC_DEFAULT_SONNET_MODEL: 's', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'h', CLAUDE_CODE_OAUTH_TOKEN: 'plan' };
+  assert.deepEqual(withPlan(env), { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'plan' });
+  assert.equal(env.AWS_PROFILE, 'p', 'the input is not changed');
+});
+
+test('bedrockSupportsModel: opus, sonnet and haiku (aliases or ids) run on Bedrock; fable and the unknown stay on the plan', () => {
+  for (const m of ['opus', 'Sonnet', 'haiku', 'claude-sonnet-5-5', 'us.anthropic.claude-haiku-5-5']) assert.equal(bedrockSupportsModel(m), true, m);
+  for (const m of ['fable', 'claude-fable-5-1', 'constructor', '', undefined]) assert.equal(bedrockSupportsModel(m), false, String(m));
+});
+
+test('resumeMarginPercent: never as large as the threshold, so a reset meter always resumes (threshold 10, margin 10)', () => {
+  const s = settings({ thresholdPercent: 10, resumeMarginPercent: 10 });
+  assert.equal(s.resumeMarginPercent, 9);
+  assert.equal(settings({ thresholdPercent: 1, resumeMarginPercent: 10 }).resumeMarginPercent, 0);
+  assert.equal(settings({ thresholdPercent: 94, resumeMarginPercent: 10 }).resumeMarginPercent, 10, 'a sane pair is untouched');
+  // The stuck case: on Bedrock, the meter reads 0% after its window reset; the resume line must be above it.
+  const back = decideBackend({ settings: s, plan: session(0), state: { onBedrock: new Date(NOW - 1000).toISOString() }, spentToday: 0, now: NOW });
+  assert.equal(back.backend, 'plan');
+  assert.deepEqual(back.state, {});
+});
+
+test('set_app_config and config.json refuse a resume margin that is not under the threshold', () => {
+  assert.throws(() => normalizeBedrockSetting('bedrock.resumeMarginPercent', 10, { thresholdPercent: 10 }), /under bedrock\.thresholdPercent \(10\)/);
+  assert.throws(() => normalizeBedrockSetting('bedrock.resumeMarginPercent', 94), /under bedrock\.thresholdPercent \(94\)/, 'the default threshold counts');
+  assert.equal(normalizeBedrockSetting('bedrock.resumeMarginPercent', 9, { thresholdPercent: 10 }), 9);
+  assert.throws(() => normalizeBedrockSetting('bedrock.thresholdPercent', 10, { resumeMarginPercent: 10 }), /above bedrock\.resumeMarginPercent \(10\)/);
+  assert.equal(normalizeBedrockSetting('bedrock.thresholdPercent', 11, { resumeMarginPercent: 10 }), 11);
+  assert.throws(() => checkBedrockConfig({ bedrock: { thresholdPercent: 10, resumeMarginPercent: 10 } }), /resumeMarginPercent \(10\) must be under/);
+  assert.doesNotThrow(() => checkBedrockConfig({ bedrock: { thresholdPercent: 5 } }), 'the default margin is clamped, not refused');
+  const cfg = { bedrock: { thresholdPercent: 10 } } as Config;
+  assert.throws(() => normalizeSetting('bedrock.resumeMarginPercent', 10, cfg), /under bedrock\.thresholdPercent \(10\)/);
 });

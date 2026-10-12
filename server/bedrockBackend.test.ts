@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { SessionInfo } from '../shared/types.ts';
 import type { Config } from './config.ts';
 import { localDay } from './bedrock.ts';
-import { BedrockBackend, PROBE_FRESH_MS, PROBE_EVERY_MS, type BackendDeps, type Probe, type ProbeResult } from './bedrockBackend.ts';
+import { BedrockBackend, PROBE_FRESH_MS, PROBE_EVERY_MS, PROBE_RETRY_MS, ACCESS_COOLDOWN_MS, type BackendDeps, type Probe, type ProbeResult } from './bedrockBackend.ts';
 import { classifyAwsFailure } from './bedrockPreflight.ts';
 import { HOST_LOGIN, tokenKey, type UsageEntry } from './usage.ts';
 
@@ -51,6 +51,8 @@ function rig(t: { after: (fn: () => void) => void }, cfgOver: Partial<Config> = 
     claudeEnv: { CLAUDE_CODE_OAUTH_TOKEN: HOST_TOKEN },
     userClaudeEnv: { lothsahn: { CLAUDE_CODE_OAUTH_TOKEN: LOTH_TOKEN } },
     bedrock: { profile: 'sketchup-bedrock' },
+    defaultModel: 'sonnet',
+    orchestrator: { model: 'opus' },
     ...cfgOver,
   } as Config & { dataDir: string };
   const clock = { t: T0 };
@@ -119,8 +121,10 @@ test('env per role: orchestrator, workers and standing agents each get the Bedro
     assert.equal(env.PATH, '/usr/bin');
   }
   const own = { ...base, CLAUDE_CODE_OAUTH_TOKEN: LOTH_TOKEN };
-  assert.deepEqual(r.ctl.apply('workers', own, { userId: 'lothsahn' }), own, 'their own token keeps the plan, whatever the decision');
-  assert.deepEqual(r.ctl.apply('orchestrator', own, { userId: 'Lothsahn' }), own, 'ids compare without case');
+  // Their own token keeps the plan, whatever the decision; nothing of Bedrock stays in the env (the AWS keys), the pins do.
+  const kept = { PATH: '/usr/bin', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-5-5', CLAUDE_CODE_OAUTH_TOKEN: LOTH_TOKEN };
+  assert.deepEqual(r.ctl.apply('workers', own, { userId: 'lothsahn' }), kept);
+  assert.deepEqual(r.ctl.apply('orchestrator', own, { userId: 'Lothsahn' }), kept, 'ids compare without case');
   assert.equal(isBedrock(r.ctl.apply('workers', base, { userId: 'ben' })), true, 'a person without one is on Bedrock');
   assert.equal(isBedrock(r.ctl.apply('workers', base, undefined)), true);
   assert.equal(r.ctl.wantFor({ kind: 'worker', requestedBy: { userId: 'lothsahn', displayName: 'L' } } as SessionInfo), undefined, 'and is never recycled onto it');
@@ -236,7 +240,7 @@ test('a forced mode applies to the next call, whatever the usage; Auto again fol
   assert.equal(r.ctl.status().mode, 'auto');
 });
 
-test('no profile: the plan carries the work, with one notice that says how to set it up', async (t) => {
+test('no profile: the plan carries the work and nothing is said (Bedrock is not set up); mode "bedrock" without one is said once', async (t) => {
   const r = rig(t, { bedrock: {} });
   r.plan(99);
   for (let i = 0; i < 3; i++) {
@@ -244,11 +248,20 @@ test('no profile: the plan carries the work, with one notice that says how to se
     r.ctl.evaluate();
     await tick();
   }
-  assert.equal(r.notices.length, 1, 'once');
-  assert.match(r.notices[0], /Bedrock is wanted but cannot be used: no AWS profile is set.*bedrock\.profile/);
+  assert.deepEqual(r.notices, [], 'no notice, no switch notice');
   assert.equal(r.probes.length, 0, 'nothing to probe');
   assert.equal(r.ctl.status().configured, false);
+  assert.equal(r.ctl.status().problem, undefined);
   assert.match(r.ctl.statusLines()[0], /Backend: your Claude plan .*Bedrock is not set up \(config bedrock\.profile\)/);
+  assert.equal(r.ctl.statusLines().some((l) => /WARNING/.test(l)), false, 'no warning');
+  // Asked for by name, it is a problem worth one notice and a warning.
+  r.cfg.bedrock = { mode: 'bedrock' };
+  for (let i = 0; i < 3; i++) {
+    r.ctl.evaluate();
+    await tick();
+  }
+  assert.equal(r.notices.length, 1, 'once');
+  assert.match(r.notices[0], /Bedrock is wanted but cannot be used: no AWS profile is set.*bedrock\.profile/);
   assert.match(r.ctl.statusLines().join('\n'), /WARNING: Bedrock cannot be used: no AWS profile is set/);
 });
 
@@ -344,7 +357,11 @@ test('a probe that throws is a problem, not a crash; a changed profile throws th
   r.plan(95);
   boom.apply('workers', {});
   await tick();
-  assert.equal(boom.awsHealth().ok, false);
+  assert.equal(boom.awsHealth().checkedAt, 0, 'one failure without a reason is a blip, not a verdict');
+  r.clock.t += PROBE_RETRY_MS + 1;
+  boom.evaluate();
+  await tick();
+  assert.equal(boom.awsHealth().ok, false, 'the second in a row is');
   assert.equal(boom.awsHealth().problem, 'the AWS check failed', 'a fixed sentence, not the error');
   const answer = r.ctl;
   answer.apply('workers', {});
@@ -385,7 +402,7 @@ test('the daily cap: a notice once a day at 80%, the plan carries the work at 10
   assert.equal(r.ctl.gateFor({ kind: 'worker' } as SessionInfo)?.includes('cap is spent'), true);
   assert.equal(r.ctl.status().active, 'blocked');
   assert.equal(isBedrock(r.ctl.apply('workers', {})), false);
-  assert.equal(r.ctl.wantFor({ kind: 'worker' } as SessionInfo), undefined, 'nothing to recycle onto');
+  assert.equal(r.ctl.wantFor({ kind: 'worker' } as SessionInfo)?.backend, 'plan', 'blocked: a Bedrock process must still come off Bedrock');
   assert.equal(r.ctl.gateFor({ kind: 'worker', requestedBy: { userId: 'lothsahn', displayName: 'L' } } as SessionInfo), undefined, 'a person with their own token is not held');
   await tick();
   assert.match(r.notices.at(-1)!, /on hold/);
@@ -549,4 +566,182 @@ test('classifyAwsFailure: fixed sentences for what the AWS CLI can say', () => {
   assert.equal(classifyAwsFailure('Unable to locate credentials. You can configure credentials by running "aws configure".'), 'AWS has no credentials for this profile (no SSO login yet)');
   assert.equal(classifyAwsFailure('An error occurred (InvalidClientTokenId) when calling GetCallerIdentity'), 'AWS did not accept the credentials (invalid or expired)');
   assert.equal(classifyAwsFailure('An error occurred (AccessDenied) when calling'), 'AWS denied access (AccessDenied)');
+});
+
+test('a plan process never inherits Bedrock from the server: mode plan, a Bedrock shell, and the haiku pin still applies', async (t) => {
+  const inherited = { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1', AWS_PROFILE: 'shell-profile', AWS_REGION: 'eu-west-1', AWS_ACCESS_KEY_ID: AWS_KEY, AWS_SECRET_ACCESS_KEY: AWS_SECRET, AWS_BEARER_TOKEN_BEDROCK: 'b', ANTHROPIC_DEFAULT_OPUS_MODEL: 'x.opus', ANTHROPIC_DEFAULT_SONNET_MODEL: 'x.sonnet', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'x.haiku' };
+  const r = rig(t, { bedrock: { profile: 'sketchup-bedrock', mode: 'plan' } });
+  for (const role of ['orchestrator', 'workers', 'standing'] as const) {
+    const env: Record<string, string | undefined> = r.ctl.apply(role, inherited);
+    for (const k of Object.keys(inherited)) if (k !== 'PATH' && k !== 'ANTHROPIC_DEFAULT_HAIKU_MODEL') assert.equal(env[k], undefined, `${role}: ${k}`);
+    assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-5-5', `${role}: the haiku pin, not the inherited id`);
+    assert.equal(env.PATH, '/usr/bin');
+  }
+  // A person with their own token is stripped too, and a claudeEnv pin still wins over the default one.
+  const own: Record<string, string | undefined> = r.ctl.apply('workers', inherited, { userId: 'lothsahn' });
+  assert.equal(own.CLAUDE_CODE_USE_BEDROCK, undefined);
+  assert.equal(own.AWS_PROFILE, undefined);
+  assert.equal(own.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-5-5');
+  const pinned = rig(t, { bedrock: { profile: 'sketchup-bedrock', mode: 'plan' }, claudeEnv: { CLAUDE_CODE_OAUTH_TOKEN: HOST_TOKEN, ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5' } });
+  assert.equal(pinned.ctl.apply<Record<string, string | undefined>>('workers', inherited).ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-4-5');
+});
+
+test('a model Bedrock has no id for (fable) stays on the plan: env, recycling and the gate', async (t) => {
+  const r = rig(t);
+  await onBedrock(r);
+  const env: Record<string, string | undefined> = r.ctl.apply('workers', { CLAUDE_CODE_USE_BEDROCK: '1' }, undefined, 'fable');
+  assert.equal(isBedrock(env), false);
+  assert.equal(isBedrock(r.ctl.apply('workers', {}, undefined, 'haiku')), true, 'an alias is fine');
+  assert.equal(isBedrock(r.ctl.apply('orchestrator', {}, undefined, 'claude-fable-5-1')), false);
+  const w = r.ctl.wantFor({ kind: 'worker', model: 'fable' } as SessionInfo);
+  assert.equal(w?.backend, 'plan');
+  assert.match(w!.reason, /fable has no Bedrock id/);
+  assert.equal(r.ctl.wantFor({ kind: 'worker', model: 'sonnet' } as SessionInfo)?.backend, 'bedrock');
+  // The default model decides when the session has none.
+  const d = rig(t, { defaultModel: 'fable' });
+  d.plan(95, 10);
+  d.ctl.apply('workers', {}, undefined, 'sonnet');
+  await tick();
+  assert.equal(isBedrock(d.ctl.apply('workers', {})), false, 'the default is fable');
+  assert.equal(d.ctl.wantFor({ kind: 'worker' } as SessionInfo)?.backend, 'plan');
+  // Blocked work with such a model is not held by a Bedrock gate: it is a plan session.
+  const b = rig(t, { bedrock: { profile: 'sketchup-bedrock', dailyBudgetUsd: 100 }, defaultModel: 'fable' });
+  b.plan(95, 10);
+  b.ctl.apply('workers', {}, undefined, 'sonnet');
+  await tick();
+  b.ctl.recordResult(worker(), usageResult('us.anthropic.claude-opus-5-5', { outputTokens: 10_000_000 }));
+  b.plan(100);
+  b.ctl.evaluate();
+  assert.equal(b.ctl.status().active, 'blocked');
+  assert.equal(b.ctl.gateFor({ kind: 'worker' } as SessionInfo), undefined);
+  assert.ok(b.ctl.gateFor({ kind: 'worker', model: 'sonnet' } as SessionInfo));
+});
+
+test('blocked: a Bedrock process must come off Bedrock (wantFor says plan); a standing agent only ever comes off', async (t) => {
+  const r = rig(t, { bedrock: { profile: 'sketchup-bedrock', dailyBudgetUsd: 100 } });
+  await onBedrock(r);
+  assert.equal(r.ctl.wantFor({ kind: 'standing' } as SessionInfo), undefined, 'going to Bedrock is for its next process');
+  r.ctl.recordResult(worker(), usageResult('us.anthropic.claude-opus-5-5', { outputTokens: 10_000_000 }));
+  r.plan(100);
+  r.ctl.evaluate();
+  assert.equal(r.ctl.status().active, 'blocked');
+  assert.equal(r.ctl.wantFor({ kind: 'worker' } as SessionInfo)?.backend, 'plan');
+  assert.equal(r.ctl.wantFor({ kind: 'orchestrator' } as SessionInfo)?.backend, 'plan');
+  assert.equal(r.ctl.wantFor({ kind: 'standing' } as SessionInfo)?.backend, 'plan');
+});
+
+test('Bedrock refusing the model twice within ten minutes: unavailable for 30 minutes whatever the probe says, told once', async (t) => {
+  const r = rig(t);
+  await onBedrock(r);
+  const denied = 'AccessDeniedException: User arn:aws:sts::1:assumed-role/x is not authorized to perform bedrock:InvokeModel';
+  r.ctl.bedrockError(denied);
+  await tick();
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), true, 'once is not enough');
+  r.clock.t += 11 * 60_000;
+  r.ctl.bedrockError(denied);
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), true, 'two refusals eleven minutes apart are not within ten');
+  r.clock.t += 60_000;
+  r.ctl.bedrockError('ValidationException: The provided model identifier is invalid');
+  await tick();
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), false, 'twice within ten minutes');
+  const problem = r.ctl.status().problem!;
+  assert.match(problem, /^Bedrock refused the model \(ValidationException\): ask your AWS admin for bedrock:InvokeModel on the Claude inference profiles in us-west-2$/);
+  assert.equal(r.notices.filter((n) => /cannot be used: Bedrock refused the model/.test(n)).length, 1);
+  assert.match(r.ctl.statusLines().join('\n'), /WARNING: Bedrock cannot be used: Bedrock refused the model/);
+  // The sts probe passes: that is about the login, not the model.
+  r.clock.t += PROBE_EVERY_MS + 1000;
+  await r.ctl.checkAws();
+  assert.equal(r.ctl.awsHealth().ok, true);
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), false, 'the probe cannot clear it');
+  assert.equal(r.notices.filter((n) => /cannot be used: Bedrock refused/.test(n)).length, 1, 'once');
+  // Half an hour after the second refusal it is tried again by itself.
+  r.clock.t += ACCESS_COOLDOWN_MS;
+  await r.ctl.checkAws();
+  assert.equal(r.ctl.status().problem, undefined);
+  await tick();
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), true);
+  // A refusal reported twice for one failed turn (its result, then the process's error) counts once.
+  r.notices.length = 0;
+  r.ctl.bedrockError(denied);
+  r.ctl.bedrockError(denied);
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), true);
+});
+
+test('one probe failure without a reason does not flap Bedrock; two in a row do; a clear auth error is immediate', async (t) => {
+  const r = rig(t);
+  await onBedrock(r);
+  r.probeAnswer.value = { ok: false, problem: 'the AWS check timed out' };
+  r.clock.t += PROBE_EVERY_MS + 1000;
+  r.ctl.evaluate();
+  await tick();
+  assert.equal(r.ctl.awsHealth().ok, true, 'the earlier answer stands after one timeout');
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), true);
+  assert.deepEqual(r.notices, []);
+  // A success in between resets the count.
+  r.probeAnswer.value = { ok: true };
+  r.clock.t += PROBE_RETRY_MS + 1;
+  r.ctl.evaluate();
+  await tick();
+  r.probeAnswer.value = { ok: false, problem: 'the AWS check failed' };
+  r.clock.t += PROBE_EVERY_MS + 1000;
+  r.ctl.evaluate();
+  await tick();
+  assert.equal(r.ctl.awsHealth().ok, true, 'one again');
+  // The retry comes soon, not at the next five-minute probe; the second in a row is the verdict.
+  const probes = r.probes.length;
+  r.ctl.evaluate();
+  assert.equal(r.probes.length, probes, 'not before the retry time');
+  r.clock.t += PROBE_RETRY_MS + 1;
+  r.ctl.evaluate();
+  await tick();
+  assert.equal(r.ctl.awsHealth().ok, false);
+  assert.equal(isBedrock(r.ctl.apply('workers', {})), false);
+  // A clear auth error counts at once.
+  const c = rig(t);
+  await onBedrock(c);
+  c.probeAnswer.value = { ok: false, problem: 'the AWS SSO session has expired' };
+  c.clock.t += PROBE_EVERY_MS + 1000;
+  c.ctl.evaluate();
+  await tick();
+  assert.equal(c.ctl.awsHealth().ok, false);
+  assert.equal(isBedrock(c.ctl.apply('workers', {})), false);
+});
+
+test("spend: an entry without a provider is Bedrock's (not $0); a result under the last total is a fresh counter; none of it is lost", async (t) => {
+  const r = rig(t);
+  await onBedrock(r);
+  const s = worker();
+  const haiku = 'us.anthropic.claude-haiku-5-5';
+  const noProvider = (u: object) => ({ modelUsage: { [haiku]: u } });
+  r.ctl.recordResult(s, noProvider({ inputTokens: 1_000_000, outputTokens: 0 }));
+  assert.ok(Math.abs(r.ctl.spentToday() - 0.1 * 1.1) < 1e-9, 'counted although provider is absent');
+  r.ctl.recordResult(s, { modelUsage: { [haiku]: { inputTokens: 9e6, provider: 'vertex' } } });
+  assert.ok(Math.abs(r.ctl.spentToday() - 0.11) < 1e-9, 'another provider is not Bedrock');
+  // A new process whose counter starts over: input is lower than last seen, cache write is higher; all of it counts.
+  const before = r.ctl.spentToday();
+  r.ctl.recordResult(s, noProvider({ inputTokens: 500_000, outputTokens: 0, cacheCreationInputTokens: 4_000_000 }));
+  const added = r.ctl.spentToday() - before;
+  assert.ok(Math.abs(added - ((500_000 * 0.1 + 4_000_000 * 0.125) / 1e6) * 1.1) < 1e-9, `the whole value, got ${added}`);
+  // And the next result of that process is the difference from it.
+  r.ctl.recordResult(s, noProvider({ inputTokens: 600_000, outputTokens: 0, cacheCreationInputTokens: 4_000_000 }));
+  assert.ok(Math.abs(r.ctl.spentToday() - before - added - 0.1 * 0.1 * 1.1) < 1e-9);
+});
+
+test('a changed profile or region: a live Bedrock process on the old one is stale and is told to restart; a current one is not', async (t) => {
+  const r = rig(t);
+  await onBedrock(r);
+  const info = (over: Partial<SessionInfo>) => ({ kind: 'worker', backend: 'bedrock', account: 'bedrock:sketchup-bedrock', bedrockRegion: 'us-west-2', ...over }) as SessionInfo;
+  assert.equal(r.ctl.wantFor(info({}))?.refresh, undefined, 'current');
+  assert.equal(r.ctl.wantFor(info({ bedrockRegion: undefined }))?.refresh, undefined, 'an older record without a region is left alone');
+  r.cfg.bedrock = { profile: 'other-profile' };
+  assert.equal(r.ctl.wantFor(info({}))?.backend, 'plan', 'the new profile is not checked yet, so the plan carries the work');
+  await tick();
+  assert.equal(r.ctl.wantFor(info({}))?.refresh, true);
+  assert.equal(r.ctl.wantFor(info({ account: 'bedrock:other-profile' }))?.refresh, undefined);
+  r.cfg.bedrock = { profile: 'other-profile', region: 'eu-west-1' };
+  r.ctl.evaluate();
+  await tick();
+  await tick();
+  assert.equal(r.ctl.wantFor(info({ account: 'bedrock:other-profile' }))?.refresh, true, 'the region differs');
+  assert.equal(r.ctl.wantFor(info({ account: 'bedrock:other-profile', bedrockRegion: 'eu-west-1' }))?.refresh, undefined);
 });

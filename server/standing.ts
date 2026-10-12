@@ -809,8 +809,8 @@ export class StandingAgents {
     return act ? a.runs.find((r) => r.id === act.runId)?.requestedBy : undefined;
   }
 
-  private onBackend(env: Record<string, string>, who: { userId: string } | undefined): Record<string, string> {
-    return this.backend ? this.backend.apply('standing', env, who) : env;
+  private onBackend(env: Record<string, string>, who: { userId: string } | undefined, model: string | undefined): Record<string, string> {
+    return this.backend ? this.backend.apply('standing', env, who, model) : env;
   }
 
   /** The folder of an agent that runs here; a machine's daemon makes its own (spec.init). */
@@ -849,7 +849,7 @@ export class StandingAgents {
       // person's own token when they have one.
       // Bedrock instead (w38, docs/bedrock.md) when the backend says so and the run's person has no token of their own;
       // buildOptions then drops the credentials of the server's own environment too.
-      env: this.onBackend({ ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, this.currentRequester(a), hostClaudeEnv(this.cfg, 'standing')) }, this.currentRequester(a)),
+      env: this.onBackend({ ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, this.currentRequester(a), hostClaudeEnv(this.cfg, 'standing')) }, this.currentRequester(a), a.model),
       login: hostAccount(this.cfg, 'standing') === 'login',
       claudeExecutable: this.cfg.claudeExecutable,
     };

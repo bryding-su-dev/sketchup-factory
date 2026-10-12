@@ -28,7 +28,7 @@ const tick = () => new Promise<void>((r) => setImmediate(r));
 
 /** The server's own environment, with the credentials a Bedrock process must not inherit. */
 function pollute(t: { after: (fn: () => void) => void }) {
-  const names = ['CLAUDE_CODE_OAUTH_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'AWS_PROFILE', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL'];
+  const names = ['CLAUDE_CODE_OAUTH_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'AWS_PROFILE', 'AWS_REGION', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL'];
   const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
   for (const n of names) delete process.env[n];
   Object.assign(process.env, { CLAUDE_CODE_OAUTH_TOKEN: SERVER_TOKEN, AWS_ACCESS_KEY_ID: 'AKIAIOSFODNN7EXAMPLE', AWS_SECRET_ACCESS_KEY: AWS_SECRET, AWS_SESSION_TOKEN: 'FwoGZXIvYXdzEXAMPLE' });
@@ -168,4 +168,30 @@ test('a machine agent never gets Bedrock: the Mac keeps its own login or token',
   plan(99);
   const place = (standing as unknown as { place(a: unknown): { env: Record<string, string> } }).place({ id: 'm', machineId: 'mac1', name: 'x' });
   assert.equal(place.env.CLAUDE_CODE_USE_BEDROCK, undefined);
+});
+
+test('a server started from a Bedrock shell: plan processes (mode plan, a person with a token) carry none of it, and the haiku pin holds', async (t) => {
+  const { agents, standing, agent, plan, info } = rig(t, { bedrock: { profile: 'sketchup-bedrock', mode: 'plan' } });
+  Object.assign(process.env, { CLAUDE_CODE_USE_BEDROCK: '1', AWS_PROFILE: 'shell-profile', AWS_REGION: 'eu-west-1', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'shell.haiku', ANTHROPIC_DEFAULT_SONNET_MODEL: 'shell.sonnet', ANTHROPIC_DEFAULT_OPUS_MODEL: 'shell.opus' });
+  plan(99);
+  const clean = (env: Record<string, string | undefined> | undefined, what: string) => {
+    for (const k of ['CLAUDE_CODE_USE_BEDROCK', 'AWS_PROFILE', 'AWS_REGION', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL']) assert.equal(env?.[k], undefined, `${what}: ${k}`);
+    assert.equal(env?.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-5-5', `${what}: the pin, not the shell's id`);
+  };
+  clean(agents.workerOptions(info()).env, 'worker');
+  clean(agents.orchestratorOptions(info({ kind: 'orchestrator', sandboxId: undefined })).env, 'orchestrator');
+  clean(standing.options({ id: 'x', kind: 'standing', standingId: agent.id } as SessionInfo).env, 'standing agent (the env buildOptions makes)');
+  clean(agents.workerOptions(info({ requestedBy: LOTH })).env, 'a person with their own token');
+});
+
+test('a fable worker stays on the plan even when Bedrock is wanted', async (t) => {
+  const { agents, plan, info } = rig(t);
+  plan(99);
+  agents.workerOptions(info());
+  await tick();
+  assert.equal(agents.workerOptions(info({ model: 'sonnet' })).env?.CLAUDE_CODE_USE_BEDROCK, '1');
+  const fable = agents.workerOptions(info({ model: 'fable' })).env!;
+  assert.equal(fable.CLAUDE_CODE_USE_BEDROCK, undefined);
+  assert.equal(fable.CLAUDE_CODE_OAUTH_TOKEN, HOST_TOKEN);
+  assert.equal(agents.orchestratorOptions(info({ kind: 'orchestrator', sandboxId: undefined, model: 'fable' })).env?.CLAUDE_CODE_USE_BEDROCK, undefined);
 });

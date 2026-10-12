@@ -19,9 +19,12 @@ import {
   estimateUsd,
   localDay,
   localWeekStart,
+  bedrockSupportsModel,
+  counterRestarted,
   percentNow,
   tokenDelta,
   withBedrock,
+  withPlan,
   type AutoState,
   type BedrockSettings,
   type Decision,
@@ -31,6 +34,7 @@ import {
 import { classifyAwsFailure } from './bedrockPreflight.ts';
 import { checkObject, readJsonDurable, writeJsonDurable } from './durable.ts';
 import { userToken } from './identity.ts';
+import { modelEnv } from './models.ts';
 import { hostAccount, hostRole } from './secrets.ts';
 import { HOST_LOGIN, hostToken, tokenKey, type UsageEntry } from './usage.ts';
 
@@ -39,6 +43,17 @@ export const PROBE_FRESH_MS = 2 * 60_000;
 export const PROBE_EVERY_MS = 5 * 60_000;
 /** How often the decision is looked at again, whatever else happens (the plan's numbers move without telling us). */
 export const TICK_MS = 30_000;
+/** A probe that failed without saying why (a timeout, a network blip) is tried again this soon; the second one in a row counts. */
+export const PROBE_RETRY_MS = 10_000;
+/** Two refusals of the model within this window... */
+export const ACCESS_ERROR_WINDOW_MS = 10 * 60_000;
+const ACCESS_ERROR_DEDUPE_MS = 2000;
+/** ...make Bedrock unavailable for this long, whatever the AWS login probe says. */
+export const ACCESS_COOLDOWN_MS = 30 * 60_000;
+/** A Bedrock turn that failed because the role may not use the model (not because the login expired). */
+const MODEL_REFUSED = /AccessDeniedException|not authorized|model access|ValidationException[^\n]{0,200}model/i;
+/** Probe answers that say nothing about the login itself: they need to repeat before Bedrock is given up. */
+const TRANSIENT_PROBE = new Set(['the AWS check timed out', 'the AWS check failed']);
 const TITLE_CHARS = 80;
 /** The cumulative-usage memory is bounded; the oldest entries go first. */
 const MAX_LAST = 4000;
@@ -93,12 +108,14 @@ interface StateFile {
   /** The cumulative usage last seen per "<session>|<model id>": a result carries the session's running total. */
   last: Record<string, { tokens: TokenUsage; costUsd: number }>;
   notified: { warnDay?: string; capDay?: string; problem?: string };
+  /** Bedrock refused the model twice: unavailable until then (epoch ms), with the sentence that says so. */
+  refused?: { until: number; problem: string };
 }
 
 const emptyState = (): StateFile => ({ auto: {}, active: {}, last: {}, notified: {} });
 
 export interface BackendDeps {
-  cfg: Pick<Config, 'bedrock' | 'claudeAccounts' | 'claudeEnv' | 'userClaudeEnv'> & { dataDir: string };
+  cfg: Pick<Config, 'bedrock' | 'claudeAccounts' | 'claudeEnv' | 'userClaudeEnv' | 'modelPins' | 'defaultModel' | 'orchestrator'> & { dataDir: string };
   /** The usage tracker's entries (UsageTracker.entries): the plan meters of each account. */
   usage: () => ReadonlyMap<string, UsageEntry>;
   /** One line to the owner's orchestrator. */
@@ -135,6 +152,11 @@ export class BedrockBackend {
   private state: StateFile = emptyState();
   private health: Health = { ok: false, checkedAt: 0 };
   private probing = false;
+  /** Probe failures in a row that did not say why (timeouts, network), and when the next try may start. */
+  private blips = 0;
+  private retryAt = 0;
+  /** When Bedrock refused the model lately (epoch ms). */
+  private accessErrors: number[] = [];
   /** The profile and region the last probe was for: another one makes its answer worthless. */
   private probedFor?: string;
   private timer?: NodeJS.Timeout;
@@ -235,13 +257,16 @@ export class BedrockBackend {
     const s = this.settings;
     let any = false;
     for (const [model, e] of Object.entries(m.modelUsage ?? {})) {
-      if (e.provider !== 'bedrock') continue;
+      // The process is known to be Bedrock: an entry counts unless it says another provider. A missing provider is not $0.
+      if (e.provider && e.provider !== 'bedrock') continue;
       const cur: TokenUsage = { inputTokens: e.inputTokens ?? 0, outputTokens: e.outputTokens ?? 0, cacheReadInputTokens: e.cacheReadInputTokens ?? 0, cacheCreationInputTokens: e.cacheCreationInputTokens ?? 0 };
       const key = `${info.id}|${model}`;
       const prev = this.state.last[key];
       const delta = tokenDelta(cur, prev?.tokens);
       const sdk = e.costUSD ?? 0;
-      const sdkDelta = prev && sdk >= prev.costUsd ? sdk - prev.costUsd : sdk;
+      // A counter that went down in any field belongs to a new process (or a reset): its whole value counts, on top of what was counted before.
+      const fresh = counterRestarted(cur, prev?.tokens);
+      const sdkDelta = prev && !fresh && sdk >= prev.costUsd ? sdk - prev.costUsd : sdk;
       delete this.state.last[key]; // re-inserted last: the oldest go first when the memory is trimmed
       this.state.last[key] = { tokens: cur, costUsd: sdk };
       if (!delta.inputTokens && !delta.outputTokens && !delta.cacheReadInputTokens && !delta.cacheCreationInputTokens) continue;
@@ -268,7 +293,35 @@ export class BedrockBackend {
 
   /** A Bedrock turn failed with this text (a result, or the process threw): AWS credentials get probed now when it says so. */
   bedrockError(text: string) {
+    const refused = MODEL_REFUSED.exec(text);
+    if (refused) this.modelRefused(refused[0]);
     if (AWS_AUTH_ERROR.test(text)) void this.checkAws();
+  }
+
+  /** Bedrock said no to the model: twice within ACCESS_ERROR_WINDOW_MS and it is unavailable for ACCESS_COOLDOWN_MS (the AWS login probe cannot lift that). */
+  private modelRefused(what: string) {
+    const now = this.now();
+    // One failed turn can be reported twice (its result, then the process's error): that is one refusal.
+    if (this.accessErrors.length && now - this.accessErrors[this.accessErrors.length - 1] < ACCESS_ERROR_DEDUPE_MS) return;
+    this.accessErrors = [...this.accessErrors.filter((t) => now - t < ACCESS_ERROR_WINDOW_MS), now];
+    if (this.accessErrors.length < 2 || (this.state.refused && this.state.refused.until > now)) return;
+    const kind = /ValidationException/i.test(what) ? 'ValidationException' : /AccessDenied/i.test(what) ? 'AccessDeniedException' : /model access/i.test(what) ? 'no model access' : 'not authorized';
+    this.state.refused = { until: now + ACCESS_COOLDOWN_MS, problem: `Bedrock refused the model (${kind}): ask your AWS admin for bedrock:InvokeModel on the Claude inference profiles in ${this.settings.region}` };
+    this.accessErrors = [];
+    this.save();
+    this.evaluate();
+    this.d.changed?.();
+  }
+
+  /** The refusal still in force (it ends by itself), or undefined. */
+  private refusal(): string | undefined {
+    const r = this.state.refused;
+    if (!r) return undefined;
+    if (this.now() >= r.until) {
+      delete this.state.refused;
+      return undefined;
+    }
+    return r.problem;
   }
 
   // ---------------------------------------------------------------- AWS health
@@ -297,7 +350,15 @@ export class BedrockBackend {
       return;
     }
     this.probedFor = `${s.profile}|${s.region}`;
-    this.health = { ok: r.ok, checkedAt: this.now(), ...(r.ok ? {} : { problem: r.problem ?? 'the AWS check failed' }) };
+    // One timeout or network blip is not an expired login: it takes two in a row. A clear answer counts at once.
+    const problem = r.problem ?? 'the AWS check failed';
+    if (!r.ok && TRANSIENT_PROBE.has(problem) && ++this.blips < 2) {
+      this.retryAt = this.now() + PROBE_RETRY_MS;
+      this.evaluate();
+      return;
+    }
+    this.blips = 0;
+    this.health = { ok: r.ok, checkedAt: this.now(), ...(r.ok ? {} : { problem }) };
     this.evaluate();
     this.d.changed?.();
   }
@@ -306,6 +367,8 @@ export class BedrockBackend {
   private unavailable(key: string): string | undefined {
     const s = this.settings;
     if (!s.profile) return 'no AWS profile is set (config bedrock.profile)';
+    const refused = this.refusal();
+    if (refused) return refused;
     if (this.health.checkedAt && !this.health.ok) return this.health.problem ?? 'the AWS check failed';
     // A switch to Bedrock needs an ok probe no older than PROBE_FRESH_MS; one already on it keeps going on the 5-minute probe.
     const fresh = this.health.ok && this.now() - this.health.checkedAt <= PROBE_FRESH_MS;
@@ -315,7 +378,10 @@ export class BedrockBackend {
 
   /** The problem to report (not the transient "checking"), or undefined. */
   private problem(): string | undefined {
-    if (!this.settings.profile) return 'no AWS profile is set (config bedrock.profile)';
+    // Not being set up is no problem unless Bedrock was asked for by name.
+    if (!this.settings.profile) return this.settings.mode === 'bedrock' ? 'no AWS profile is set (config bedrock.profile)' : undefined;
+    const refused = this.refusal();
+    if (refused) return refused;
     return this.health.checkedAt && !this.health.ok ? (this.health.problem ?? 'the AWS check failed') : undefined;
   }
 
@@ -348,6 +414,10 @@ export class BedrockBackend {
       this.probedFor = undefined;
       this.health = { ok: false, checkedAt: 0 };
       delete this.state.notified.problem;
+      this.blips = 0;
+      this.retryAt = 0;
+      this.accessErrors = [];
+      delete this.state.refused; // another profile or region may be allowed the model
       // An account on Bedrock with the old profile is a new switch with this one: it waits for its probe.
       for (const [key, a] of Object.entries(this.state.active)) if (a.backend === 'bedrock') delete this.state.active[key];
     }
@@ -389,7 +459,8 @@ export class BedrockBackend {
       this.say(this.switchNotice(split ? roles : undefined, decision, s));
     }
 
-    const wanted = [...byKey.values()].some(({ decision }) => decision.backend === 'bedrock' || decision.degraded);
+    // Without a profile Bedrock is not set up, which says nothing unless it was asked for by name (mode "bedrock").
+    const wanted = (!!s.profile || s.mode === 'bedrock') && [...byKey.values()].some(({ decision }) => decision.backend === 'bedrock' || decision.degraded);
     const problem = this.problem();
     if (problem && wanted && this.state.notified.problem !== problem) {
       this.state.notified.problem = problem;
@@ -423,7 +494,7 @@ export class BedrockBackend {
     if (s.profile && wanted && !this.probing) {
       const age = now - this.health.checkedAt;
       const onBedrock = [...byKey.keys()].every((k) => this.state.active[k]?.backend === 'bedrock');
-      if (!this.health.checkedAt || age >= PROBE_EVERY_MS || (!onBedrock && age > PROBE_FRESH_MS)) void this.checkAws();
+      if (now >= this.retryAt && (!this.health.checkedAt || age >= PROBE_EVERY_MS || (!onBedrock && age > PROBE_FRESH_MS))) void this.checkAws();
     }
     const shape = JSON.stringify(this.status());
     if (shape !== this.lastShape) {
@@ -437,6 +508,7 @@ export class BedrockBackend {
   private fixFor(problem: string): string {
     const s = this.settings;
     if (!s.profile) return 'ask me to set bedrock.profile to your AWS SSO profile (see `aws configure list-profiles`)';
+    if (/refused the model/.test(problem)) return 'ask your AWS admin to allow the Claude models; Bedrock is tried again by itself in half an hour';
     if (/not installed/.test(problem)) return 'install the AWS CLI on this host';
     if (/profile was not found/.test(problem)) return `add the profile to ~/.aws/config (\`aws configure sso --profile ${s.profile}\`) or point bedrock.profile at an existing one`;
     return awsFix(s.profile, problem);
@@ -469,29 +541,59 @@ export class BedrockBackend {
     return !!userToken(this.d.cfg, (this.d.whoFor?.(info) ?? info.requestedBy)?.userId);
   }
 
-  /**
-   * The environment an agent of `role` on this host starts with: `env` as it is, or with the Bedrock variables when the
-   * decision is Bedrock. Only for an agent that has no token of its own: the person's own token always keeps the plan.
-   */
-  apply<E extends Record<string, string | undefined>>(role: HostRole, env: E, requester?: { userId: string }): E {
-    if (requester && userToken(this.d.cfg, requester.userId)) return env;
-    const d = this.evaluate().get(role);
-    return d?.backend === 'bedrock' ? withBedrock(env, this.settings) : env;
+  /** The model a session of this info runs: its own, else its role's default. */
+  private modelOf(info: SessionInfo): string | undefined {
+    return info.model ?? this.defaultModel(hostRole(info.kind));
   }
 
-  /** The backend a process of this session would start on now: for recycling an idle one. Undefined when it does not apply. */
-  wantFor(info: SessionInfo): { backend: 'plan' | 'bedrock'; reason: string } | undefined {
-    // A standing agent's run is for a person this session does not know (their own token would keep the plan): its idle
-    // process is left to the idle reaper, and the next process starts on the right backend.
-    if (info.machineId || info.kind === 'standing' || this.ownsToken(info)) return undefined;
+  private defaultModel(role: HostRole): string | undefined {
+    return role === 'orchestrator' ? this.d.cfg.orchestrator?.model : this.d.cfg.defaultModel;
+  }
+
+  /** `env` as a plan process gets it: nothing of Bedrock, whatever the server inherited, and the model pins (config modelPins, claudeEnv over them) back. */
+  private planEnv<E extends Record<string, string | undefined>>(env: E, userId?: string): E {
+    const pins = (from: Record<string, string> | undefined) => Object.fromEntries(Object.entries(from ?? {}).filter(([k]) => /^ANTHROPIC_DEFAULT_(OPUS|SONNET|HAIKU)_MODEL$/.test(k)));
+    return { ...withPlan(env), ...modelEnv(this.d.cfg), ...pins(this.d.cfg.claudeEnv), ...pins(userId ? this.d.cfg.userClaudeEnv?.[userId] : undefined) } as E;
+  }
+
+  /**
+   * The environment an agent of `role` on this host starts with: `env` with the Bedrock variables when the decision is
+   * Bedrock, else on the plan (what the server inherited of Bedrock is removed). Only an agent that has no token of its
+   * own and runs a model Bedrock has an id for goes to Bedrock: the person's own token always keeps the plan.
+   */
+  apply<E extends Record<string, string | undefined>>(role: HostRole, env: E, requester?: { userId: string }, model?: string): E {
+    if (requester && userToken(this.d.cfg, requester.userId)) return this.planEnv(env, requester.userId);
+    const d = this.evaluate().get(role);
+    return d?.backend === 'bedrock' && bedrockSupportsModel(model ?? this.defaultModel(role)) ? withBedrock(env, this.settings) : this.planEnv(env, requester?.userId);
+  }
+
+  /**
+   * The backend a process of this session would start on now: for recycling an idle one. `blocked`: neither backend has
+   * room, so a Bedrock process must still come off Bedrock. Undefined when it does not apply.
+   */
+  wantFor(info: SessionInfo): { backend: 'plan' | 'bedrock'; reason: string; refresh?: true } | undefined {
+    if (info.machineId || this.ownsToken(info)) return undefined;
+    const model = this.modelOf(info);
+    if (!bedrockSupportsModel(model)) return { backend: 'plan', reason: `${model ?? 'its model'} has no Bedrock id, so it stays on your Claude plan` };
     const d = this.evaluate().get(hostRole(info.kind));
-    if (!d || d.backend === 'blocked') return undefined;
-    return { backend: d.backend, reason: d.backend === 'bedrock' ? (d.state.why ?? d.reason) : d.reason };
+    if (!d) return undefined;
+    // A standing agent's run is for a person this session does not know (their own token would keep the plan): its idle
+    // process is left to the idle reaper, and the next process starts on the right backend. Only coming off Bedrock is safe to do.
+    if (info.kind === 'standing' && d.backend === 'bedrock') return undefined;
+    if (d.backend === 'blocked') return { backend: 'plan', reason: d.reason };
+    if (d.backend === 'bedrock') {
+      // The same backend on another profile or region (set_app_config): the process is stale all the same.
+      const s = this.settings;
+      const stale = info.backend === 'bedrock' && ((info.account !== undefined && info.account !== `bedrock:${s.profile}`) || (info.bedrockRegion !== undefined && info.bedrockRegion !== s.region));
+      return { backend: 'bedrock', reason: stale ? 'the Bedrock profile or region changed' : (d.state.why ?? d.reason), ...(stale ? { refresh: true as const } : {}) };
+    }
+    return { backend: d.backend, reason: d.reason };
   }
 
   /** Why a message to this session must wait (both backends are out of room), or undefined. */
   gateFor(info: SessionInfo): string | undefined {
-    if (info.machineId || this.ownsToken(info)) return undefined;
+    // A session Bedrock cannot run (its model has no id) is on the plan whatever the decision: it is not this gate's.
+    if (info.machineId || this.ownsToken(info) || !bedrockSupportsModel(this.modelOf(info))) return undefined;
     const d = this.evaluate().get(hostRole(info.kind));
     return d?.backend === 'blocked' ? d.reason : undefined;
   }
