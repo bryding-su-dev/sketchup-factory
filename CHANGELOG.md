@@ -12,6 +12,7 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- **The coordinators' routine turns run on Sonnet 5.5** (port of upstream w1158, #366, model switching only): a turn no person started (a worker's report, a timer, a check-in) runs on `claude-sonnet-5-5`; a person's message, the dispatcher's request decisions and a person's reaction stay on Opus; a routine turn within 60 minutes of an Opus turn stays on Opus. `set_app_config orchestrator.routineModel off` turns it off. docs/models.md.
 - README rewritten for the SketchUp Factory as it runs (a Mac host, plain worktree sandboxes); `docs/README.md` indexes the docs
   and marks the inherited Final Factory ones. SECURITY.md and CONTRIBUTING.md name this fork.
 - **Workers default to Sonnet 5.5** (port of upstream w680, #230): `defaultModel` (what `start_agent` and standing agents

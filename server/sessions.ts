@@ -254,6 +254,12 @@ export function compactedLine(before: number, after: { total: number; max?: numb
  * The process is started lazily on the first message and resumed from the SDK session id after
  * a stop or a server restart.
  */
+/**
+ * The model for a message about to be sent to a session (server/turnModel.ts): undefined leaves it as it is.
+ * `opens`: the message starts a turn rather than joining one.
+ */
+export type TurnModelPick = (info: SessionInfo, from: 'human' | 'orchestrator' | 'system', text: string, opens: boolean) => { model: string; kind: string } | undefined;
+
 export class AgentSession implements SessionHandle {
   readonly info: SessionInfo;
   private q?: Query;
@@ -286,12 +292,17 @@ export class AgentSession implements SessionHandle {
   private readonly store: SessionSink;
   private readonly makeOptions: OptionsFactory;
   private readonly events: EventEmitter;
+  /** The coordinators' per-turn model (server/turnModel.ts); workers have none. */
+  private readonly pickModel?: TurnModelPick;
+  /** The model the live process answers with now: set at its start, changed by setModel. */
+  private liveModel?: string;
 
-  constructor(info: SessionInfo, store: SessionSink, makeOptions: OptionsFactory, events: EventEmitter) {
+  constructor(info: SessionInfo, store: SessionSink, makeOptions: OptionsFactory, events: EventEmitter, pickModel?: TurnModelPick) {
     this.info = info;
     this.store = store;
     this.makeOptions = makeOptions;
     this.events = events;
+    this.pickModel = pickModel;
   }
 
   get live() {
@@ -323,9 +334,14 @@ export class AgentSession implements SessionHandle {
     // A person's message (or the orchestrator's on a person's behalf) says who this session now works for; the
     // harness's own messages carry the person they are about, but do not change that.
     if (requestedBy && from !== 'system') this.info.lastRequestedBy = requestedBy;
-    if (!this.q) this.start();
+    const opensTurn = !this.info.turnOpenSince || !this.turnStarter;
+    // A coordinator's turn runs on its own model or the routine one: chosen before its message reaches the process.
+    const pick = this.pickModel?.(this.info, from, text, opensTurn);
+    const pickedModel = pick ? startModel(pick.model) : undefined;
+    if (!this.q) this.start(pickedModel);
+    else if (pick && pickedModel !== this.liveModel) this.switchModel(pickedModel, pick.kind);
     // The message that opens a turn decides whose it is (w607); one sent while it runs joins it without changing that.
-    if (!this.info.turnOpenSince || !this.turnStarter) this.turnStarter = { uuid, from };
+    if (opensTurn) this.turnStarter = { uuid, from };
     this.lastFrom = from;
     this.stoppedOnPurpose = false;
     clearTimeout(this.graceTimer);
@@ -395,13 +411,31 @@ export class AgentSession implements SessionHandle {
     }
   }
 
-  private start() {
+  /**
+   * The live process answers from its next API call on with `model`: the SDK's setModel, a control message written before
+   * the next user message, so the turn that message opens runs on it. The transcript says so, one line per change.
+   */
+  private switchModel(model: string | undefined, kind: string) {
+    const q = this.q;
+    if (!q || !model) return;
+    const from = this.liveModel;
+    this.liveModel = model;
+    void q.setModel(model).catch((e: unknown) => {
+      // The next turn runs on the old model; the next message tries again.
+      if (this.q === q && this.liveModel === model) this.liveModel = from;
+      this.store.append(this.info.id, { kind: 'error', text: `Could not switch to ${model}: ${e instanceof Error ? e.message : String(e)}` });
+    });
+    this.store.append(this.info.id, { kind: 'system', text: `Model: ${model} from this turn on (${kind === 'routine' ? 'a turn no person started' : kind === 'person' ? "a person's own message" : 'a decision turn'}).` });
+  }
+
+  private start(model?: string) {
     this.input = new InputQueue();
     const abort = (this.abort = new AbortController());
     const base = this.makeOptions(this.info);
+    this.liveModel = model ?? startModel(this.info.model ?? base.model);
     const options: Options = {
       ...base,
-      model: startModel(this.info.model ?? base.model),
+      model: this.liveModel,
       permissionMode: this.info.permissionMode,
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
@@ -753,6 +787,9 @@ export class AgentSession implements SessionHandle {
 }
 
 export class SessionManager {
+  /** The coordinators' per-turn model (server/turnModel.ts), set by Agents at boot; nothing else is switched. */
+  turnModel?: TurnModelPick;
+  private readonly pickModel: TurnModelPick = (info, from, text, opens) => this.turnModel?.(info, from, text, opens);
   readonly sessions = new Map<string, SessionHandle>();
   /**
    * 'turnEnd' (session, text, TurnEndMeta) and 'permission' (session, pending) — the orchestrator listens;
@@ -827,7 +864,7 @@ export class SessionManager {
         cutOff.push({ ...info });
       }
       if (info.status !== 'stopped') info.status = 'stopped';
-      this.sessions.set(info.id, new AgentSession(info, this.store, f, this.events));
+      this.sessions.set(info.id, new AgentSession(info, this.store, f, this.events, this.pickModel));
       this.store.putSession(info);
     }
     return cutOff;
@@ -853,7 +890,7 @@ export class SessionManager {
       ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}),
       ...(opts.orchestratorRole ? { orchestratorRole: opts.orchestratorRole } : {}),
     };
-    const s = new AgentSession(info, this.store, opts.options, this.events);
+    const s = new AgentSession(info, this.store, opts.options, this.events, this.pickModel);
     this.sessions.set(info.id, s);
     this.store.putSession(info);
     return s;

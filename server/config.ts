@@ -371,6 +371,14 @@ export interface Config {
      * 100,000 tokens or more, compacts the conversation after it. Default 1; 0 turns this trigger off.
      */
     compactAtTurnUsd?: number;
+    /**
+     * The model of the coordinators' routine turns, those no person's own message started (server/turnModel.ts,
+     * docs/orchestrators.md "Which model answers a turn"). Default claude-sonnet-5-5; "off" keeps every turn on `model`.
+     * Workers never use it.
+     */
+    routineModel?: string | null;
+    /** Minutes after a turn on `model` during which routine turns stay on `model` too, default 60: switching back and forth rewrites the conversation into each model's cache. */
+    routineAfterMinutes?: number;
   };
   worker: {
     permissionMode: PermissionMode;
