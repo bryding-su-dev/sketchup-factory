@@ -344,7 +344,7 @@ const repairSpend = async () => {
   let moved = 0;
   let given = 0;
   const skipped: string[] = [];
-  for (const s of [...spend.sessions.values()].filter((x) => x.fixV !== 1 || (isCoordinatorRole(x.role) && x.coordV !== 2))) {
+  for (const s of [...spend.sessions.values()].filter((x) => x.fixV !== 2 || (isCoordinatorRole(x.role) && x.coordV !== 2))) {
     try {
       const events = store.hasTranscript(s.id) ? store.readTranscript(s.id) : undefined;
       const info = store.sessions.get(s.id);
