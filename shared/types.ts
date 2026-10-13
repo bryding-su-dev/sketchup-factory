@@ -176,6 +176,12 @@ export interface SessionInfo {
   activeTool?: { id: string; name: string; since: string };
   turns: number;
   costUsd: number;
+  /**
+   * The CLI's own running total (`total_cost_usd`) at this session's last result, any process (w1161). A resumed process
+   * continues from the total its transcript saved, so its first result is this plus the new turn; costUsd may run
+   * ahead of it (a process that started from zero adds to costUsd, not to this). Absent on sessions older than w1161.
+   */
+  sdkCostUsd?: number;
   pendingPermissions: PendingPermission[];
   /** Last assistant text of the most recent finished turn, trimmed; for cards and summaries. */
   lastResult?: string;
