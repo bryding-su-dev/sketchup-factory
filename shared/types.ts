@@ -1,6 +1,7 @@
 // The wire contract between the server and the web UI. Both sides import this file; keep it
 // free of runtime code other than constants so the browser bundle and Node's type stripping
 // can both load it.
+import type { TurnUsage } from './spend.ts';
 
 /** 'blocked': the editor is alive but stuck on a modal dialog, or silent for too long while starting (see unity.blocked). */
 /** A working tree's real state, read from git (docs: server/gitStatus.ts). */
@@ -87,7 +88,8 @@ export interface Sandbox {
   git?: GitStatus;
 }
 
-export type SessionKind = 'orchestrator' | 'worker' | 'standing';
+/** `ops`: upstream's orchestration worker (not run by this host); spend attribution still knows the kind. */
+export type SessionKind = 'orchestrator' | 'worker' | 'standing' | 'ops';
 
 /**
  * What an orchestrator is (docs/orchestrators.md): the portal's one dispatcher, which owns every tool that changes
@@ -174,6 +176,12 @@ export interface SessionInfo {
   activeTool?: { id: string; name: string; since: string };
   turns: number;
   costUsd: number;
+  /**
+   * The CLI's own running total (`total_cost_usd`) at this session's last result, any process (w1161). A resumed process
+   * continues from the total its transcript saved, so its first result is this plus the new turn; costUsd may run
+   * ahead of it (a process that started from zero adds to costUsd, not to this). Absent on sessions older than w1161.
+   */
+  sdkCostUsd?: number;
   pendingPermissions: PendingPermission[];
   /** Last assistant text of the most recent finished turn, trimmed; for cards and summaries. */
   lastResult?: string;
@@ -214,6 +222,8 @@ export interface SessionInfo {
    * Kept by the portal, never by the daemon: no dropped link or restart resumes it until it is sent a message again.
    */
   stoppedOnPurpose?: boolean;
+  /** The Claude account this session's current process ran on, in words safe to show (spend attributes turns to it). Not set by this host yet. */
+  ranAs?: string;
 }
 
 /**
@@ -300,7 +310,7 @@ export type TranscriptEvent =
   | { seq: number; t: string; kind: 'thinking'; text: string }
   | { seq: number; t: string; kind: 'tool_use'; toolUseId: string; name: string; input: unknown; parentToolUseId?: string | null }
   | { seq: number; t: string; kind: 'tool_result'; toolUseId: string; isError: boolean; text: string; images?: ImageRef[] }
-  | { seq: number; t: string; kind: 'result'; ok: boolean; text: string; costUsd: number; turns: number; durationMs: number; answers?: string[] }
+  | { seq: number; t: string; kind: 'result'; ok: boolean; text: string; costUsd: number; turns: number; durationMs: number; answers?: string[]; usage?: TurnUsage }
   | { seq: number; t: string; kind: 'system'; text: string }
   | { seq: number; t: string; kind: 'error'; text: string }
   | { seq: number; t: string; kind: 'permission'; requestId: string; toolName: string; input: unknown; decision?: 'allow' | 'deny' };
@@ -1053,6 +1063,14 @@ export interface WorkItem {
   flag?: { kind: 'design'; text: string; at: string; for: Requester[] };
   /** Handed to FFBox (docs/intake.md, "Ledger → FFBox"): the submit's id, and what FFBox said about it. */
   ffbox?: WorkFfbox;
+  /**
+   * When each worker was last given it, by session id (spend attribution reads these, server/spend.ts servedAt): `sent` by
+   * a start or a message with its work_id, `linked` by decide_work link. Not written by this host yet: spend falls back to
+   * the request's creation time.
+   */
+  links?: Record<string, { at: string; how: 'sent' | 'linked' }>;
+  /** The standing agent's delegation request this was filed from (spend kinds read it; delegations here file no ledger requests yet). */
+  delegation?: { id: string; agentId: string; agentName: string; auto: boolean };
 }
 
 /**
