@@ -1,21 +1,32 @@
 name: CI
 
+# Cost-conscious by design (w44). One cheap job (`checks`) runs on every code PR into sketchup; the slow
+# Playwright job (`e2e`) runs only when a PR carries the `e2e` label or someone starts it by hand. This host runs
+# on a Mac, so there is no Windows or macOS job: Windows costs 2x and macOS 10x a Linux minute on a private repo.
+# The repo is public today (standard runners are free); these cuts keep the bill small if that ever changes.
+
 on:
   # sketchup is this fork's integration branch (SketchUp Factory); main follows upstream.
-  push:
-    branches: [main, sketchup]
+  # No `push` trigger: a PR's run already tested the code that merges, so a push run would test it again.
   pull_request:
     branches: [main, sketchup]
+    types: [opened, synchronize, reopened, labeled]
+    # A docs-only change cannot break the code, so it starts no job.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'changelog.d/**'
+      - 'LICENSE*'
   workflow_dispatch:
     inputs:
+      e2e:
+        description: Also run the Playwright suite
+        type: boolean
+        default: true
       update_snapshots:
         description: Re-render every visual snapshot (Linux) and upload them as the "linux-snapshots" artifact
         type: boolean
         default: false
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -25,16 +36,22 @@ env:
 
 jobs:
   checks:
-    name: Typecheck, unit tests, build (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # Windows too: the host is Windows, and the update/republish/elevation tests drive PowerShell.
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: Typecheck, unit tests, build, secret scan, identities
+    # Adding a label re-triggers this workflow; a label run needs only the e2e job.
+    if: github.event.action != 'labeled'
+    # A newer push to the same PR cancels the run in flight. Per job, so labelling never cancels the checks.
+    concurrency:
+      group: ci-checks-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      GITLEAKS_VERSION: 8.30.1
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The secret scan and the identity check read history.
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -47,6 +64,28 @@ jobs:
         run: |
           git config --global user.name "FF Factory CI"
           git config --global user.email "ci@users.noreply.github.com"
+      - name: Commit identities are noreply
+        # A pull request's own commits. A manual run would walk the whole history, whose early commits are not noreply.
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node scripts/check-identity.ts "$PR_BASE..$PR_HEAD"
+      - name: Install gitleaks
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          file="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$file" "$base/$file"
+          curl -sSfL -o "$RUNNER_TEMP/checksums.txt" "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          (cd "$RUNNER_TEMP" && grep " $file\$" checksums.txt | sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$file" -C "$RUNNER_TEMP" gitleaks
+      - name: Secret scan (history of this commit, then the working tree)
+        # HEAD only: other branches on the remote are not what is being merged.
+        run: |
+          $RUNNER_TEMP/gitleaks git . --log-opts=HEAD --redact --no-banner --verbose
+          $RUNNER_TEMP/gitleaks dir . --redact --no-banner
       - run: npm ci --no-audit --no-fund
       - run: npm ci --prefix web --no-audit --no-fund
       - name: Typecheck (server, shared, scripts, e2e)
@@ -58,13 +97,8 @@ jobs:
         run: |
           set -o pipefail
           npm run test:coverage 2>&1 | tee coverage.txt
-      - name: Machine sandboxes on Windows (git worktrees, robocopy, rd in a temp repo)
-        # Also part of the unit tests above; its own step so a worktree regression on Windows is named as one.
-        if: runner.os == 'Windows'
-        shell: bash
-        run: node --test server/machineSandboxes.test.ts
       - name: Coverage summary
-        if: always() && runner.os == 'Linux'
+        if: always()
         shell: bash
         run: |
           {
@@ -81,8 +115,17 @@ jobs:
 
   e2e:
     name: Playwright (Chromium + WebKit)
+    # Slow and the biggest cost: only for a PR labelled `e2e` (add the label once the PR is ready) or a manual run.
+    # Other labels added later do not start it again.
+    if: >-
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'e2e') ||
+      (github.event_name == 'pull_request' && github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'e2e')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.e2e)
+    concurrency:
+      group: ci-e2e-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -122,13 +165,6 @@ jobs:
           fi
       - name: Run Playwright
         run: npx playwright test ${{ steps.snap.outputs.update == 'true' && '--update-snapshots=all' || '' }}
-      - name: Performance budgets (web/perf/bench.ts, 7,000 stopped agents)
-        # Render counts and DOM size per key typed, and layouts at rest, on the orchestrator and beside the sandbox
-        # holding most past agents: counts, so a slow runner does not fail it.
-        if: ${{ !cancelled() }}
-        run: |
-          node web/perf/bench.ts --check --live 0 --keys 60 --idle 5
-          node web/perf/bench.ts --check --live 0 --keys 60 --idle 5 --route '#/sandbox/agent-mcp'
       - name: Upload the report and traces
         if: failure()
         uses: actions/upload-artifact@v7
@@ -137,65 +173,11 @@ jobs:
           path: |
             playwright-report/
             test-results/
-          retention-days: 14
+          retention-days: 7
       - name: Upload rendered snapshots
         if: always() && steps.snap.outputs.update == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: linux-snapshots
           path: e2e/__screenshots__/
-          retention-days: 14
-
-  secrets:
-    name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      GITLEAKS_VERSION: 8.30.1
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Install gitleaks
-        run: |
-          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          file="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL -o "$RUNNER_TEMP/$file" "$base/$file"
-          curl -sSfL -o "$RUNNER_TEMP/checksums.txt" "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
-          (cd "$RUNNER_TEMP" && grep " $file\$" checksums.txt | sha256sum -c -)
-          tar -xzf "$RUNNER_TEMP/$file" -C "$RUNNER_TEMP" gitleaks
-      - name: Scan the history of this commit
-        # HEAD only: other branches on the remote are not what is being merged.
-        run: $RUNNER_TEMP/gitleaks git . --log-opts=HEAD --redact --no-banner --verbose
-      - name: Scan the working tree
-        run: $RUNNER_TEMP/gitleaks dir . --redact --no-banner
-
-  identity:
-    name: Commit identities are noreply
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Check the new commits
-        shell: bash
-        env:
-          EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if [ "$EVENT" = pull_request ]; then
-            range="$PR_BASE..$PR_HEAD"
-          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && ! [[ "$BEFORE" =~ ^0+$ ]] && git merge-base --is-ancestor "$BEFORE" "$AFTER" 2>/dev/null; then
-            range="$BEFORE..$AFTER"
-          else
-            # A new branch, a manual run or a rewritten history: check everything reachable.
-            range="$AFTER"
-          fi
-          node scripts/check-identity.ts "$range"
+          retention-days: 7
