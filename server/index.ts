@@ -52,6 +52,7 @@ import { VoiceService } from './voice.ts';
 import { MAX_DICTATION_SECONDS, MAX_TTS_CHARS, buildVoicePrompt, wavSeconds, type SpeakRequest, type TranscribeRequest, type VocabularySource } from '../shared/voice.ts';
 import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, Requester, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
 import { SpendStore, buildReport } from './spend.ts';
+import type { SpendSummaryReply } from '../shared/spend.ts';
 import { dataGuardSettings, footprint, gzipRatioCached, runDataGuard } from './dataGuard.ts';
 
 const WEB = path.join(ROOT, 'web', 'dist');
@@ -325,6 +326,23 @@ const backfillSpend = async () => {
   }
 };
 setTimeout(() => void backfillSpend(), 90_000).unref();
+// The coordination recorded before the split (w1160, docs/spend.md "Coordination") gets its days from the coordinators' transcripts, once.
+const splitCoordinationSpend = async () => {
+  if (isDryRun) return;
+  let done = 0;
+  let usd = 0;
+  for (const s of [...spend.sessions.values()].filter((x) => x.legacyRequests && !x.coordSplit)) {
+    try {
+      usd += spend.splitLegacyCoordination(s.id, store.hasTranscript(s.id) ? store.readTranscript(s.id) : undefined, store.sessions.get(s.id));
+      done++;
+    } catch (e) {
+      console.warn(`spend coordination split: ${s.id}: ${(e as Error).message}`);
+    }
+    await new Promise((r) => setImmediate(r));
+  }
+  if (done) console.log(`spend coordination split: ${done} coordinator session(s), $${usd.toFixed(2)} given its days`);
+};
+setTimeout(() => void splitCoordinationSpend(), 150_000).unref();
 // The ledger moves on (requests close, titles change, closed ones drop out after a week): the spend record follows (w859).
 setInterval(() => spend.syncWork(), 5 * 60_000).unref();
 // Who hears about a session (docs/orchestrators.md): a person's own orchestrator only them, the dispatcher's turns
@@ -628,10 +646,14 @@ route('POST', '/api/backend/mode', async (req) => {
 // What work costs (w859, docs/spend.md): the cost of each request in the ledger, one request in full, and the analysis.
 route('GET', '/api/spend/summary', async () => {
   spend.syncWork();
-  const requests: Record<string, { usd: number; in: number; out: number; cr: number; cw: number; sessions: number; estimatedUsd: number }> = {};
+  const requests: SpendSummaryReply['requests'] = {};
   for (const w of store.work.values()) {
     const r = spend.request(w.id);
-    if (r) requests[w.id] = { usd: r.total.usd, in: r.total.in, out: r.total.out, cr: r.total.cr, cw: r.total.cw, sessions: Object.keys(r.sessions).length, estimatedUsd: r.estimated.usd };
+    if (r) {
+      // the workers' own cost; the coordinators' turns on the request are beside it (w1160)
+      const { workers, coordination } = spend.splitOf(r);
+      requests[w.id] = { usd: workers.usd, in: workers.in, out: workers.out, cr: workers.cr, cw: workers.cw, sessions: Object.values(r.sessions).filter((s) => s.role !== 'dispatcher' && s.role !== 'personal' && s.role !== 'ops').length, estimatedUsd: r.estimated.usd, coordinationUsd: coordination.usd };
+    }
   }
   return { requests };
 });
