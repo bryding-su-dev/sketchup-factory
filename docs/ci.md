@@ -25,8 +25,8 @@ Measured on GitHub's hosted runners (PR #12 and #13 runs, 2026-10-13), a typical
 
 | | before | after |
 |---|---|---|
-| per push | Linux checks 1.5 min + Windows checks 3.5 (x2 billed) + Playwright 8.7 + gitleaks and identities (a billed minute each): 14 min, ~21 billed | checks 1.6 min (docs-only: 0) |
-| Playwright | every push | once, on the label (8.7 min) |
+| per push | Linux checks 1.5 min + Windows checks 3.5 (x2 billed) + Playwright 6 to 9 (warm to cold browser cache) + gitleaks and identities (a billed minute each): 14 min, ~21 billed | checks 1.6 min (docs-only: 0) |
+| Playwright | every push | once, on the label (6 to 9 min) |
 | after merge | the same again on the `sketchup` push | nothing |
 | per PR | ~56 min, ~84 billed Linux-equivalent | ~15 min |
 | per week (10 PRs) | ~560 min, ~840 billed, ~$5 if private | ~150 min, ~$0.9 if private |
