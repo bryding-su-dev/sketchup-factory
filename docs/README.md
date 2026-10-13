@@ -12,6 +12,7 @@ How SketchUp Factory works. Start with the [README](../README.md).
 | [models.md](models.md) | which model each role runs on (Opus plans and checks, Sonnet implements, Haiku 5.5 for cheap work) and how to change it |
 | [accounts.md](accounts.md) | which Claude account each agent runs on; Artifact tools and the Claude Docs connector |
 | [identity.md](identity.md) | people, attribution and whose account pays |
+| [ci.md](ci.md) | what GitHub Actions runs, what it costs, the `e2e` label |
 | [attachments.md](attachments.md) | files sent with a message |
 | [self-recovery.md](self-recovery.md) | disk-space guard and crash-safe data (the Dev Drive parts are Windows-only) |
 | [backlog.md](backlog.md), [ui-review.md](ui-review.md), [republish.md](republish.md) | upstream notes; read only when touching that code |
