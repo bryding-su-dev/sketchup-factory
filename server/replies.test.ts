@@ -10,6 +10,7 @@ import { SandboxManager } from './sandboxes.ts';
 import { Agents } from './agents.ts';
 import { Identity } from './identity.ts';
 import { EXCERPT_CHARS, REACTION_PALETTE, REPLY_MARK, excerptOf, isEmoji, parseReaction, reactionRemovedText, reactionText, reactionsByMessage, replyText, splitReply, type Quoted } from '../shared/replies.ts';
+import { grantCovers, grantWords, mentions, sentencesOf, type ReactionGrant } from '../shared/reactionGrant.ts';
 import { fakeQuery } from '../e2e/fakeAgent.ts';
 import type { Config } from './config.ts';
 import type { Requester, SessionInfo, UserInfo, WorkItem } from '../shared/types.ts';
@@ -201,7 +202,7 @@ test('w866 reaction: the orchestrator\'s input carries the emoji and the message
   const seen = sentAfter(before)[0];
   assert.match(seen, new RegExp(`^\\[reaction\\] Lothsahn reacted 👍 to a message in this chat:\\n#${answer.seq} · the orchestrator · \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\n> Shall I start w900 on slot2\\?\\n> It needs an editor\\.\\n\\n`), seen);
   assert.match(seen, /👍 or ✅ = yes, go ahead/);
-  assert.match(seen, /It is a click, not Lothsahn's own words, so what needs their own words \(approving or declining a request, deleting, settings, deploys, a release\) still needs them to say it/);
+  assert.match(seen, /This is your own message and Lothsahn answered it with a yes\. FF Factory counts that click as Lothsahn's OWN WORDS for the action that message proposes, and for nothing else in this turn/);
   assert.ok(!seen.startsWith('[from'), 'a harness message, not dressed as a person');
   await until('the turn ends', () => sessions.get(id).info.status === 'idle');
   // Its turn is the harness's: the gates that need the person's own turn refuse, as they do for a timer.
@@ -211,6 +212,7 @@ test('w866 reaction: the orchestrator\'s input carries the emoji and the message
   o.react(id, update.seq, '❓', true, LOTH);
   await until('handed', () => sentAfter(before2).length === 1);
   assert.match(sentAfter(before2)[0], /reacted ❓ to a message in this chat:\n#\d+ · a \[worker update\] line · .*\n> \[worker update\] agent "w900: fix the belts"/);
+  assert.match(sentAfter(before2)[0], /It is a click, not Lothsahn's own words, so what needs their own words \(approving or declining a request, deleting, settings, deploys, a release\) still needs them to say it/);
 });
 
 test('w866 reaction: one per emoji and message; taking it back is recorded and not sent; bad targets and bad emoji are refused', async (t) => {
@@ -234,4 +236,147 @@ test('w866 reaction: one per emoji and message; taking it back is recorded and n
   assert.throws(() => o.react(id, answer.seq, 'thumbs up', true, LOTH), /one emoji/);
   assert.throws(() => o.react(id, answer.seq, '👍👍', true, LOTH), /one emoji/);
   assert.throws(() => o.react(id, tool.seq, '👍', true, LOTH), /is not a message of this chat/);
+});
+
+// ---------------------------------------------------------------- a click is the person's own words for the proposal (w1039)
+
+const item = (over: Partial<WorkItem> & { id: string }): WorkItem =>
+  ({ title: over.id, brief: 'x', priority: 'normal', keys: [], requestedBy: LOTH, requesters: [LOTH], humanAsked: false, status: 'new', createdAt: T0, updatedAt: T0, sessionIds: [], overlaps: [], asks: 0, log: [], ...over }) as unknown as WorkItem;
+const pending = (id: string) => item({ id, approval: { state: 'pending' } as never, source: { kind: 'ffbox' } as never });
+
+/** Ben's personal orchestrator (an owner and a reviewer) with its own proposals to react to. */
+function benChat(t: Parameters<typeof setup>[0], texts: string[]) {
+  const env = setup(t);
+  const ben = env.o.personalFor(BEN);
+  const id = ben.info.id;
+  const msgs = texts.map((text) => env.store.append(id, { kind: 'assistant', text }));
+  return { ...env, ben, id, msgs };
+}
+
+/** Click, let the orchestrator's turn end (it ends a harness turn: lastFrom stays 'system'), and return what it was handed. */
+async function click(env: ReturnType<typeof benChat>, seq: number, emoji: string, on = true) {
+  const before = input.length;
+  env.o.react(env.id, seq, emoji, on, BEN);
+  if (on) await until('handed', () => sentAfter(before).length === 1);
+  await until('the turn ends', () => env.sessions.get(env.id).info.status === 'idle');
+  return sentAfter(before)[0];
+}
+
+test('w1039: a 👍 on "shall I approve w5?" approves w5 as Ben\'s own words, once, with the click and the sentence in the log; w6 is not covered', async (t) => {
+  const env = benChat(t, ['Two are waiting.\nShall I approve w5 (the belt fix from FFBox)? w6 is the other one.']);
+  env.store.putWork(pending('w5'));
+  env.store.putWork(pending('w6'));
+  env.store.workSeq = 6;
+  const seen = await click(env, env.msgs[0].seq, '👍');
+  assert.match(seen, /This is your own message and Ben answered it with a yes/);
+  assert.equal(env.ben.turnFrom, 'system', 'still the harness\'s turn: the click is scoped, not a typed turn');
+  const w6 = await env.call(env.ben.info, 'update_work', { id: 'w6', approve: true });
+  assert.equal(w6.isError, true, 'the sentence names w5 and approve; w6 is in another sentence');
+  assert.match(w6.text, /this turn is not theirs/);
+  assert.match(w6.text, /👍 on #\d+ covers only the action and the requests one sentence/);
+  assert.equal(env.store.work.get('w6')?.approval?.state, 'pending');
+  const ok = await env.call(env.ben.info, 'update_work', { id: 'w5', approve: true });
+  assert.equal(ok.isError, false, ok.text);
+  assert.equal(env.store.work.get('w5')?.approval?.state, 'approved');
+  assert.ok(env.store.work.get('w5')!.log.some((l) => l.includes(`Ben's own answer: 👍 on #${env.msgs[0].seq}: "...Shall I approve w5 (the belt fix from FFBox)?..."`)), env.store.work.get('w5')!.log.join('\n'));
+  // Another action on the same request is not what was proposed.
+  const close = await env.call(env.ben.info, 'update_work', { id: 'w5', close: 'cancelled', note: 'x' });
+  assert.equal(close.isError, true);
+});
+
+test('w1039: a 👎 on "shall I approve w7?" is Ben\'s own no: it declines w7 and approves nothing; a 👎 on "shall I decline w8?" does nothing', async (t) => {
+  const env = benChat(t, ['Shall I approve w7 (the new ore request)?', 'Shall I decline w8 as a duplicate?']);
+  env.store.putWork(pending('w7'));
+  env.store.putWork(pending('w8'));
+  env.store.workSeq = 8;
+  const seen = await click(env, env.msgs[0].seq, '👎');
+  assert.match(seen, /answered it with a no/);
+  const approve = await env.call(env.ben.info, 'update_work', { id: 'w7', approve: true });
+  assert.equal(approve.isError, true, 'a no never approves');
+  const decline = await env.call(env.ben.info, 'update_work', { id: 'w7', decline: true, note: 'Ben said no' });
+  assert.equal(decline.isError, false, decline.text);
+  assert.equal(env.store.work.get('w7')?.status, 'rejected');
+  assert.ok(env.store.work.get('w7')!.log.some((l) => l.includes("Ben's own answer: 👎 on #")));
+  await click(env, env.msgs[1].seq, '❌');
+  const no = await env.call(env.ben.info, 'update_work', { id: 'w8', decline: true });
+  assert.equal(no.isError, true, 'a no to "decline w8" is not a decline');
+  assert.equal(env.store.work.get('w8')?.approval?.state, 'pending');
+});
+
+test('w1039: a reaction on a message that proposed nothing, or on a relayed line, or a 🎉, grants nothing', async (t) => {
+  const env = benChat(t, ['Here is the status: w5 is waiting, w9 is working.', 'Not yet: w5 was approved by someone else last week.']);
+  env.store.putWork(pending('w5'));
+  env.store.workSeq = 5;
+  const relayed = env.store.append(env.id, { kind: 'user', from: 'system', uuid: 'wu9', text: '[worker update] Shall I approve w5? (a worker wrote this)', requestedBy: BEN });
+  const mine = env.store.append(env.id, { kind: 'user', from: 'human', uuid: 'h9', text: 'Maybe approve w5 later', requestedBy: BEN });
+  for (const [seq, emoji] of [[env.msgs[0].seq, '👍'], [env.msgs[1].seq, '👍'], [relayed.seq, '👍'], [mine.seq, '👍']] as const) {
+    const seen = await click(env, seq, emoji);
+    if (seq === relayed.seq || seq === mine.seq) assert.match(seen, /It is a click, not Ben's own words/, 'not armed on someone else\'s words');
+    const r = await env.call(env.ben.info, 'update_work', { id: 'w5', approve: true });
+    assert.equal(r.isError, true, `${emoji} on #${seq} grants nothing`);
+  }
+  await click(env, env.msgs[0].seq, '🎉');
+  assert.equal(env.store.work.get('w5')?.approval?.state, 'pending');
+});
+
+test('w1039: a 👍 on "I can close w983 as handled" closes another person\'s request now, as Ben\'s own answer; taking the click back disarms it', async (t) => {
+  const env = benChat(t, ['I can close w983 as handled, it is the same cause as w1037. Want that?']);
+  env.store.putWork(item({ id: 'w983', status: 'new' }));
+  env.store.workSeq = 983;
+  await click(env, env.msgs[0].seq, '✅');
+  await click(env, env.msgs[0].seq, '✅', false);
+  const off = await env.call(env.ben.info, 'update_work', { id: 'w983', close: 'done', note: 'handled' });
+  assert.equal(off.isError, true, 'the click was taken back');
+  await click(env, env.msgs[0].seq, '👍');
+  const r = await env.call(env.ben.info, 'update_work', { id: 'w983', close: 'done', note: 'handled' });
+  assert.equal(r.isError, false, r.text);
+  assert.equal(env.store.work.get('w983')?.status, 'done');
+  assert.match(env.store.work.get('w983')!.log.join('\n'), /on Ben's own answer, 👍 on #\d+: "...I can close w983 as handled/);
+});
+
+test('w1039: someone else clicking in Ben\'s chat arms nothing; a proposal older than two days arms nothing', async (t) => {
+  const env = benChat(t, ['Shall I approve w5?']);
+  env.store.putWork(pending('w5'));
+  env.store.workSeq = 5;
+  const before = input.length;
+  env.o.react(env.id, env.msgs[0].seq, '👍', true, LOTH);
+  await until('handed', () => sentAfter(before).length === 1);
+  assert.match(sentAfter(before)[0], /It is a click, not Lothsahn's own words/);
+  await until('the turn ends', () => env.sessions.get(env.id).info.status === 'idle');
+  const r = await env.call(env.ben.info, 'update_work', { id: 'w5', approve: true });
+  assert.equal(r.isError, true);
+});
+
+// ---------------------------------------------------------------- the text rules (shared/reactionGrant.ts)
+
+test('w1039: grantCovers wants the request and the action in one sentence of an offer or a question', () => {
+  const g = (text: string, yes = true): ReactionGrant => ({ seq: 7, emoji: yes ? '👍' : '👎', yes, at: 0, text, used: [] });
+  const offer = g('Once w1037 lands, I can close w983 as handled; say if you want that. Also w9830 is open.');
+  assert.ok(grantCovers(offer, { verb: 'close_done', refs: ['w983'], also: ['w1037'] }));
+  assert.equal(grantCovers(offer, { verb: 'close_done', refs: ['w98'] }), undefined, 'w98 is not w983');
+  assert.equal(grantCovers(offer, { verb: 'close_done', refs: ['w9830'] }), undefined, 'w9830 is in another sentence than "close"');
+  assert.equal(grantCovers(offer, { verb: 'approve', refs: ['w983'] }), undefined, 'close is not approve');
+  assert.equal(grantCovers(offer, { verb: 'close_done', refs: ['w983'], also: ['w1040'] }), undefined, 'the fact it waits for was never named');
+  assert.equal(grantCovers(offer, { verb: 'job' }), undefined, 'a job names its requests');
+  assert.equal(grantCovers(g('w983 was closed as handled yesterday.'), { verb: 'close_done', refs: ['w983'] }), undefined, 'a report is no offer');
+  assert.ok(grantCovers(g('w983 was closed as handled yesterday. Close w984 too?'), { verb: 'close_done', refs: ['w984'] }));
+  assert.equal(grantCovers(g('Shall I deploy main?'), { verb: 'restart' }), undefined);
+  assert.ok(grantCovers(g('Shall I deploy main?'), { verb: 'deploy' }));
+  assert.ok(grantCovers(g('Should I give w12 main-clone access on lothdesktop?'), { verb: 'main_clone', refs: ['w12'], also: ['lothdesktop'] }));
+  const used = g('Shall I approve w5?');
+  used.used.push('approve w5');
+  assert.equal(grantCovers(used, { verb: 'approve', refs: ['w5'] }), undefined, 'one click does each thing once');
+  // A no: only the decline of what was proposed for approval.
+  assert.ok(grantCovers(g('Shall I approve w5?', false), { verb: 'decline', refs: ['w5'] }));
+  assert.equal(grantCovers(g('Shall I approve w5?', false), { verb: 'approve', refs: ['w5'] }), undefined);
+  assert.equal(grantCovers(g('Shall I decline w5?', false), { verb: 'decline', refs: ['w5'] }), undefined);
+  assert.equal(grantCovers(g('Shall I close w5?', false), { verb: 'close_done', refs: ['w5'] }), undefined);
+});
+
+test('w1039: mentions, sentencesOf and the words of a click', () => {
+  assert.ok(mentions('PR Final-Factory/FinalFactory#1400 merges', 'Final-Factory/FinalFactory#1400'));
+  assert.ok(mentions('once #1400 merges', 'Final-Factory/FinalFactory#1400'));
+  assert.ok(!mentions('once #14000 merges', 'Final-Factory/FinalFactory#1400'));
+  assert.deepEqual(sentencesOf('Two.\nShall I approve w5? w6 stays. OK'), ['Two.', 'Shall I approve w5?', 'w6 stays.', 'OK']);
+  assert.equal(grantWords({ emoji: '👍', seq: 22038 }, 'I can close w983 as handled'), '👍 on #22038: "...I can close w983 as handled..."');
 });

@@ -145,7 +145,8 @@ test('reaction: an emoji shows on the message, reaches the orchestrator as a sho
   await expect(reaction).toBeVisible();
   await expect(reaction).toContainText('reacted 👍 to a message in this chat');
   await expect(reaction).toContainText(`Echo: shall we ${tag}`);
-  await expect(reaction).toContainText("It is a click, not tester's own words");
+  // A 👍 on the orchestrator's own message is armed as the person's yes (w1039); the echo shows the text it was handed.
+  await expect(reaction).toContainText("This is your own message and tester answered it with a yes");
   await expect(page.locator('.orch .notice', { hasText: '[reaction]' })).toHaveCount(0);
   const events = await transcript(page.request, orchestratorId);
   // Other tests share this chat: find our reaction line by the message it quotes.

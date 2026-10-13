@@ -89,13 +89,24 @@ export function isEmoji(s: string): boolean {
 
 /**
  * What the orchestrator reads when its person reacts to a message: the emoji, the message it is on, and how to take it.
- * Sent as a harness message (`from: 'system'): a reaction is not the person's own words (docs/orchestrators.md).
+ * Sent as a harness message (`from: 'system'`): the click opens no turn of the person's. `armed` (w1039): the click answers
+ * the orchestrator's own recent message with 👍 ✅ 👎 ❌, so FF Factory takes it as the person's own words for the action
+ * that message proposes, for the gates that need them (Orchestrators.reactionTurn).
  */
-export function reactionText(person: string, emoji: string, q: Quoted): string {
-  return `[reaction] ${person} reacted ${emoji} to a message in this chat:
+export function reactionText(person: string, emoji: string, q: Quoted, armed = false): string {
+  const head = `[reaction] ${person} reacted ${emoji} to a message in this chat:
 ${quoteBlock(q)}
 
-Take it as ${person}'s short answer to that message: ${REACTION_MEANINGS}; any other emoji, by its usual meaning in that context. It is a click, not ${person}'s own words, so what needs their own words (approving or declining a request, deleting, settings, deploys, a release) still needs them to say it: ask in one line. Reply briefly, or just act on it.`;
+Take it as ${person}'s short answer to that message: ${REACTION_MEANINGS}; any other emoji, by its usual meaning in that context.`;
+  if (!armed) {
+    return `${head} It is a click, not ${person}'s own words, so what needs their own words (approving or declining a request, deleting, settings, deploys, a release) still needs them to say it: ask in one line. Reply briefly, or just act on it.`;
+  }
+  const yes = emoji === '👍' || emoji === '✅';
+  return `${head} This is your own message and ${person} answered it with ${yes ? 'a yes' : 'a no'}. FF Factory counts that click as ${person}'s OWN WORDS for the action that message proposes, and for nothing else in this turn: ${
+    yes
+      ? "the request and the action its sentence names together (approve, decline, close, a `when` decision, main_clone, a portal deploy or restart, a delegation approval) go through now with the usual tool call, and the decision's record shows the click and the sentence it answered (leave `words` out of a `when` call; FF Factory fills it in). Anything the message did not propose, or proposed unclearly, or proposed several of: do only what is clear and ask in one line about the rest."
+      : "do not do what the message proposed. The one thing a no covers is declining an intake request whose approval the message proposed (update_work decline); otherwise take it as a no and say so in a line."
+  } What the click cannot do, it is refused as before.`;
 }
 
 /** The record that a reaction was taken back; it is shown in the chat and not sent to the orchestrator. */
