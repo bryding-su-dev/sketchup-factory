@@ -2,7 +2,7 @@
 // analysis tab of the dispatcher's page (top requests, kinds of work, where the tokens go, the transcripts' footprint).
 // Dollars and tokens are Claude Code's own per-turn usage; what is estimated says so where it is shown.
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { AppState } from '../../../shared/types';
+import type { AppState, BackendStatus } from '../../../shared/types';
 import { CATEGORY_LABEL, COORDINATION_NOTE, isCoordinatorRole, type SpendReportReply, type SpendRequestReply, type SpendSummaryReply } from '../../../shared/spend';
 import { api } from '../api';
 import { sessionRoute } from '../attention';
@@ -162,6 +162,17 @@ export function SpendTab() {
   const [days, setDays] = useState(7);
   const [r, setR] = useState<SpendReportReply>();
   const [err, setErr] = useState<string>();
+  const [bk, setBk] = useState<BackendStatus>();
+  useEffect(() => {
+    let alive = true;
+    api
+      .backend()
+      .then((x) => alive && setBk(x.backend))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
   useEffect(() => {
     let alive = true;
     setR(undefined);
@@ -199,6 +210,12 @@ export function SpendTab() {
         {p.coordination.by.length ? ` (${p.coordination.by.map((b) => `${b.who} ${money(b.usd)}`).join(', ')})` : ''} · no request’s {money(p.buckets.reduce((a, b) => a + b.usd, 0))}
       </p>
       <p className="small dim">{COORDINATION_NOTE}</p>
+      {bk?.configured && (
+        <p className="small" data-testid="spend-bedrock">
+          Backend: <strong>{bk.active === 'bedrock' ? 'AWS Bedrock' : bk.active === 'blocked' ? 'blocked (Bedrock cap spent, plan at its limit)' : 'Claude plan'}</strong> ({bk.mode}). Bedrock spend today{' '}
+          <strong>{money(bk.spend.todayUsd)}</strong> of the {money(bk.spend.dailyBudgetUsd)} daily cap, {money(bk.spend.weekUsd)} this week.
+        </p>
+      )}
       {r.backfill && (
         <p className="small dim">
           Backfilled {r.backfill.at.slice(0, 10)} from {r.backfill.sessions} transcripts that ran before the record: {r.backfill.turns} turns, {money(r.backfill.usd)} (dollars as recorded then; tokens estimated).
