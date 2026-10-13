@@ -52,7 +52,7 @@ import { VoiceService } from './voice.ts';
 import { MAX_DICTATION_SECONDS, MAX_TTS_CHARS, buildVoicePrompt, wavSeconds, type SpeakRequest, type TranscribeRequest, type VocabularySource } from '../shared/voice.ts';
 import type { AppState, CreateSandboxRequest, HostStatus, Machine, PermissionDecisionRequest, Requester, ServerEvent, SessionInfo, SessionKind, StandingAgentInput, StartSessionRequest, SystemStats } from '../shared/types.ts';
 import { SpendStore, buildReport } from './spend.ts';
-import type { SpendSummaryReply } from '../shared/spend.ts';
+import { isCoordinatorRole, type SpendSummaryReply } from '../shared/spend.ts';
 import { dataGuardSettings, footprint, gzipRatioCached, runDataGuard } from './dataGuard.ts';
 
 const WEB = path.join(ROOT, 'web', 'dist');
@@ -330,14 +330,14 @@ const backfillSpend = async () => {
   }
 };
 setTimeout(() => void backfillSpend(), 90_000).unref();
-// The coordination recorded before the split (w1160, docs/spend.md "Coordination") gets its days from the coordinators' transcripts, once.
+// A coordinator's coordination gets its days from its own transcript, once per session (w1160, docs/spend.md "Coordination"): the days of the first version were wrong (rebuildCoordination).
 const splitCoordinationSpend = async () => {
   if (isDryRun) return;
   let done = 0;
   let usd = 0;
-  for (const s of [...spend.sessions.values()].filter((x) => x.legacyRequests && !x.coordSplit)) {
+  for (const s of [...spend.sessions.values()].filter((x) => isCoordinatorRole(x.role) && x.coordV !== 2)) {
     try {
-      usd += spend.splitLegacyCoordination(s.id, store.hasTranscript(s.id) ? store.readTranscript(s.id) : undefined, store.sessions.get(s.id));
+      usd += spend.rebuildCoordination(s.id, store.hasTranscript(s.id) ? store.readTranscript(s.id) : undefined, store.sessions.get(s.id));
       done++;
     } catch (e) {
       console.warn(`spend coordination split: ${s.id}: ${(e as Error).message}`);
