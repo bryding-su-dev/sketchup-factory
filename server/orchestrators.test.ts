@@ -9,7 +9,7 @@ import { SandboxManager } from './sandboxes.ts';
 import { MachineManager } from './machines.ts';
 import { Agents } from './agents.ts';
 import { Identity } from './identity.ts';
-import { PERSONAL_TOOLS, beltFor } from './belts.ts';
+import { ALWAYS_LOADED, PERSONAL_TOOLS, beltFor } from './belts.ts';
 import { FILINGS_PER_MESSAGE, FOLLOW_UPS_PER_MESSAGE, MESSAGES_PER_PERSON, PERSON_MESSAGE_CHARS } from './orchestrators.ts';
 import type { Config } from './config.ts';
 import { requestAsFiled } from './work.ts';
@@ -125,6 +125,9 @@ test("tool belts: a person's orchestrator sees and files; the dispatcher acts; a
   const personal = names(agents.orchestratorBelt(chat(BEN).info));
   assert.deepEqual([...personal].sort(), [...PERSONAL_TOOLS].sort());
   const d = names(agents.orchestratorBelt(dispatcher().info));
+  // The tools carried in every call (the rest are deferred behind ToolSearch) all exist, so a typo cannot defer one silently.
+  for (const x of ALWAYS_LOADED.personal) assert.ok(personal.has(x), `personal carries ${x}, which is not in its belt`);
+  for (const x of ALWAYS_LOADED.dispatcher) assert.ok(d.has(x), `dispatcher carries ${x}, which is not in its belt`);
   for (const x of ['start_agent', 'create_sandbox', 'delete_sandbox', 'decide_work', 'list_work', 'message_agent', 'approve_delegation', 'max_activity']) assert.ok(d.has(x), `dispatcher has ${x}`);
   for (const x of ['request_work', 'update_work', 'set_heartbeat', 'message_person']) assert.ok(!d.has(x), `dispatcher has no ${x}`);
   const remote = names(beltFor('remote', agents.toolSpecs('human', agents.fixedActor(BEN), { role: 'remote', owner: BEN })));

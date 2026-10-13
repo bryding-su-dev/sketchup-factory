@@ -30,7 +30,8 @@ import { accountSource, hostClaudeEnvFor, hostProcessEnv, machineUsesLogin } fro
 import { Identity, claudeEnvFor, forLine } from './identity.ts';
 import type { BedrockBackend } from './bedrockBackend.ts';
 import { FILINGS_PER_MESSAGE, FOLLOW_UPS_PER_MESSAGE, MESSAGES_PER_PERSON, Orchestrators, PERSON_MESSAGE_CHARS } from './orchestrators.ts';
-import { beltFor, type BeltRole } from './belts.ts';
+import { isBedrockEnv } from './bedrock.ts';
+import { alwaysLoaded, beltFor, type BeltRole } from './belts.ts';
 import { memoryDirFor, memoryGuard } from './orchestratorMemory.ts';
 import { TurnModels } from './turnModel.ts';
 import { DECISIONS, attachmentsNote, describeItem, isFor, ledgerOrder, names, overlapLine, requestAsFiled, startProblem } from './work.ts';
@@ -2554,10 +2555,12 @@ To show the user an image, save it as PNG, JPG or SVG in your worktree (e.g. \`A
   }
 
   private orchestratorTools(info: SessionInfo) {
+    const role = this.orchestrators.ownerOf(info) ? 'personal' : 'dispatcher';
     return createSdkMcpServer({
       name: 'sandboxes',
       version: '1.0.0',
-      tools: this.orchestratorBelt(info).map((t) => sdkTool(t.name, t.description, t.schema, t.handler)),
+      // The belt's everyday tools are sent in every call, the rest are deferred behind ToolSearch (belts.ts ALWAYS_LOADED).
+      tools: this.orchestratorBelt(info).map((t) => sdkTool(t.name, t.description, t.schema, t.handler, alwaysLoaded(role, t.name) ? { alwaysLoad: true } : undefined)),
     });
   }
 
@@ -2875,8 +2878,9 @@ ${this.worldBrief(false)}
       // Read-only repo tools only. No WebFetch/WebSearch: orchestrators read [worker update] text
       // that can carry prompt injection from Discord or the web, and must not have a way to send data out.
       // Write and Edit only for its own memory folder: the PreToolUse guard refuses every other path, in every mode.
-      tools: ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
-      allowedTools: ['Read', 'Glob', 'Grep', 'mcp__sandboxes'],
+      // ToolSearch loads a deferred portal tool when it is needed: without it every tool's text rides every call.
+      tools: ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'ToolSearch'],
+      allowedTools: ['Read', 'Glob', 'Grep', 'ToolSearch', 'mcp__sandboxes'],
       mcpServers: { sandboxes: this.orchestratorTools(info) },
       // No claude.ai connectors unless config claudeAiConnectors.orchestrator turns them on: tens of thousands of input
       // tokens in every turn, for tools orchestration does not use.
@@ -2885,7 +2889,9 @@ ${this.worldBrief(false)}
       // Who pays (docs/orchestrators.md, docs/accounts.md): a person's own orchestrator runs on their own Claude account
       // when they have one here (config userClaudeEnv); the dispatcher on the system payer's. Without one, what config
       // claudeAccounts.orchestrator picks: the host token, or this host's stored claude.ai login.
-      env: this.onBackend('orchestrator', { ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, owner ?? this.identity.systemPayer(), hostProcessEnv(this.cfg, 'orchestrator')) }, owner ?? this.identity.systemPayer(), info.model ?? this.cfg.orchestrator.model),
+      // ENABLE_TOOL_SEARCH makes Claude Code defer the belt's tools whatever their size (its default defers only above a tenth
+      // of the context window); on Bedrock it keeps its own default.
+      env: ((e) => (isBedrockEnv(e) ? e : { ...e, ENABLE_TOOL_SEARCH: 'true' }))(this.onBackend('orchestrator', { ...modelEnv(this.cfg), ...claudeEnvFor(this.cfg, owner ?? this.identity.systemPayer(), hostProcessEnv(this.cfg, 'orchestrator')) }, owner ?? this.identity.systemPayer(), info.model ?? this.cfg.orchestrator.model)),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: `${owner ? this.personalBrief(owner) : this.dispatcherBrief()}\n\n${memoryBrief(memory, owner?.displayName)}` },
       ...(this.cfg.claudeExecutable ? { pathToClaudeCodeExecutable: this.cfg.claudeExecutable } : {}),
     };

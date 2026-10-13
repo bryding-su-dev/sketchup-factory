@@ -79,6 +79,21 @@ export const USER_ASKED_TOOLS: ReadonlySet<string> = new Set([
 export type BeltRole = 'dispatcher' | 'personal' | 'remote';
 
 /**
+ * The tools a coordinator carries in full in every call (upstream w1158, w1163, docs/orchestrators.md "What a coordinator's
+ * context costs"): the ones most of its turns use, by upstream's measurement. Every other tool of its belt is deferred:
+ * Claude Code lists its name and loads its schema with ToolSearch when the coordinator needs it, so its text costs
+ * nothing in the calls that do not. Upstream measured the dispatcher's first call at 48,176 input tokens before and
+ * 23,277 after, a personal orchestrator's at 37,900 and 22,700.
+ */
+export const ALWAYS_LOADED: Readonly<Record<'dispatcher' | 'personal', ReadonlySet<string>>> = {
+  dispatcher: new Set(['list_work', 'decide_work', 'start_agent', 'message_agent', 'interrupt_agent', 'stop_agent', 'agent_transcript', 'search_transcripts', 'list_sandboxes', 'switch_branch', 'list_machines', 'system_status', 'wake_me']),
+  personal: new Set(['message_person', 'list_work', 'request_work', 'update_work', 'message_agent', 'agent_transcript', 'search_transcripts', 'list_machines', 'system_status', 'wake_me']),
+};
+
+/** Whether a coordinator's tool is loaded in every call (ALWAYS_LOADED) rather than found with ToolSearch. */
+export const alwaysLoaded = (role: 'dispatcher' | 'personal', tool: string): boolean => ALWAYS_LOADED[role].has(tool);
+
+/**
  * The tools of a role. `guard` (dispatcher) is asked before a user_asked tool runs, with the work_id it was given;
  * it answers why not, or undefined. Those tools gain an optional work_id for it.
  */
