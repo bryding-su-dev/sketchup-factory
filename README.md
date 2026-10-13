@@ -145,8 +145,8 @@ npm test                                             # node --test server/*.test
 ```
 
 A throwaway config whose `repo.url` is a local bare repo is enough to exercise everything. CI
-([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes and pull requests to `sketchup`; see
-[CONTRIBUTING.md](CONTRIBUTING.md). The running version shows in the sidebar footer and at `GET /api/health`; changes
+([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs one Linux job on pull requests to `sketchup` (Playwright only on a PR labelled `e2e`); see
+[docs/ci.md](docs/ci.md) and [CONTRIBUTING.md](CONTRIBUTING.md). The running version shows in the sidebar footer and at `GET /api/health`; changes
 are listed in [CHANGELOG.md](CHANGELOG.md). Internal names such as the `FFSB` cookie, `FFSB_CONFIG` and `ffsb-*` keys
 come from upstream and are unchanged.
 
