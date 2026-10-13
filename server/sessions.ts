@@ -419,6 +419,7 @@ export class AgentSession implements SessionHandle {
       env: { ...(base.env ?? process.env), CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
     };
     this.costBase = this.info.costUsd;
+    if (this.info.sdkSessionId) this.meter.carry();
     this.firstResult = true;
     // A new process: the last one's background tasks ended with it.
     this.backgroundTasks = 0;
