@@ -118,6 +118,8 @@ type Held = Exclude<Place, 'bottom'>;
 const scrollMemory = new Map<string, Place>();
 /** How long after a chat is drawn again its place is held against content that loads late (images, diagrams), until the reader moves. */
 const HOLD_MS = 4000;
+/** How long the place is held after the view is resized (a phone turned, a keyboard opened): the layout may still be settling, a frame at a time. */
+const RESIZE_HOLD_MS = 1500;
 
 const seqOf = (c: Element): number | undefined => {
   const v = c.getAttribute('data-seq') ?? c.getAttribute('data-seqs')?.trim().split(/\s+/)[0];
@@ -219,6 +221,10 @@ export const Transcript = memo(function Transcript({
   // Size and position at the last scroll event: an event after the content grew, with nothing scrolled up, is the page growing, not the reader leaving the bottom.
   const lastTop = useRef(0);
   const lastHeight = useRef(0);
+  // The view's own size at the last look: a scroll event that comes with another size is the layout moving the view (a phone turned, a keyboard opened), not the reader (w1164).
+  const lastBox = useRef({ w: 0, h: 0 });
+  const sessionNow = useRef(session.id);
+  sessionNow.current = session.id;
   const latestSeq = useRef(0);
   latestSeq.current = events?.at(-1)?.seq ?? 0;
   const seenLatest = useRef(latestSeq.current);
@@ -228,11 +234,16 @@ export const Transcript = memo(function Transcript({
   const track = (el: HTMLElement) => {
     lastTop.current = el.scrollTop;
     lastHeight.current = el.scrollHeight;
+    lastBox.current = { w: el.clientWidth, h: el.clientHeight };
   };
 
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
+    // The view was resized and the browser moved its scroll position to fit (WebKit tells us before the ResizeObserver below
+    // does): the reader did not scroll, so neither the bottom they were pinned to nor the place they were at is theirs to
+    // forget. The ResizeObserver puts both back.
+    if (el.clientWidth !== lastBox.current.w || el.clientHeight !== lastBox.current.h) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     const grew = el.scrollHeight > lastHeight.current;
     const down = el.scrollTop >= lastTop.current;
@@ -335,11 +346,23 @@ export const Transcript = memo(function Transcript({
     const el = box?.firstElementChild;
     if (!box || !el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
+      const resized = box.clientWidth !== lastBox.current.w || box.clientHeight !== lastBox.current.h;
       if (atBottom.current) {
         box.scrollTo({ top: box.scrollHeight });
         track(box);
       } else if (pending.current) restore();
       else if (hold.current && performance.now() < hold.current.until) alignTo(box, hold.current.place);
+      else if (resized) {
+        // A phone turned, a keyboard opened, a window resized: the rows wrap differently, so the same pixel offset is another
+        // message. Put the message the reader was at back where it sat on the screen (w1164).
+        const at = scrollMemory.get(sessionNow.current);
+        // Held for a moment, so that the scrolling this does is not taken for the reader moving: a message partly above the top
+        // edge may now be wholly above it, and the first one in view another, which would become the place to go back to.
+        if (at && at !== 'bottom' && alignTo(box, at)) hold.current = { place: at, until: performance.now() + RESIZE_HOLD_MS };
+        track(box);
+      }
+      // Whatever was done, the new size is the one scroll events are measured against.
+      lastBox.current = { w: box.clientWidth, h: box.clientHeight };
     });
     ro.observe(el);
     ro.observe(box);

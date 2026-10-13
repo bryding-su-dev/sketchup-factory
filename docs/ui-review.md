@@ -271,3 +271,43 @@ Before and after (a chat of nine messages with pictures, left for the Dispatcher
 |---|---|---|
 | desktop | ![before, desktop](images/keep-place-before-desktop.png) | ![after, desktop](images/keep-place-after-desktop.png) |
 | phone | ![before, phone](images/keep-place-before-mobile.png) | ![after, phone](images/keep-place-after-mobile.png) |
+
+## Turning the phone keeps the place in the chat (w1164)
+
+lothsahn, 2026-10-12: "When my phone switches between horizontal and vertical layout the position in the chat changes and I
+have to scroll down. Please make it keep the position in the chat."
+
+Two causes in `web/src/components/Transcript.tsx`, both measured by logging scroll, resize and `ResizeObserver` events while
+the view went from 390 x 844 to 844 x 390 (Playwright, `e2e/rotate.spec.ts`):
+
+- **Pinned to the bottom, WebKit (iPhone Safari, and every iOS browser).** A resize relays the chat out and WebKit moves the
+  scroll position to fit, firing a `scroll` event before the `ResizeObserver` runs. In that event the chat was 454 px from the
+  bottom, so `onScroll` took it for the reader scrolling up and set `atBottom` false. The `ResizeObserver` that re-pins the
+  chat only does so while `atBottom` is true, so the chat stayed 454 px above its end and "jump to latest" showed. Chrome
+  fires no scroll event there (its anchoring and clamping moved the position inside the layout step), so it already re-pinned.
+- **Scrolled up, every browser.** Nothing put the reader back. The scroll position was kept as pixels while the rows wrapped
+  differently, so another message sat at the top (Chrome: 85 px off, WebKit: 133 px on the way into landscape, and thousands of
+  px on the way back).
+
+What it does now:
+
+- `onScroll` ignores a scroll event that arrives with the view's size changed since the last look (`lastBox`): the layout moved
+  the view, not the reader, so `atBottom` and the remembered place stay what the reader left.
+- The `ResizeObserver` handles a resized view: pinned, back to the bottom; scrolled up, the message that was at the top of the
+  view (the place already remembered by `seq` and offset for w1100) goes back where it sat, and is held for 1.5 s
+  (`RESIZE_HOLD_MS`) so the scrolling that does is not taken for the reader moving (a message that was partly above the top edge
+  may be wholly above it once it wraps shorter, which would make the next message the place to return to).
+- The same code serves any resize of the chat's box: the on-screen keyboard (iOS shrinks `--app-h`, Android shrinks the
+  layout), a window resize, a side panel opening.
+
+`e2e/rotate.spec.ts` (Android Chrome and iPhone Safari projects) turns a long chat 390 x 844 -> 844 x 390 -> back and the other
+way round, pinned (still at the bottom after each turn) and scrolled up (the message at the top of the view within 3 px of where
+it was after each turn). Without the fix 6 of its 8 tests fail (the 2 that pass are Chrome pinned, which never broke); with it
+all 8 pass. Not covered: the keyboard itself (the existing `moveViewport` fixtures simulate iOS's visual viewport; the box-size
+path they take is the one the turn takes).
+
+Before and after, iPhone 13 in WebKit, turned to landscape and back:
+
+![pinned to the bottom: before and after](images/w1164-rotate-pinned.png)
+
+![scrolled up to a message: before and after](images/w1164-rotate-up.png)
