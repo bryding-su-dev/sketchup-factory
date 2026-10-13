@@ -225,7 +225,7 @@ test('orchestrator options: each its own memory folder, Write and Edit behind th
   assert.deepEqual(dirs, ['person-ben', 'person-lothsahn', 'dispatcher'].map((k) => path.join(dir, 'orchestrator-memory', k)));
   for (const [x, d] of [ben, loth, disp].map((x, i) => [x, dirs[i]] as const)) {
     assert.equal(x.settings.autoMemoryEnabled, true);
-    assert.deepEqual(x.tools, ['Read', 'Glob', 'Grep', 'Write', 'Edit']);
+    assert.deepEqual(x.tools, ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'ToolSearch']);
     assert.equal(x.hooks.PreToolUse.length, 1);
     assert.ok(x.systemPrompt.append.includes(`Your memory folder is \`${d}\``), 'the brief names its own folder');
     assert.ok(fs.statSync(d).isDirectory());
