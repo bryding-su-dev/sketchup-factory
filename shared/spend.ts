@@ -78,6 +78,7 @@ export interface TurnUsage {
 export const CATEGORIES = [
   'base',
   'summary',
+  'carried',
   'brief',
   'assistant',
   'file-read',
@@ -98,6 +99,7 @@ export type Category = (typeof CATEGORIES)[number];
 export const CATEGORY_LABEL: Record<string, string> = {
   base: 'Base context (system prompt, tool definitions, CLAUDE.md, skill lists, reminders)',
   summary: 'Summary left by a compaction',
+  carried: 'Context carried over from before this process started (a conversation resumed after a restart): not itemised, the base context included',
   brief: 'Messages to the agent (briefs, follow-ups, harness notices)',
   assistant: "The agent's own text, thinking and tool calls (output tokens included)",
   'file-read': 'File reads (Read, sed -n, cat, head, tail)',
@@ -284,6 +286,13 @@ export class ContextMeter {
   private lastCtx = 0;
   private turn = blankTurn();
   private compactedOnce = false;
+  /** The next call's unexplained cache read is a conversation resumed from before this process, not the base context (w1209). */
+  private carriedNext = false;
+
+  /** This process resumed an earlier conversation: its first call reads a context the meter never saw built. */
+  carry() {
+    if (this.lastCtx === 0) this.carriedNext = true;
+  }
 
   /** Text that goes into the context from outside: a message to the agent. */
   addUser(chars: number) {
@@ -367,7 +376,13 @@ export class ContextMeter {
     give('base', 0, Math.max(0, newTok - freshSum * fscale));
     const hscale = heldSum > u.cr ? u.cr / heldSum : 1;
     for (const [k, v] of heldEst) give(k, v * hscale, 0);
-    give('base', Math.max(0, u.cr - heldSum * hscale), 0);
+    const unexplained = Math.max(0, u.cr - heldSum * hscale);
+    if (this.carriedNext && unexplained > 0) {
+      // a resumed conversation: what this process never saw built is carried, not base; later calls read it as held
+      give('carried', unexplained, 0);
+      this.held.set('carried', (this.held.get('carried') ?? 0) + unexplained * CHARS_PER_TOKEN);
+    } else give('base', unexplained, 0);
+    this.carriedNext = false;
     const p = priceOf(u.model);
     const cw5 = Math.min(u.cw, u.cw5 ?? 0);
     const wPrice = u.cw + u.in > 0 ? (u.in * p.in + (u.cw - cw5) * 2 * p.in + cw5 * 1.25 * p.in) / (u.cw + u.in) : p.in;
@@ -435,6 +450,9 @@ export function fmtUsd(n: number): string {
 // What the portal stores and answers (server/spend.ts); here so the web can type its replies
 // ---------------------------------------------------------------------------------------------------------------------
 
+/** The account of a turn that ran before accounts were recorded, or of a backfilled one. */
+export const UNRECORDED_ACCOUNT = 'not recorded (before w1031)';
+
 export type SpendRole = 'worker' | 'dispatcher' | 'personal' | 'ops' | 'standing';
 
 /** How a turn was tied to a request: the `[about]` line, the request the worker was last sent, the ids a message named, or none. */
@@ -457,6 +475,8 @@ export interface SessionSpend {
   estimated: Tok;
   /** The SDK's cumulative totals at the last result, to take differences against. */
   cum?: ModelTok;
+  /** Spend by the Claude account each turn's process ran on (w1031): "vault token vault-lothsahn-1 …EAAA (…)", "host token …9AAA"; last four characters only. */
+  accounts?: Record<string, Tok>;
   lastCost?: number;
   /** usd by request (or bucket) id. */
   requests: Record<string, number>;
@@ -469,6 +489,22 @@ export interface SessionSpend {
   transcript?: { state: 'full' | 'gz' | 'pruned'; bytes?: number; prunedAt?: string };
   /** The seq of the first transcript event recorded live; the backfill takes only the events before it. */
   liveFrom?: number;
+  /**
+   * A coordinator session (dispatcher, orchestrator, ops worker; w1160). `coordV` 2: its per-day coordination (`RequestSpend.coordDays`,
+   * keyed by this session's id) is complete; a coordinator without it is rebuilt from its transcript (`rebuildCoordination`).
+   * `coordFrom`: the seq of the first result recorded by the code that bills coordination (2026-10-13, a9d5eae): the turns before it
+   * were recorded by the older attribution and cost rules, which the rebuild replays as they were. `legacyRequests` and `coordSplit`
+   * are the first version's marks (kept in the record, no longer read).
+   */
+  coordV?: number;
+  /** `fixV` 1: correctHistory has looked at this session (w1209); `fixApplied`: it changed the record, so the record now reads every turn by the current rules. */
+  fixV?: number;
+  fixApplied?: boolean;
+  /** `acctV` 1: its accounts are right after correctHistory (repairAccounts, w1209). */
+  acctV?: number;
+  coordFrom?: number;
+  legacyRequests?: Record<string, number>;
+  coordSplit?: boolean;
   /** The backfill has read this session's transcript. */
   backfilled?: boolean;
 }
@@ -488,12 +524,37 @@ export interface RequestSpend {
   models: ModelTok;
   estimated: Tok;
   sessions: Record<string, { role: SpendRole; total: Tok; models: ModelTok; turns: number; how: Partial<Record<How, number>>; shared?: number }>;
+  /** Spend by the Claude account each turn's process ran on (w1031); turns before it was recorded are under UNRECORDED_ACCOUNT. */
+  accounts?: Record<string, Tok>;
   cats: Cats;
   calls: number;
   compactions: number;
   reread?: { n: number; chars: number; afterCompact: number };
-  /** Tokens and dollars by UTC day, for a report over a window. */
+  /** Tokens and dollars by UTC day, for a report over a window. Workers and coordinators together. */
   days: Record<string, Tok>;
+  /**
+   * The part of `days` that coordinators' turns (dispatcher, a person's orchestrator, the ops worker) spent on this request
+   * (w1160), by the coordinator's SESSION id and UTC day. The workers' own cost is `days` minus this. Turns from before the
+   * split get their days from `rebuildCoordination`, an estimate (docs/spend.md).
+   */
+  coordDays?: Record<string, Record<string, Tok>>;
+}
+
+/** The sessions whose turns are billed as coordination: they run the work, they do not do it. */
+export const isCoordinatorRole = (r: SpendRole | undefined): boolean => r === 'dispatcher' || r === 'personal' || r === 'ops';
+/** Who a coordinator is, for the breakdown of a request's coordination cost: "dispatcher", "ops", "personal:<person>". */
+export const coordKey = (role: SpendRole, person?: string): string => (role === 'personal' ? `personal:${person ?? 'unknown'}` : role);
+export const coordLabel = (key: string): string => (key === 'dispatcher' ? 'dispatcher' : key === 'ops' ? 'ops worker' : key.startsWith('personal:') ? `${key.slice(9)}'s orchestrator` : key);
+
+/** How coordination is counted, said wherever it is shown (docs/spend.md "Coordination"). */
+export const COORDINATION_NOTE =
+  "Coordination = the dispatcher's, orchestrators' and ops worker's turns, counted for the requests their messages name; a turn naming several requests is split evenly among them (up to 4): an estimate. Turns naming no request are listed apart.";
+
+/** Coordinators' cost on one request (or in a window), by coordinator. */
+export interface Coordination {
+  usd: number;
+  tokens: Tok;
+  by: { who: string; usd: number }[];
 }
 
 export interface ReportOptions {
@@ -510,8 +571,17 @@ export interface SpendReport {
   estimated: Tok;
   /** Share of the window's dollars by model. */
   models: ModelTok;
-  top: { id: string; title: string; kind: string; status?: string; person?: string; usd: number; tokens: Tok; estimatedUsd: number; sessions: number; closed: boolean; cats: { cat: string; usd: number; pct: number }[] }[];
-  kinds: { kind: string; usd: number; requests: number; avg: number }[];
+  /** The window's dollars by the Claude account the turns ran on (w1031). */
+  accounts: { account: string; usd: number; tokens: Tok }[];
+  /** Requests ranked by the workers' own cost (`usd`, `tokens`); the coordinators' cost on them is billed apart (w1160). */
+  top: { id: string; title: string; kind: string; status?: string; person?: string; usd: number; tokens: Tok; coordination: Coordination; estimatedUsd: number; sessions: number; closed: boolean; cats: { cat: string; usd: number; pct: number }[] }[];
+  /** The window's dollars on requests, the workers' own and the coordinators' (w1160); with `buckets` they add up to `total`. */
+  workers: Tok;
+  coordination: Coordination;
+  /** The requests with the most coordination in the window, whatever their workers cost (w1160). */
+  topCoordination: { id: string; title: string; status?: string; coordination: Coordination; workers: number }[];
+  /** By kind of request: `usd` is the workers' own cost, `coordination` the coordinators'. */
+  kinds: { kind: string; usd: number; requests: number; avg: number; coordination: number }[];
   /** Where the context tokens went across the window's requests, by category (list-price shares applied to the measured dollars). */
   where: { cat: string; label: string; usd: number; pct: number }[];
   /** Spend that is no request's: the dispatcher, orchestrators, ops, standing agents, unattributed. */
@@ -557,7 +627,8 @@ export interface Footprint {
 
 /** GET /api/spend/summary: the cost of each request the page holds. */
 export interface SpendSummaryReply {
-  requests: Record<string, { usd: number; in: number; out: number; cr: number; cw: number; sessions: number; estimatedUsd: number }>;
+  /** `usd` and the tokens are the workers' own; `coordinationUsd` is the coordinators' turns on the request (w1160). */
+  requests: Record<string, { usd: number; in: number; out: number; cr: number; cw: number; sessions: number; estimatedUsd: number; coordinationUsd: number }>;
 }
 /** GET /api/spend/request/<id>: one request's spend with its sessions and what happens to their transcripts. */
 export interface SpendRequestReply {

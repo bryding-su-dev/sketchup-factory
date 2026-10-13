@@ -2,8 +2,8 @@
 // analysis tab of the dispatcher's page (top requests, kinds of work, where the tokens go, the transcripts' footprint).
 // Dollars and tokens are Claude Code's own per-turn usage; what is estimated says so where it is shown.
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { AppState, BackendStatus } from '../../../shared/types';
-import { CATEGORY_LABEL, type SpendReportReply, type SpendRequestReply, type SpendSummaryReply } from '../../../shared/spend';
+import type { AppState } from '../../../shared/types';
+import { CATEGORY_LABEL, COORDINATION_NOTE, isCoordinatorRole, type SpendReportReply, type SpendRequestReply, type SpendSummaryReply } from '../../../shared/spend';
 import { api } from '../api';
 import { sessionRoute } from '../attention';
 import { fmtCost, fmtTokens, href, navigate } from '../util';
@@ -39,11 +39,13 @@ const tokLine = (t: { in: number; out: number; cr: number; cw: number }) => `in 
 /** A request's cost so far, small, for its row. */
 export function CostChip({ id, summary }: { id: string; summary: Summary }) {
   const c = summary[id];
-  if (!c || c.usd <= 0) return null;
+  if (!c || (c.usd <= 0 && c.coordinationUsd <= 0)) return null;
+  // the workers' own cost; the dispatcher's and orchestrators' turns on the request are billed beside it (w1160)
   return (
-    <span className="mono dim" title={`${tokLine(c)}${c.estimatedUsd > 0.005 ? ` · ${money(c.estimatedUsd)} of it estimated` : ''} · ${c.sessions} session(s)`} data-testid={`cost-${id}`}>
+    <span className="mono dim" title={`Workers: ${tokLine(c)}${c.estimatedUsd > 0.005 ? ` · ${money(c.estimatedUsd)} of the request's cost estimated` : ''} · ${c.sessions} session(s)${c.coordinationUsd > 0.005 ? ` · Coordination ${money(c.coordinationUsd)}. ${COORDINATION_NOTE}` : ''}`} data-testid={`cost-${id}`}>
       {' '}
       · {money(c.usd)}
+      {c.coordinationUsd > 0.005 ? ` + ${money(c.coordinationUsd)} coord.` : ''}
     </span>
   );
 }
@@ -67,14 +69,17 @@ export function RequestSpendBlock({ id, app }: { id: string; app: AppState }) {
   const q = r.request;
   if (!q || q.total.usd <= 0) return <p className="small dim" data-testid={`spend-${id}`}>Spend: nothing recorded yet (it is recorded from the turns after this feature, and backfilled from older transcripts).</p>;
   const models = Object.entries(q.models).sort((a, b) => b[1].usd - a[1].usd);
+  const coordUsd = r.sessions.filter((s) => isCoordinatorRole(s.role)).reduce((a, s) => a + s.share.total.usd, 0);
   const cats = Object.entries(q.cats).sort((a, b) => b[1].usd - a[1].usd);
   const catSum = cats.reduce((a, [, c]) => a + c.usd, 0);
   return (
     <div className="spend-block" data-testid={`spend-${id}`}>
       <p className="small">
-        <strong>Spend {money(q.total.usd)}</strong> · {tokLine(q.total)} · {Math.round(q.turns)} turn(s)
+        <strong>Workers {money(Math.max(0, q.total.usd - coordUsd))}</strong>
+        {coordUsd > 0.005 ? <span> · <strong>Coordination {money(coordUsd)}</strong></span> : null} · all together {money(q.total.usd)} · {tokLine(q.total)} · {Math.round(q.turns)} turn(s)
         {q.estimated.usd > 0.005 ? <span className="tone-amber"> · {money(q.estimated.usd)} of it backfilled or estimated: its tokens are estimates</span> : null}
       </p>
+      {coordUsd > 0.005 && <p className="small dim">{COORDINATION_NOTE}</p>}
       <table className="spend-table small">
         <thead>
           <tr>
@@ -114,7 +119,7 @@ export function RequestSpendBlock({ id, app }: { id: string; app: AppState }) {
                 <span className="mono">{s.id.slice(0, 8)}</span>
               )}{' '}
               <span className="dim">
-                {s.role}
+                {isCoordinatorRole(s.role) ? `coordination (${s.role})` : s.role}
                 {s.machine ? ` on ${s.machine}` : ''}
               </span>{' '}
               “{s.title}” · {money(s.share.total.usd)} · {tokLine(s.share.total)} · {Math.round(s.share.turns)} turn(s)
@@ -157,17 +162,6 @@ export function SpendTab() {
   const [days, setDays] = useState(7);
   const [r, setR] = useState<SpendReportReply>();
   const [err, setErr] = useState<string>();
-  const [bk, setBk] = useState<BackendStatus>();
-  useEffect(() => {
-    let alive = true;
-    api
-      .backend()
-      .then((x) => alive && setBk(x.backend))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, []);
   useEffect(() => {
     let alive = true;
     setR(undefined);
@@ -200,12 +194,11 @@ export function SpendTab() {
         (UTC days {p.sinceDay} to {p.untilDay}): <strong>{money(p.total.usd)}</strong> · {tokLine(p.total)}
         {p.estimated.usd > 0.005 ? <span className="tone-amber"> · {money(p.estimated.usd)} backfilled or estimated (its tokens are estimates)</span> : null}
       </p>
-      {bk?.configured && (
-        <p className="small" data-testid="spend-bedrock">
-          Backend: <strong>{bk.active === 'bedrock' ? 'AWS Bedrock' : bk.active === 'blocked' ? 'blocked (Bedrock cap spent, plan at its limit)' : 'Claude plan'}</strong> ({bk.mode}). Bedrock spend today{' '}
-          <strong>{money(bk.spend.todayUsd)}</strong> of the {money(bk.spend.dailyBudgetUsd)} daily cap, {money(bk.spend.weekUsd)} this week.
-        </p>
-      )}
+      <p className="small" data-testid="spend-split">
+        Workers’ own cost on requests <strong>{money(p.workers.usd)}</strong> · coordination on requests <strong>{money(p.coordination.usd)}</strong>
+        {p.coordination.by.length ? ` (${p.coordination.by.map((b) => `${b.who} ${money(b.usd)}`).join(', ')})` : ''} · no request’s {money(p.buckets.reduce((a, b) => a + b.usd, 0))}
+      </p>
+      <p className="small dim">{COORDINATION_NOTE}</p>
       {r.backfill && (
         <p className="small dim">
           Backfilled {r.backfill.at.slice(0, 10)} from {r.backfill.sessions} transcripts that ran before the record: {r.backfill.turns} turns, {money(r.backfill.usd)} (dollars as recorded then; tokens estimated).
@@ -213,12 +206,13 @@ export function SpendTab() {
       )}
       <h3 className="small">By model</h3>
       <Bars rows={Object.entries(p.models).sort((a, b) => b[1].usd - a[1].usd).map(([m, t]) => ({ key: m, label: m.replace('claude-', ''), pct: t.usd / total, note: `${money(t.usd)} · out ${fmtTokens(t.out)} · read ${fmtTokens(t.cr)} · write ${fmtTokens(t.cw)}` }))} />
-      <h3 className="small">Top requests by cost</h3>
+      <h3 className="small">Top requests by the workers’ own cost</h3>
       <table className="spend-table small">
         <thead>
           <tr>
             <th>Request</th>
-            <th>Cost</th>
+            <th>Workers</th>
+            <th>Coordination</th>
             <th>Kind</th>
             <th>Where its tokens went</th>
           </tr>
@@ -234,6 +228,7 @@ export function SpendTab() {
                 </div>
               </td>
               <td className="mono">{money(t.usd)}</td>
+              <td className="mono" title={t.coordination.by.map((b) => `${b.who} ${money(b.usd)}`).join(', ')}>{t.coordination.usd > 0.005 ? money(t.coordination.usd) : '–'}</td>
               <td>{t.kind}</td>
               <td>{t.cats.length ? t.cats.map((c) => `${c.cat} ${pct(c.pct)}`).join(', ') : <span className="dim">no context reading yet</span>}</td>
             </tr>
@@ -241,7 +236,7 @@ export function SpendTab() {
         </tbody>
       </table>
       <h3 className="small">By kind of work</h3>
-      <Bars rows={p.kinds.map((k) => ({ key: k.kind, label: k.kind, pct: k.usd / total, note: `${money(k.usd)} over ${k.requests} · ${money(k.avg)} each` }))} />
+      <Bars rows={p.kinds.map((k) => ({ key: k.kind, label: k.kind, pct: k.usd / total, note: `${money(k.usd)} over ${k.requests} · ${money(k.avg)} each · coordination ${money(k.coordination)}` }))} />
       <h3 className="small">Where the money goes inside sessions</h3>
       {p.where.length ? (
         <>

@@ -88,7 +88,8 @@ export interface Sandbox {
   git?: GitStatus;
 }
 
-export type SessionKind = 'orchestrator' | 'worker' | 'standing';
+/** `ops`: upstream's orchestration worker (not run by this host); spend attribution still knows the kind. */
+export type SessionKind = 'orchestrator' | 'worker' | 'standing' | 'ops';
 
 /**
  * What an orchestrator is (docs/orchestrators.md): the portal's one dispatcher, which owns every tool that changes
@@ -215,6 +216,8 @@ export interface SessionInfo {
    * Kept by the portal, never by the daemon: no dropped link or restart resumes it until it is sent a message again.
    */
   stoppedOnPurpose?: boolean;
+  /** The Claude account this session's current process ran on, in words safe to show (spend attributes turns to it). Not set by this host yet. */
+  ranAs?: string;
 }
 
 /**
@@ -1060,6 +1063,8 @@ export interface WorkItem {
    * the request's creation time.
    */
   links?: Record<string, { at: string; how: 'sent' | 'linked' }>;
+  /** The standing agent's delegation request this was filed from (spend kinds read it; delegations here file no ledger requests yet). */
+  delegation?: { id: string; agentId: string; agentName: string; auto: boolean };
 }
 
 /**

@@ -400,14 +400,14 @@ export function render(r: Result, days: number, top: number): string {
     const csum = Object.values(q.cats).reduce((a, c) => a + c.usd, 0);
     const cats = Object.entries(q.cats).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([k, v]) => `${k} ${pct(v.usd / csum)}`).join(', ');
     const trips = Object.entries(q.trips).sort((a, b) => b[1].usd - a[1].usd).slice(0, 5).map(([k, v]) => `${k} ${v.n} calls ${fmtUsd(v.usd)}`).join('; ');
-    out.push(`${i + 1}. ${q.id} ${fmtUsd(q.total.usd)} [${q.title ? kindOfWork({ title: q.title, brief: '', source: undefined }) : '?'}] "${q.title.slice(0, 80)}": ${q.sessions.size} session(s), ${q.calls} calls, mean context ${fmtTokens(q.ctxSum / Math.max(1, q.calls))}, largest ${fmtTokens(q.ctxMax)}; read ${fmtTokens(q.total.cr)}, written ${fmtTokens(q.total.cw)}, out ${fmtTokens(q.total.out)}`);
+    out.push(`${i + 1}. ${q.id} ${fmtUsd(q.total.usd)} [${q.title ? kindOfWork({ title: q.title, brief: '', source: undefined, delegation: undefined }) : '?'}] "${q.title.slice(0, 80)}": ${q.sessions.size} session(s), ${q.calls} calls, mean context ${fmtTokens(q.ctxSum / Math.max(1, q.calls))}, largest ${fmtTokens(q.ctxMax)}; read ${fmtTokens(q.total.cr)}, written ${fmtTokens(q.total.cw)}, out ${fmtTokens(q.total.out)}`);
     out.push(`     where the context cost went: ${cats}`);
     out.push(`     calls by what made them necessary: ${trips}${q.rereads ? `; ${q.rereads} re-reads (${q.rereadAfterCompact} after a compaction)` : ''}${q.rewriteUsd > 0.05 ? `; ${fmtUsd(q.rewriteUsd)} extra to write contexts again after the cache went cold` : ''}`);
   }
   // kinds
   const kinds = new Map<string, { usd: number; n: number }>();
   for (const q of ranked) {
-    const k = q.id.startsWith('_') ? 'no request' : q.title ? kindOfWork({ title: q.title, brief: '', source: undefined }) : 'unknown';
+    const k = q.id.startsWith('_') ? 'no request' : q.title ? kindOfWork({ title: q.title, brief: '', source: undefined, delegation: undefined }) : 'unknown';
     const e = kinds.get(k) ?? { usd: 0, n: 0 };
     e.usd += q.total.usd;
     e.n++;
