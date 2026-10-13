@@ -269,12 +269,12 @@ export const names = (rs: readonly Requester[]) => (rs.length <= 2 ? rs.map((r) 
 export const logLine = (now: Date, text: string) => `${now.toISOString().slice(11, 16)} ${clip(oneLine(text), 300)}`;
 
 /** One line per item for list_work: id, status, priority, title, whose, workers, outcome. */
-export function describeItem(w: WorkItem, workerLine: (id: string) => string): string {
+export function describeItem(w: WorkItem, workerLine: (id: string) => string, cost = ''): string {
   const who = names(w.requesters);
   const workers = w.sessionIds.length ? ` workers: ${w.sessionIds.map(workerLine).join(', ')}.` : '';
   const merged = w.mergedInto ? ` → ${w.mergedInto}` : '';
   const tag = sourceTag(w) || (w.recorded ? 'recorded: started outside the ledger' : '');
-  return `- ${w.id} [${w.status}${merged}${w.priority !== 'normal' ? `, ${w.priority}` : ''}${tag ? `; ${tag}` : ''}] "${w.title}" for ${who}, ${w.createdAt.slice(0, 16).replace('T', ' ')}.${workers}${w.outcome ? ` Latest: ${clip(oneLine(w.outcome), 200)}` : ''}`;
+  return `- ${w.id} [${w.status}${merged}${w.priority !== 'normal' ? `, ${w.priority}` : ''}${tag ? `; ${tag}` : ''}] "${w.title}" for ${who}, ${w.createdAt.slice(0, 16).replace('T', ' ')}.${workers}${cost}${w.outcome ? ` Latest: ${clip(oneLine(w.outcome), 200)}` : ''}`;
 }
 
 /** The message the dispatcher gets for a new request. */

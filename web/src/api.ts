@@ -27,6 +27,7 @@ import type {
   TranscriptEvent,
 } from '../../shared/types';
 import type { TranscribeResult, VoiceStatus } from '../../shared/voice';
+import type { SpendReportReply, SpendRequestReply, SpendSummaryReply } from '../../shared/spend';
 
 /** GET /api/backend: the status, the costliest Bedrock sessions and the last spend lines. */
 export interface BackendDetail {
@@ -97,6 +98,10 @@ export const api = {
   login: (username: string, password: string) => request<{ username: string }>('POST', '/api/login', { username, password }),
   logout: () => request<unknown>('POST', '/api/logout'),
   state: () => request<AppState>('GET', '/api/state'),
+  // What work costs (w859, docs/spend.md): each request's cost, one request in full, and the analysis.
+  spendSummary: () => request<SpendSummaryReply>('GET', '/api/spend/summary'),
+  spendRequest: (id: string) => request<SpendRequestReply>('GET', `/api/spend/request/${encodeURIComponent(id)}`),
+  spendReport: (days = 7, top = 10) => request<SpendReportReply>('GET', `/api/spend/report?days=${days}&top=${top}`),
   // FFBox, as its connector reported it (docs/ffbox-integration.md): newest first.
   providerConversations: (limit = 100) => request<ProviderConversation[]>('GET', `/api/providers/ffbox/conversations?limit=${limit}`),
   providerIntake: (limit = 200) => request<ProviderIntakeEvent[]>('GET', `/api/providers/ffbox/intake?limit=${limit}`),

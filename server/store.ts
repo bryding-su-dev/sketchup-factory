@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import zlib from 'node:zlib';
 import type { AppSettings, DelegationRequest, Machine, Sandbox, ServerEvent, SessionInfo, StandingAgent, TranscriptEvent, WorkItem } from '../shared/types.ts';
 
 /** Everything the UI hears about goes through here and out the WebSocket. */
@@ -187,6 +188,23 @@ export class Store {
     this.seqs.set(sessionId, e.seq);
     emit({ type: 'transcript', sessionId, event: e });
     this.noteActivity(sessionId, e);
+    this.observe(sessionId, e);
+  }
+
+  /** Told of every event written to a transcript, whether the session runs here or on a machine (the spend record, w859). */
+  onEvent?: (sessionId: string, e: TranscriptEvent) => void;
+  private observe(sessionId: string, e: TranscriptEvent) {
+    try {
+      this.onEvent?.(sessionId, e);
+    } catch (err) {
+      console.warn(`transcript observer failed for ${sessionId}: ${(err as Error).message}`);
+    }
+  }
+
+  /** How many result lines a session's transcript holds (a turn each): 1 right after a session's first turn ended. */
+  countResults(sessionId: string): number {
+    const text = this.transcriptText(sessionId);
+    return text === undefined ? 0 : text.split('"kind":"result"').length - 1;
   }
 
   private readonly pendingTools = new Map<string, { id: string; name: string; since: string }[]>();
@@ -228,11 +246,13 @@ export class Store {
     this.appendLine(sessionId, JSON.stringify(full));
     emit({ type: 'transcript', sessionId, event: full });
     this.noteActivity(sessionId, full);
+    this.observe(sessionId, full);
     return full;
   }
 
   /** Rewrite one already-persisted event (used to record a permission decision). */
   amend(sessionId: string, seq: number, patch: Partial<TranscriptEvent>) {
+    this.unzip(sessionId);
     const all = this.readTranscript(sessionId);
     const i = all.findIndex((e) => e.seq === seq);
     if (i < 0) return;
@@ -242,9 +262,9 @@ export class Store {
   }
 
   readTranscript(sessionId: string, limit?: number): TranscriptEvent[] {
-    const f = this.transcriptPath(sessionId);
-    if (!fs.existsSync(f)) return [];
-    const lines = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean);
+    const text = this.transcriptText(sessionId);
+    if (text === undefined) return [];
+    const lines = text.split('\n').filter(Boolean);
     const out: TranscriptEvent[] = [];
     for (const line of limit ? lines.slice(-limit) : lines) {
       try {
@@ -257,12 +277,50 @@ export class Store {
     return out;
   }
 
+  /** The transcript's text, from its file or, once the data guard compressed it (server/dataGuard.ts), its .gz; undefined: none. */
+  transcriptText(sessionId: string): string | undefined {
+    const f = this.transcriptPath(sessionId);
+    try {
+      return fs.readFileSync(f, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+    try {
+      return zlib.gunzipSync(fs.readFileSync(`${f}.gz`)).toString('utf8');
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Whether the session has a transcript on disk, plain or compressed. */
+  hasTranscript(sessionId: string): boolean {
+    const f = this.transcriptPath(sessionId);
+    return fs.existsSync(f) || fs.existsSync(`${f}.gz`);
+  }
+
+  /** Transcripts the data guard compressed in this process: the next append to one restores its plain file. */
+  private readonly compressed = new Set<string>();
+  noteCompressed(sessionId: string) {
+    this.compressed.add(sessionId);
+  }
+
+  /** A compressed transcript is written to again (the session was resumed): the plain file comes back first. */
+  private unzip(sessionId: string) {
+    const f = this.transcriptPath(sessionId);
+    if (fs.existsSync(f) || !fs.existsSync(`${f}.gz`)) return;
+    fs.writeFileSync(f, zlib.gunzipSync(fs.readFileSync(`${f}.gz`)));
+    fs.rmSync(`${f}.gz`, { force: true });
+  }
+
   /**
    * Append one event line. The first append to a transcript in this process makes sure the file ends with a newline:
    * after a crash its last line can be torn, and the next event would otherwise be glued to it and lost.
    */
   private appendLine(sessionId: string, line: string) {
     const f = this.transcriptPath(sessionId);
+    // A compressed transcript (server/dataGuard.ts) gets its plain file back before an append: on the first append of this process,
+    // and again whenever the guard compressed it since (noteCompressed), so a stat per event is not needed.
+    if (!this.tailChecked.has(sessionId) || this.compressed.delete(sessionId)) this.unzip(sessionId);
     let prefix = '';
     if (!this.tailChecked.has(sessionId)) {
       this.tailChecked.add(sessionId);
@@ -274,6 +332,12 @@ export class Store {
 
   deleteTranscript(sessionId: string) {
     fs.rmSync(this.transcriptPath(sessionId), { force: true });
+    fs.rmSync(`${this.transcriptPath(sessionId)}.gz`, { force: true });
+    this.deleteUploads(sessionId);
+  }
+
+  /** The images a session's transcript shows (they go with the transcript). */
+  deleteUploads(sessionId: string) {
     fs.rmSync(path.join(this.uploadDir, safeId(sessionId)), { recursive: true, force: true });
   }
 

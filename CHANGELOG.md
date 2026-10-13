@@ -12,6 +12,23 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- **What each request costs, and its transcripts kept** (w859, lothsahn: "I would like you to track the per workitem spend as well
+  as the transcript so we can optimize token usage", and "We should keep worker transcripts and numbers for at least 7 days. But
+  make sure we don't run the portal out of disk"). Every turn's result line now carries Claude Code's own usage (the SDK's
+  cumulative per-model tokens and dollars, and a reading of what the context held); `data/spend.json` (`server/spend.ts`) adds each turn
+  to the request the agent was on when it began (an `[about wNNN]` line, else the request it was last sent; the dispatcher's, the
+  orchestrators' and the ops worker's turns to the requests their messages name) and keeps, per request, dollars and tokens per
+  model and per session, by day, with where the context tokens went (file reads, re-reads, searches, CI polling, the agent's own
+  output, the base). `list_work` and `read_work` show a request's cost so far; `list_work` with an id and the new `spend_report`
+  tool (top requests, kinds of work, where tokens go, the transcripts' footprint) show the rest; the Dispatcher page has a cost on
+  each row, a Spend block in its opened row (models, sessions with transcript links) and a Spend tab. A request's transcripts are
+  kept 7 days after it closes (`dataGuard.retainDays`) and while it is open; `server/dataGuard.ts` compresses idle transcripts
+  from 50% of the disk used and deletes those past their retention from 75% (a notice at 90%), and a pruned transcript keeps its
+  request's cost record. Sessions that ran before are backfilled from their transcripts once (dollars as recorded, tokens
+  estimated, labelled). `scripts/spend-claude.ts` reads a machine's own Claude Code transcripts the same way and
+  `scripts/transcript-footprint.ts` measures the portal's transcripts (size, growth a day, 7-day projection). docs/spend.md.
+  Needs a portal deploy; a machine's daemon sends tokens and context readings only once it is updated (until then its turns are
+  dollars only, labelled estimated).
 - README rewritten for the SketchUp Factory as it runs (a Mac host, plain worktree sandboxes); `docs/README.md` indexes the docs
   and marks the inherited Final Factory ones. SECURITY.md and CONTRIBUTING.md name this fork.
 - **Workers default to Sonnet 5.5** (port of upstream w680, #230): `defaultModel` (what `start_agent` and standing agents

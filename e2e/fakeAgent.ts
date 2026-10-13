@@ -70,6 +70,9 @@ export function fakeQuery(fake: FakeOptions = {}) {
         is_error: !ok,
         result: t,
         total_cost_usd: 0.01 * msgId + extra,
+        // What the SDK reports for the query so far, per model, cumulative (w859: the portal's spend record takes differences of it).
+        modelUsage: { 'claude-opus-5-5': { inputTokens: 0, outputTokens: 10 * msgId, cacheReadInputTokens: context * msgId, cacheCreationInputTokens: 1000 * msgId, costUSD: 0.01 * msgId + extra } },
+        usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: context, cache_creation_input_tokens: 1000 },
         num_turns: 1,
         duration_ms: 1234,
         user_message_uuids: [uuid],

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { isMine, ledgerOrder } from '../../../shared/workOrder';
 import { sessionRoute } from '../attention';
 import { attempt, reloadTranscript, sessionsByIds, toast } from '../store';
+import { CostChip, RequestSpendBlock, SpendTab, useSpendSummary } from './Spend';
 import { contextGlance, dispatcherGlance, fmtCost, fmtRelative, isBusy, isOpenWork, navigate, useNow, workLabel, workTone } from '../util';
 import { Markdown } from './Markdown';
 import { SessionView } from './SessionView';
@@ -13,7 +14,7 @@ import { Chip, Confirm, Dot, Icon, Menu } from './ui';
 import { TimersButton } from './Timers';
 import { useKeepScroll } from '../scrollKeep';
 
-type Tab = 'requests' | 'intake' | 'conversation';
+type Tab = 'requests' | 'intake' | 'spend' | 'conversation';
 
 const names = (w: WorkItem) => w.requesters.map((r) => r.displayName).join(', ');
 
@@ -64,7 +65,7 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
   const work = ledgerOrder(app.work ?? [], app.me?.userId);
   const open = work.filter(isOpenWork);
   const closed = work.filter((w) => !isOpenWork(w));
-  const current: Tab = tab === 'conversation' ? 'conversation' : tab === 'intake' ? 'intake' : 'requests';
+  const current: Tab = tab === 'conversation' ? 'conversation' : tab === 'intake' ? 'intake' : tab === 'spend' ? 'spend' : 'requests';
   const focus = tab && /^w\d+$/.test(tab) ? tab : undefined;
   const setTab = (t: Tab) => navigate({ view: 'dispatcher', tab: t === 'requests' ? undefined : t }, true);
   const owner = app.me?.role === 'owner';
@@ -143,6 +144,9 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
             Intake {waiting > 0 && <span className="tone-amber" title="Needs a human">{waiting}</span>}
           </button>
         )}
+        <button role="tab" aria-selected={current === 'spend'} className={`tab${current === 'spend' ? ' active' : ''}`} onClick={() => setTab('spend')}>
+          Spend
+        </button>
         <button role="tab" aria-selected={current === 'conversation'} className={`tab${current === 'conversation' ? ' active' : ''}`} onClick={() => setTab('conversation')}>
           Conversation
         </button>
@@ -150,6 +154,7 @@ export function DispatcherPanel({ app, tab, onClose }: { app: AppState; tab?: st
 
       {current === 'requests' && <Requests app={app} open={open} closed={closed} focus={focus} now={now} />}
       {current === 'intake' && app.intake && <IntakeTab app={app} intake={app.intake} work={work} now={now} />}
+      {current === 'spend' && <SpendTab />}
       {current === 'conversation' &&
         (session ? (
           <SessionView key={session.id} session={session} embedded readOnly={owner ? undefined : 'Only the owner writes to the dispatcher. To ask for work, write to your own orchestrator.'} />
@@ -344,6 +349,7 @@ function WorkRow({ app, w, open, onToggle, now }: { app: AppState; w: WorkItem; 
   const workers = sessionsByIds(app.sessions, w.sessionIds);
   const working = workers.some(isBusy);
   const tone = w.approval?.state === 'pending' && isOpenWork(w) ? 'amber' : workTone(w.status);
+  const spend = useSpendSummary();
   const s = w.source;
   const delivery = deliveryLine(w);
   return (
@@ -359,6 +365,7 @@ function WorkRow({ app, w, open, onToggle, now }: { app: AppState; w: WorkItem; 
             {w.triage && !(pendingApproval(w) && w.triage.class === 'needs-human') ? <span className={w.triage.class === 'needs-human' ? 'tone-amber' : ''}> · {triageLabel[w.triage.class]}</span> : null}
             {w.priority === 'urgent' || w.priority === 'high' ? <span className="tone-amber"> · {w.priority}</span> : null}
             {w.flag ? <span className="tone-amber"> · design question</span> : null}
+            <CostChip id={w.id} summary={spend} />
           </span>
         </span>
         <span className="run-cost mono dim" title={new Date(w.updatedAt).toLocaleString()}>
@@ -405,6 +412,7 @@ function WorkRow({ app, w, open, onToggle, now }: { app: AppState; w: WorkItem; 
               {w.outcome}
             </p>
           )}
+          <RequestSpendBlock id={w.id} app={app} />
           {delivery && <p className="small dim">To players: {delivery}</p>}
           {w.ffbox && (
             <p className="small dim">
