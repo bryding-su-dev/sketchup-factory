@@ -521,3 +521,14 @@ than Ben's own.
 - This host's sandboxes still run in the portal's own process. Moving them behind a daemon, as on the machines, is
   [backlog.md](backlog.md) item 1; the dispatcher already addresses a daemon's sandbox as `"<machine>/<name>"`, and
   nothing in the ledger or the routing depends on where a worker runs.
+
+
+## What a coordinator's context costs
+
+Every call of an orchestrator or the dispatcher sends its tools' text. Most turns use a handful, so only those are carried
+in every call (`ALWAYS_LOADED` in `server/belts.ts`: the ledger tools, `message_agent`, `agent_transcript`,
+`search_transcripts`, `list_machines`, `system_status`, `wake_me`, and for the dispatcher also `start_agent`,
+`decide_work`, `stop_agent`, `interrupt_agent`, `list_sandboxes`, `switch_branch`). The rest of the belt is deferred: Claude
+Code lists each name and the coordinator loads a schema with `ToolSearch` (`select:<name>`) when it needs it. The sets are
+upstream's, from measured use (w1158, w1163). Off Bedrock the server sets `ENABLE_TOOL_SEARCH=true` for the coordinators;
+on Bedrock Claude Code keeps its own default (tool search there is not guaranteed). Workers are not affected.

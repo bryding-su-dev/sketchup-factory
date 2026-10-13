@@ -12,6 +12,7 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- **Coordinators carry fewer tools in every call** (port of upstream w1158 and w1163, the deferred-tools part): an orchestrator or the dispatcher gets `ToolSearch`, and only its everyday tools (`belts.ts` `ALWAYS_LOADED`) are sent in full; every other tool of its belt is listed by name and loaded on demand. Upstream measured the dispatcher's first call at 48,176 input tokens before and 23,277 after, a personal orchestrator's at about 37,900 and 22,700. `ENABLE_TOOL_SEARCH=true` is set for the coordinators off Bedrock, so deferral does not depend on the tool text passing Claude Code's size threshold. No tool is removed. Applies at each coordinator's next process start.
 - README rewritten for the SketchUp Factory as it runs (a Mac host, plain worktree sandboxes); `docs/README.md` indexes the docs
   and marks the inherited Final Factory ones. SECURITY.md and CONTRIBUTING.md name this fork.
 - **Workers default to Sonnet 5.5** (port of upstream w680, #230): `defaultModel` (what `start_agent` and standing agents
