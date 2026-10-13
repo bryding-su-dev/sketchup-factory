@@ -330,23 +330,39 @@ const backfillSpend = async () => {
   }
 };
 setTimeout(() => void backfillSpend(), 90_000).unref();
-// A coordinator's coordination gets its days from its own transcript, once per session (w1160, docs/spend.md "Coordination"): the days of the first version were wrong (rebuildCoordination).
-const splitCoordinationSpend = async () => {
+// Two repairs of the record, once per session, in the background (docs/spend.md "Coordination", "Corrections to history"): the turns the old
+// rules got wrong are recorded again by the current ones (w1209: a restart's running total counted as one turn, an id cited in a notice
+// billing its request), then a coordinator's coordination gets its days from its own transcript (w1160). A copy of the record is kept first.
+const repairSpend = async () => {
   if (isDryRun) return;
-  let done = 0;
-  let usd = 0;
-  for (const s of [...spend.sessions.values()].filter((x) => isCoordinatorRole(x.role) && x.coordV !== 2)) {
+  spend.backupOnce('pre-w1209');
+  let looked = 0;
+  let fixed = 0;
+  let removed = 0;
+  let moved = 0;
+  let given = 0;
+  const skipped: string[] = [];
+  for (const s of [...spend.sessions.values()].filter((x) => x.fixV !== 1 || (isCoordinatorRole(x.role) && x.coordV !== 2))) {
     try {
-      usd += spend.rebuildCoordination(s.id, store.hasTranscript(s.id) ? store.readTranscript(s.id) : undefined, store.sessions.get(s.id));
-      done++;
+      const events = store.hasTranscript(s.id) ? store.readTranscript(s.id) : undefined;
+      const info = store.sessions.get(s.id);
+      const r = spend.correctHistory(s.id, events, info);
+      looked++;
+      if (r.turns) fixed++;
+      removed += r.removedUsd;
+      moved += r.movedUsd;
+      if (r.skipped && r.skipped !== 'no transcript') skipped.push(`${s.id.slice(0, 8)}: ${r.skipped}`);
+      if (isCoordinatorRole(s.role) && s.coordV !== 2) given += spend.rebuildCoordination(s.id, events, info);
     } catch (e) {
-      console.warn(`spend coordination split: ${s.id}: ${(e as Error).message}`);
+      console.warn(`spend repair: ${s.id}: ${(e as Error).message}`);
     }
     await new Promise((r) => setImmediate(r));
   }
-  if (done) console.log(`spend coordination split: ${done} coordinator session(s), $${usd.toFixed(2)} given its days`);
+  if (looked) console.log(`spend repair: ${looked} session(s) looked at, ${fixed} corrected ($${removed.toFixed(2)} taken out of restart turns, $${moved.toFixed(2)} moved off requests a notice only cited), $${given.toFixed(2)} of coordination given its days${skipped.length ? `; left as recorded: ${skipped.slice(0, 8).join('; ')}${skipped.length > 8 ? `; and ${skipped.length - 8} more` : ''}` : ''}`);
+  spend.syncWork();
 };
-setTimeout(() => void splitCoordinationSpend(), 150_000).unref();
+setTimeout(() => void repairSpend(), 150_000).unref();
+
 // The ledger moves on (requests close, titles change, closed ones drop out after a week): the spend record follows (w859).
 setInterval(() => spend.syncWork(), 5 * 60_000).unref();
 // Who hears about a session (docs/orchestrators.md): a person's own orchestrator only them, the dispatcher's turns
