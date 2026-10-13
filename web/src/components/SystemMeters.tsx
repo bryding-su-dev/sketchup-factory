@@ -113,6 +113,14 @@ export function SystemFooter({ app }: { app: AppState }) {
   return (
     <div className={`sys-foot${open ? ' open' : ''}${many ? ' many' : ''}`}>
       {open && (
+        <div className="sys-sheet-head" data-testid="sys-sheet-head">
+          <span className="sys-sheet-title">Computers &amp; Claude usage</span>
+          <button className="sys-close" onClick={toggle} aria-label="Close the meters" title="Close the meters">
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+      )}
+      {open && (
         <div className="sys-detail">
           {many ? (
             <MachineTable computers={computers} health={app.host?.health} limits={<Limits sys={sys} unityOn={unityOn} agentsOn={agentsOn} />} />
@@ -367,6 +375,7 @@ function UsageRefresh() {
   };
   return (
     <div className="plan-refresh">
+      <span className="plan-refresh-title">Plan usage</span>
       <button className="btn btn-ghost btn-sm" onClick={() => void refresh()} disabled={busy} title="Ask every Claude account for its usage now, here and on each machine" data-testid="usage-refresh">
         <Icon name="refresh" size={12} /> {busy ? 'Refreshing…' : 'Refresh usage'}
       </button>

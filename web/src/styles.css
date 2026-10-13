@@ -804,6 +804,62 @@ select.input {
   border-top: 1px solid var(--border);
 }
 
+/* Open (w1177): the meters are a sheet laid over the list, not more of it: its own lighter surface, a lit top edge, a
+   shadow cast upward, a handle and a header with a close button. The cards inside sit in it as darker wells. */
+.sys-foot.open {
+  position: relative;
+  background: var(--panel-2);
+  border-top-color: var(--border-2);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: 0 -10px 24px rgba(0, 0, 0, 0.5), 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.sys-sheet-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-2) 0 var(--s-4);
+}
+
+/* The handle: a short bar at the top edge, the cue that this is a sheet one can put away. */
+.sys-sheet-head::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--border-2);
+}
+
+.sys-sheet-title {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sys-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+}
+
+.sys-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .sys-toggle {
   display: flex;
   align-items: center;
@@ -909,6 +965,17 @@ select.input {
   padding: var(--s-3) var(--s-3) 0;
   max-height: 55vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: var(--s-2);
+}
+
+.sys-foot.open .meters {
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sys-foot.open .sys-toggle:hover {
+  background: var(--panel-3);
 }
 
 .lvl-warn {
@@ -995,7 +1062,19 @@ select.input {
 
 .plan-refresh {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-1) 0;
+}
+
+.plan-refresh-title {
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 /* Every computer's load, one row each. */
