@@ -336,6 +336,8 @@ setTimeout(() => void backfillSpend(), 90_000).unref();
 const repairSpend = async () => {
   if (isDryRun) return;
   spend.backupOnce('pre-w1209');
+  const acct = spend.repairAccounts();
+  if (acct.sessions) console.log(`spend repair: the accounts of ${acct.sessions} corrected session(s) and ${acct.requests} request(s) put right`);
   let looked = 0;
   let fixed = 0;
   let removed = 0;
