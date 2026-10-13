@@ -33,6 +33,7 @@ import { FILINGS_PER_MESSAGE, FOLLOW_UPS_PER_MESSAGE, MESSAGES_PER_PERSON, Orche
 import { isBedrockEnv } from './bedrock.ts';
 import { alwaysLoaded, beltFor, type BeltRole } from './belts.ts';
 import { memoryDirFor, memoryGuard } from './orchestratorMemory.ts';
+import { TurnModels } from './turnModel.ts';
 import { DECISIONS, attachmentsNote, describeItem, isFor, ledgerOrder, names, overlapLine, requestAsFiled, startProblem } from './work.ts';
 import { sourceTag, workerRules } from './intakeRules.ts';
 import { buildSubmit } from './providerProtocol.ts';
@@ -248,6 +249,9 @@ export class Agents {
     this.autoCompact = new AutoCompactor(sessions, cfg);
     // IDLE WORKERS (w384): what keeps one from being stopped to make room, and the reaper of finished ones.
     sessions.keepIdle = (s) => this.keepIdle(s);
+    // The coordinators' routine turns on the routine model, a person's on their own (server/turnModel.ts).
+    const turnModels = new TurnModels(() => this.cfg);
+    sessions.turnModel = (info, from, text, opens) => turnModels.pick(info, from, text, opens);
     const reap = setInterval(() => this.reapIdle(), REAP_EVERY_MS);
     reap.unref?.();
     this.timers = new Timers(

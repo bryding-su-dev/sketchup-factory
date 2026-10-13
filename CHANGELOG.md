@@ -12,6 +12,7 @@ Add your change under **[Unreleased]** in the same pull request. `npm run releas
 ## [Unreleased]
 
 ### Changed
+- **The coordinators' routine turns run on Sonnet 5.5** (port of upstream w1158, #366, model switching only): a turn no person started (a worker's report, a timer, a check-in) runs on `claude-sonnet-5-5`; a person's message, the dispatcher's request decisions and a person's reaction stay on Opus; a routine turn within 60 minutes of an Opus turn stays on Opus. `set_app_config orchestrator.routineModel off` turns it off. docs/models.md.
 - **Coordinators carry fewer tools in every call** (port of upstream w1158 and w1163, the deferred-tools part): an orchestrator or the dispatcher gets `ToolSearch`, and only its everyday tools (`belts.ts` `ALWAYS_LOADED`) are sent in full; every other tool of its belt is listed by name and loaded on demand. Upstream measured the dispatcher's first call at 48,176 input tokens before and 23,277 after, a personal orchestrator's at about 37,900 and 22,700. `ENABLE_TOOL_SEARCH=true` is set for the coordinators off Bedrock, so deferral does not depend on the tool text passing Claude Code's size threshold. No tool is removed. Applies at each coordinator's next process start.
 - **What each request costs, and its transcripts kept** (w859, lothsahn: "I would like you to track the per workitem spend as well
   as the transcript so we can optimize token usage", and "We should keep worker transcripts and numbers for at least 7 days. But
