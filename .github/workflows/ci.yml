@@ -65,20 +65,14 @@ jobs:
           git config --global user.name "FF Factory CI"
           git config --global user.email "ci@users.noreply.github.com"
       - name: Commit identities are noreply
+        # A pull request's own commits. A manual run would walk the whole history, whose early commits are not noreply.
+        if: github.event_name == 'pull_request'
         shell: bash
         env:
-          EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          AFTER: ${{ github.sha }}
         run: |
-          if [ "$EVENT" = pull_request ]; then
-            range="$PR_BASE..$PR_HEAD"
-          else
-            # A manual run: check everything reachable.
-            range="$AFTER"
-          fi
-          node scripts/check-identity.ts "$range"
+          node scripts/check-identity.ts "$PR_BASE..$PR_HEAD"
       - name: Install gitleaks
         run: |
           base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"

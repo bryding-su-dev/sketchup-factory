@@ -21,12 +21,14 @@ One workflow, `.github/workflows/ci.yml`, with two jobs. Both run on `ubuntu-lat
 The repository is public, so standard hosted runners are free (GitHub: "free for public repositories that use standard
 GitHub-hosted runners"). The cuts keep it cheap if it ever goes private (Linux $0.006/min, Windows x2, macOS x10).
 
-Estimate, before → after, for a typical PR (3 pushes; job times from upstream's measured runs, scaled for hosted 2-core runners, so ±30%):
+Measured on GitHub's hosted runners (PR #12 and #13 runs, 2026-10-13), a typical PR with 3 pushes and a merge:
 
 | | before | after |
 |---|---|---|
-| per push | Linux checks 7 + Windows checks 9 (x2 billed) + Playwright 14 + gitleaks 1 + identity 1 = 31 min, 41 Linux-equivalent | 7 min (docs-only: 0) |
-| Playwright | every push | once, on the label |
+| per push | Linux checks 1.5 min + Windows checks 3.5 (x2 billed) + Playwright 8.7 + gitleaks and identities (a billed minute each): 14 min, ~21 billed | checks 1.6 min (docs-only: 0) |
+| Playwright | every push | once, on the label (8.7 min) |
 | after merge | the same again on the `sketchup` push | nothing |
-| per PR | ~124 min, ~164 billed-equivalent | ~35 min |
-| per week (10 PRs) | ~1,240 min, ~$10 if private | ~350 min, ~$2 if private |
+| per PR | ~56 min, ~84 billed Linux-equivalent | ~15 min |
+| per week (10 PRs) | ~560 min, ~840 billed, ~$5 if private | ~150 min, ~$0.9 if private |
+
+Per-job rounding is why folding the two ten-second jobs into `checks` matters: each bills a whole minute.
