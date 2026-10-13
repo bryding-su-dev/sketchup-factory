@@ -62,6 +62,10 @@ export const SETTABLE_KEYS = [
   // tokens, and a turn's cost in USD. 0 turns either trigger off.
   'orchestrator.compactAtTokens',
   'orchestrator.compactAtTurnUsd',
+  // The coordinators' routine turns (server/turnModel.ts): their model ("off" keeps every turn on orchestrator.model) and how
+  // long after a turn on orchestrator.model they stay on it.
+  'orchestrator.routineModel',
+  'orchestrator.routineAfterMinutes',
   // The one permission among them: whether this app's own checkout is a protected path for the agents (default true).
   // false lets workers update and change the app in place; its data directory stays protected regardless.
   'guard.protectFactoryCheckout',
@@ -185,6 +189,16 @@ export function normalizeSetting(key: SettableKey, value: unknown, cfg?: Config)
     case 'orchestrator.compactAtTokens': {
       const n = Number(value);
       if (!Number.isInteger(n) || (n !== 0 && (n < AUTO_COMPACT_LIMITS.minTokens || n > AUTO_COMPACT_LIMITS.maxTokens))) throw new Error(`orchestrator.compactAtTokens is 0 (off) or a whole number of tokens from ${AUTO_COMPACT_LIMITS.minTokens.toLocaleString('en-US')} to ${AUTO_COMPACT_LIMITS.maxTokens.toLocaleString('en-US')}`);
+      return n;
+    }
+    case 'orchestrator.routineModel': {
+      const m = String(value).trim();
+      if (!/^(off|opus|sonnet|haiku|claude-[a-z0-9.-]{3,40})$/.test(m)) throw new Error('orchestrator.routineModel is a model ("claude-sonnet-5-5", "sonnet") or "off" (every coordinator turn on orchestrator.model)');
+      return m;
+    }
+    case 'orchestrator.routineAfterMinutes': {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 0 || n > 1440) throw new Error('orchestrator.routineAfterMinutes is a whole number of minutes from 0 to 1440');
       return n;
     }
     case 'orchestrator.compactAtTurnUsd': {
@@ -394,6 +408,8 @@ export function setAppConfig(file: string, cfg: Config, key: SettableKey, value:
   else if (key === 'guard.protectFactoryCheckout') cfg.guard = { ...cfg.guard, protectFactoryCheckout: v as boolean | undefined };
   else if (key === 'hostGuard.cleanup.ageRules') cfg.hostGuard.cleanup.ageRules = (v as { path: string; olderThanDays: number }[] | undefined) ?? [];
   else if (key === 'orchestrator.compactAtTokens') cfg.orchestrator = { ...cfg.orchestrator, compactAtTokens: v as number | undefined };
+  else if (key === 'orchestrator.routineModel') cfg.orchestrator = { ...cfg.orchestrator, routineModel: v as string | undefined };
+  else if (key === 'orchestrator.routineAfterMinutes') cfg.orchestrator = { ...cfg.orchestrator, routineAfterMinutes: v as number | undefined };
   else if (key === 'orchestrator.compactAtTurnUsd') cfg.orchestrator = { ...cfg.orchestrator, compactAtTurnUsd: v as number | undefined };
   else if (key === 'usagePollMinutes') cfg.usagePollMinutes = (v as number | undefined) ?? DEFAULT_USAGE_POLL_MINUTES;
   else if (key === 'hostGuard.cleanup.everyMinutes') cfg.hostGuard.cleanup.everyMinutes = (v as number | undefined) ?? DEFAULT_CLEANUP.everyMinutes;
