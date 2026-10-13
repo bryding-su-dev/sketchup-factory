@@ -1,0 +1,1 @@
+- **The attachments resume test no longer flakes** (w1189, asked by lothsahn): it cut the upload 20 ms after pushing 5,000 bytes and expected them on disk, but the write goes through libuv's thread pool, which a busy runner had not reached by then. It now cuts the upload once those bytes are written.

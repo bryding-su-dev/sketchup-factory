@@ -84,11 +84,16 @@ test('resume: a wrong offset says where the upload stands; a chunk cut off keeps
   await store.append(uploadId, 0, Readable.from([data.subarray(0, 10_000)]));
   await assert.rejects(store.append(uploadId, 0, Readable.from([data.subarray(0, 10)])), (e: AttachmentError) => e.status === 409 && e.received === 10_000);
   await assert.rejects(store.append(uploadId, 20_000, Readable.from([data.subarray(0, 10)])), (e: AttachmentError) => e.status === 409 && e.received === 10_000);
-  // The connection drops part way through the next chunk: 5,000 of its bytes arrived.
+  // The connection drops part way through the next chunk, once 5,000 of its bytes are on disk. Not after a fixed 20 ms:
+  // the write goes through libuv's thread pool, and on a busy runner it had not landed by then, so 10,000 were kept
+  // (w1189; reproduced with UV_THREADPOOL_SIZE=1 and the pool kept busy).
   const cut = new Readable({ read() {} });
   cut.push(data.subarray(10_000, 15_000));
-  setTimeout(() => cut.destroy(new Error('socket hang up')), 20);
-  await assert.rejects(store.append(uploadId, 10_000, cut), (e: AttachmentError) => e.status === 400 && /cut off/.test(e.message));
+  const appending = store.append(uploadId, 10_000, cut);
+  const end = Date.now() + 10_000;
+  while (store.status(uploadId).received < 15_000 && Date.now() < end) await new Promise((r) => setTimeout(r, 5));
+  cut.destroy(new Error('socket hang up'));
+  await assert.rejects(appending, (e: AttachmentError) => e.status === 400 && /cut off/.test(e.message));
   assert.equal(store.status(uploadId).received, 15_000, 'what arrived is kept');
   const done = await store.append(uploadId, 15_000, Readable.from([data.subarray(15_000)]));
   assert.equal(done.attachment!.sha256, sha(data), 'the resumed upload is byte for byte the file');
